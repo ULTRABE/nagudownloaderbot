@@ -16,7 +16,7 @@ logging.basicConfig(
     format="%(levelname)s:%(name)s:%(message)s"
 )
 
-# Silence noisy aiogram "update not handled" logs
+# Silence noisy aiogram logs
 logging.getLogger("aiogram.event").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,9 @@ dp = Dispatcher()
 TEMP_DIR = Path("temp")
 TEMP_DIR.mkdir(exist_ok=True)
 
-MAX_SHORT_SIZE = 20 * 1024 * 1024  # 6 MB
+MAX_SHORT_SIZE = 6 * 1024 * 1024  # 6 MB
+
+URL_REGEX = re.compile(r"https?://[^\s]+", re.IGNORECASE)
 
 SHORT_URL_HINTS = [
     r"instagram\.com/reel/",
@@ -40,6 +42,10 @@ SHORT_URL_HINTS = [
 ]
 
 # ---------------- HELPERS ----------------
+def extract_url(text: str) -> str | None:
+    match = URL_REGEX.search(text)
+    return match.group(0) if match else None
+
 def looks_like_short_url(url: str) -> bool:
     return any(re.search(p, url.lower()) for p in SHORT_URL_HINTS)
 
@@ -60,7 +66,6 @@ async def download_video(url: str) -> Path | None:
         "merge_output_format": "mp4",
         "quiet": True,
         "no_warnings": True,
-        # UNIVERSAL, PLATFORM-SAFE FORMAT STRATEGY
         "format": (
             "best[ext=mp4]/"
             "bestvideo[ext=mp4]+bestaudio[ext=m4a]/"
@@ -140,9 +145,10 @@ async def start_handler(message: Message):
 
 @dp.message(F.text)
 async def video_handler(message: Message):
-    url = message.text.strip()
+    url = extract_url(message.text or "")
+    if not url:
+        return  # ✅ IGNORE NORMAL CHAT COMPLETELY
 
-    # Delete user link message
     try:
         await message.delete()
     except Exception:
@@ -173,7 +179,6 @@ async def video_handler(message: Message):
             pass
         return
 
-    # Shorts: re-encode ONLY if size exceeds limit
     if is_short and video_path.stat().st_size > MAX_SHORT_SIZE:
         optimized = await optimize_short_video(video_path)
         if optimized:
