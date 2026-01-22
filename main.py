@@ -16,7 +16,7 @@ from aiogram.types import Message, FSInputFile
 from yt_dlp import YoutubeDL
 
 # ================= CONFIG =================
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
+BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
 
 # =========================================
 logging.basicConfig(level=logging.INFO)
