@@ -136,25 +136,34 @@ async def handler(message: Message):
                 continue
 
             status = await bot.send_message(chat_id, "🔍 Checking video…")
-            duration = get_duration(url)
 
+            duration = get_duration(url)
             if not duration or duration > MAX_DURATION:
                 await bot.edit_message_text(
-                    "❌ Video too long. Max allowed duration is 30 minutes.",
-                    chat_id,
-                    status.message_id
+                    text="❌ Video too long. Max allowed duration is 30 minutes.",
+                    chat_id=chat_id,
+                    message_id=status.message_id
                 )
                 continue
 
-            await bot.edit_message_text("⬇️ Downloading…", chat_id, status.message_id)
+            await bot.edit_message_text(
+                text="⬇️ Downloading…",
+                chat_id=chat_id,
+                message_id=status.message_id
+            )
+
             path = download_video(url)
             if not path:
                 await bot.delete_message(chat_id, status.message_id)
                 continue
 
-            await bot.edit_message_text("✂️ Processing…", chat_id, status.message_id)
-            parts = segment_video(path)
+            await bot.edit_message_text(
+                text="✂️ Processing…",
+                chat_id=chat_id,
+                message_id=status.message_id
+            )
 
+            parts = segment_video(path)
             await bot.delete_message(chat_id, status.message_id)
 
             sent_ids = []
