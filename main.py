@@ -20,7 +20,7 @@ BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
 
 # Adult video limits
 MAX_DURATION = 30 * 60          # 30 minutes
-SEGMENT_TIME = 300              # 5 minutes
+SEGMENT_TIME = 300              # 5 minutes per segment
 VIDEO_BITRATE = "1.2M"
 AUDIO_BITRATE = "128k"
 
@@ -44,8 +44,8 @@ PUBLIC_DOMAINS = [
     "twitter.com",
 ]
 
-PRIVATE_DOC_DOMAINS = [
-    "pornhub.org",
+# 🔒 XHAMSTER ONLY
+PRIVATE_DOMAINS = [
     "xhamster.com",
     "xhamster.xxx",
     "xhamster44.desi",
@@ -57,8 +57,8 @@ def domain(url: str) -> str:
 def is_public(url: str) -> bool:
     return any(d in domain(url) for d in PUBLIC_DOMAINS)
 
-def is_private_doc(url: str) -> bool:
-    return any(d in domain(url) for d in PRIVATE_DOC_DOMAINS)
+def is_private(url: str) -> bool:
+    return any(d in domain(url) for d in PRIVATE_DOMAINS)
 
 # ================= FILTER =================
 class HasURL(BaseFilter):
@@ -95,7 +95,7 @@ def download_video(url: str) -> str | None:
         ydl.download([url])
     return find_file(prefix)
 
-# ================= SEGMENT =================
+# ================= SEGMENT (PREVIEW SAFE) =================
 def segment_video(input_path: str) -> list[str]:
     base = input_path.replace(".mp4", "")
     out_pattern = f"{base}_part%03d.mp4"
@@ -103,6 +103,11 @@ def segment_video(input_path: str) -> list[str]:
     cmd = [
         "ffmpeg", "-y",
         "-i", input_path,
+
+        # 🔑 PREVIEW FIX
+        "-force_key_frames", f"expr:gte(t,n_forced*{SEGMENT_TIME})",
+        "-movflags", "+faststart",
+
         "-c:v", "libx264",
         "-b:v", VIDEO_BITRATE,
         "-maxrate", VIDEO_BITRATE,
@@ -112,6 +117,7 @@ def segment_video(input_path: str) -> list[str]:
         "-level", "4.1",
         "-c:a", "aac",
         "-b:a", AUDIO_BITRATE,
+
         "-f", "segment",
         "-segment_time", str(SEGMENT_TIME),
         "-reset_timestamps", "1",
@@ -130,8 +136,8 @@ async def handler(message: Message):
 
     for url in urls:
 
-        # 🔞 PRIVATE ADULT DOMAINS
-        if is_private_doc(url):
+        # 🔞 XHAMSTER (PRIVATE ONLY)
+        if is_private(url):
             if chat_type != "private":
                 continue
 
@@ -171,13 +177,13 @@ async def handler(message: Message):
 
             for i, part in enumerate(parts, start=1):
                 msg = await bot.send_video(
-                    chat_id,
-                    FSInputFile(part),
+                    chat_id=chat_id,
+                    video=FSInputFile(part),
                     caption=f"Part {i}/{total}"
                 )
                 sent_ids.append(msg.message_id)
 
-            # ⚠️ Warning message (temporary)
+            # ⚠️ Temporary warning
             warning = await bot.send_message(
                 chat_id,
                 "⚠️ This video will be deleted in 30 seconds."
@@ -185,7 +191,7 @@ async def handler(message: Message):
 
             await asyncio.sleep(30)
 
-            # Delete video parts + warning
+            # Delete videos + warning
             for mid in sent_ids:
                 try:
                     await bot.delete_message(chat_id, mid)
@@ -197,7 +203,7 @@ async def handler(message: Message):
             except:
                 pass
 
-            # 🧹 Final confirmation (permanent)
+            # 🧹 Permanent confirmation
             await bot.send_message(
                 chat_id,
                 "🧹 Your history was cleared."
@@ -208,7 +214,7 @@ async def handler(message: Message):
             os.unlink(path)
             continue
 
-        # 🌍 PUBLIC DOMAINS (UNCHANGED)
+        # 🌍 PUBLIC SITES (ORIGINAL BEHAVIOR)
         if not is_public(url):
             continue
 
@@ -226,8 +232,8 @@ async def handler(message: Message):
                 continue
 
             sent = await bot.send_video(
-                chat_id,
-                FSInputFile(path),
+                chat_id=chat_id,
+                video=FSInputFile(path),
                 caption="@nagudownloaderbot 🤍",
                 supports_streaming=True
             )
