@@ -4,7 +4,7 @@ import os
 import re
 import glob
 import secrets
-from datetime import datetime
+import subprocess
 from urllib.parse import urlparse
 
 from aiogram import Bot, Dispatcher
@@ -17,6 +17,7 @@ from yt_dlp import YoutubeDL
 
 # ================= CONFIG =================
 BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
+MAX_TG_SIZE = 45 * 1024 * 1024  # 45 MB safe limit
 
 # =========================================
 logging.basicConfig(level=logging.INFO)
@@ -33,15 +34,14 @@ PUBLIC_DOMAINS = [
     "fb.watch",
     "x.com",
     "twitter.com",
-    "pinterest.com"
-    "threads.com"
+    "pinterest.com",
 ]
 
 PRIVATE_DOC_DOMAINS = [
-    "pornhub.org",
+    "pornhub.com",
     "xhamster.com",
     "xhamster.xxx",
-    "xhamster44.desi"
+    "xhamster.desi",
 ]
 
 def domain(url: str) -> str:
@@ -66,6 +66,30 @@ def find_file(prefix: str):
     files = glob.glob(f"{prefix}.*")
     return files[0] if files else None
 
+def compress_video(input_path: str) -> str | None:
+    output_path = input_path.replace(".mp4", "_c.mp4")
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", input_path,
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", "26",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-movflags", "+faststart",
+        output_path
+    ]
+
+    try:
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if os.path.exists(output_path):
+            return output_path
+    except Exception as e:
+        logger.error(f"Compression failed: {e}")
+
+    return None
+
 # ================= DOWNLOAD =================
 async def download_video(url: str, status_id: int, chat_id: int):
     prefix = random_filename()
@@ -76,7 +100,7 @@ async def download_video(url: str, status_id: int, chat_id: int):
         "no_warnings": True,
         "noplaylist": True,
         "merge_output_format": "mp4",
-        "format": "bestvideo+bestaudio/best"
+        "format": "bestvideo+bestaudio/best",
     }
 
     try:
@@ -107,7 +131,7 @@ async def handler(message: Message):
 
     for url in urls:
 
-        # 🔞 PRIVATE — DOCUMENT ONLY — AUTO DELETE
+        # 🔞 PRIVATE — DOCUMENT ONLY
         if is_private_doc(url):
             if chat_type != "private":
                 continue
@@ -119,6 +143,21 @@ async def handler(message: Message):
                 await bot.delete_message(chat_id, status.message_id)
                 continue
 
+            if os.path.getsize(path) > MAX_TG_SIZE:
+                compressed = compress_video(path)
+                if compressed and os.path.getsize(compressed) <= MAX_TG_SIZE:
+                    os.unlink(path)
+                    path = compressed
+
+            if os.path.getsize(path) > MAX_TG_SIZE:
+                await bot.edit_message_text(
+                    "❌ File too large for Telegram.",
+                    chat_id,
+                    status.message_id
+                )
+                os.unlink(path)
+                continue
+
             doc = FSInputFile(path)
             sent = await bot.send_document(
                 chat_id,
@@ -127,27 +166,19 @@ async def handler(message: Message):
             )
 
             await bot.delete_message(chat_id, status.message_id)
-
-            # ⏱️ Auto delete after 30 seconds
             await asyncio.sleep(30)
+
             try:
                 await bot.delete_message(chat_id, sent.message_id)
             except:
                 pass
 
-            try:
-                os.unlink(path)
-            except:
-                pass
-
+            os.unlink(path)
             continue
 
-        # 🌍 PUBLIC PLATFORMS — VIDEO
+        # 🌍 PUBLIC — VIDEO
         if not is_public(url):
             continue
-
-        status = None
-        path = None
 
         try:
             try:
@@ -160,6 +191,21 @@ async def handler(message: Message):
 
             if not path:
                 await bot.delete_message(chat_id, status.message_id)
+                continue
+
+            if os.path.getsize(path) > MAX_TG_SIZE:
+                compressed = compress_video(path)
+                if compressed and os.path.getsize(compressed) <= MAX_TG_SIZE:
+                    os.unlink(path)
+                    path = compressed
+
+            if os.path.getsize(path) > MAX_TG_SIZE:
+                await bot.edit_message_text(
+                    "❌ File too large for Telegram.",
+                    chat_id,
+                    status.message_id
+                )
+                os.unlink(path)
                 continue
 
             video = FSInputFile(path)
@@ -183,10 +229,7 @@ async def handler(message: Message):
 
         finally:
             if path and os.path.exists(path):
-                try:
-                    os.unlink(path)
-                except:
-                    pass
+                os.unlink(path)
 
 # ================= MAIN =================
 async def main():
