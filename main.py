@@ -1,220 +1,204 @@
 import asyncio
 import logging
+import os
 import re
 import time
-from pathlib import Path
+from datetime import datetime
+from urllib.parse import urlparse
 
-from aiogram import Bot, Dispatcher, F
+import aiofiles
+from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError
+from aiogram.filters import BaseFilter
 from aiogram.types import Message
-from aiogram.filters import Command
-from aiogram.exceptions import TelegramRetryAfter
-import yt_dlp
+from yt_dlp import YoutubeDL
 
-# ---------------- LOGGING ----------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(levelname)s:%(name)s:%(message)s"
-)
-
-# Silence noisy aiogram logs
-logging.getLogger("aiogram.event").setLevel(logging.WARNING)
-
-logger = logging.getLogger(__name__)
-
-# ---------------- BOT TOKEN ----------------
+# Hardcoded bot token - replace with your token
 BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
 
-bot = Bot(token=BOT_TOKEN)
+# Configure logging
+logging.getLogger('aiogram.event').setLevel(logging.WARNING)
+logging.getLogger('aiogram.dispatcher').setLevel(logging.WARNING)
+logging.basicConfig(level=logging.WARNING)
+
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-# ---------------- CONSTANTS ----------------
-TEMP_DIR = Path("temp")
-TEMP_DIR.mkdir(exist_ok=True)
+class HasVideoURL(BaseFilter):
+    async def __call__(self, message: Message) -> bool:
+        text = message.text or message.caption or ""
+        urls = re.findall(r'https?://[^\s]+', text)
+        for url in urls:
+            if await is_supported_url(url):
+                return True
+        return False
 
-MAX_SHORT_SIZE = 6 * 1024 * 1024  # 6 MB
-
-URL_REGEX = re.compile(r"https?://[^\s]+", re.IGNORECASE)
-
-SHORT_URL_HINTS = [
-    r"instagram\.com/reel/",
-    r"facebook\.com.*shorts",
-    r"pinterest\.com.*short"
-]
-
-# ---------------- HELPERS ----------------
-def extract_url(text: str) -> str | None:
-    match = URL_REGEX.search(text)
-    return match.group(0) if match else None
-
-def looks_like_short_url(url: str) -> bool:
-    return any(re.search(p, url.lower()) for p in SHORT_URL_HINTS)
-
-def unique_outtmpl() -> str:
-    return str(TEMP_DIR / f"video_{int(time.time() * 1000)}.%(ext)s")
-
-async def extract_info(url: str) -> dict | None:
-    try:
-        with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
-            return ydl.extract_info(url, download=False)
-    except Exception:
-        return None
-
-async def download_video(url: str) -> Path | None:
-    outtmpl = unique_outtmpl()
-    ydl_opts = {
-        "outtmpl": outtmpl,
-        "merge_output_format": "mp4",
-        "quiet": True,
-        "no_warnings": True,
-        "format": (
-            "best[ext=mp4]/"
-            "bestvideo[ext=mp4]+bestaudio[ext=m4a]/"
-            "best"
-        ),
-        "format_sort": ["res:720", "codec:h264", "br"],
-    }
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-
-        prefix = Path(outtmpl.replace(".%(ext)s", ""))
-        for f in TEMP_DIR.iterdir():
-            if f.stem.startswith(prefix.name):
-                return f
-        return None
-    except Exception:
-        return None
-
-async def optimize_short_video(input_path: Path) -> Path | None:
-    output_path = input_path.with_suffix(".opt.mp4")
-    cmd = [
-        "ffmpeg", "-y", "-i", str(input_path),
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-b:v", "900k",
-        "-maxrate", "900k",
-        "-bufsize", "1800k",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac",
-        "-b:a", "96k",
-        "-movflags", "+faststart",
-        str(output_path)
+async def is_supported_url(url: str) -> bool:
+    supported_domains = [
+        'youtube.com', 'youtu.be', 'm.youtube.com', 'youtube-nocookie.com',
+        'instagram.com', 'www.instagram.com',
+        'facebook.com', 'm.facebook.com', 'fb.watch',
+        'twitter.com', 'x.com', 'mobile.twitter.com',
+        'pinterest.com', 'www.pinterest.com'
     ]
+    domain = urlparse(url).netloc.lower()
+    return any(s in domain for s in supported_domains)
+
+async def get_video_info(url: str):
+    ydl_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'extract_flat': False,
+        'get_duration': True,
+    }
+    with YoutubeDL(ydl_opts) as ydl:
+        try:
+            info = ydl.extract_info(url, download=False)
+            return info.get('duration', 0), info
+        except:
+            return 0, None
+
+async def is_short_video(url: str, duration: int) -> bool:
+    if duration and duration <= 60:
+        return True
+    
+    short_patterns = [
+        r'instagram\.com/reel/',
+        r'facebook\.com/.*shorts',
+        r'pinterest\.com/.*short'
+    ]
+    
+    for pattern in short_patterns:
+        if re.search(pattern, url.lower()):
+            return True
+    
+    return False
+
+async def download_video(url: str, status_message_id: int, chat_id: int):
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    filename = f"video_{timestamp}.mp4"
+    
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL
+        duration, info = await get_video_info(url)
+        is_short = await is_short_video(url, duration)
+        
+        if is_short:
+            # Shorts/Reels: best mp4 up to 720p, target <=6MB
+            format_selector = (
+                'best[ext=mp4][height<=720]/'
+                'bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+            )
+        else:
+            # Long videos: best 720p mp4
+            format_selector = (
+                'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/'
+                'best[ext=mp4][height<=720]/best'
+            )
+        
+        ydl_opts = {
+            'format': format_selector,
+            'outtmpl': filename,
+            'quiet': True,
+            'no_warnings': True,
+            'noplaylist': True,
+            'merge_output_format': 'mp4',
+        }
+        
+        if is_short:
+            ydl_opts['postprocessors'] = [{
+                'key': 'FFmpegVideoConvertor',
+                'preferedformat': 'mp4',
+            }]
+        
+        await bot.edit_message_text(
+            "⬆️ Uploading...",
+            chat_id,
+            status_message_id
         )
-        await proc.communicate()
-        return output_path if output_path.exists() else None
+        
+        with YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+        
+        if os.path.exists(filename) and os.path.getsize(filename) > 0:
+            return filename
+        return None
+        
     except Exception:
         return None
 
-async def cleanup(path: Path | None):
-    if path and path.exists():
+@dp.message(HasVideoURL())
+async def handle_video_url(message: Message):
+    chat_id = message.chat.id
+    urls = re.findall(r'https?://[^\s]+', message.text or message.caption or "")
+    
+    for url in urls:
+        if not await is_supported_url(url):
+            continue
+            
         try:
-            await asyncio.to_thread(path.unlink)
+            # Step 1: Delete user message (best effort)
+            try:
+                await message.delete()
+            except:
+                pass
+            
+            # Step 2: Send status message
+            status_msg = await bot.send_message(chat_id, "⬇️ Downloading...")
+            
+            # Step 3: Download
+            video_path = await download_video(url, status_msg.message_id, chat_id)
+            
+            if not video_path:
+                await bot.delete_message(chat_id, status_msg.message_id)
+                continue
+            
+            try:
+                # Step 4: Send video
+                with open(video_path, 'rb') as video_file:
+                    sent_msg = await bot.send_video(
+                        chat_id=chat_id,
+                        video=video_file,
+                        caption="@nagudownloaderbot 🤍",
+                        supports_streaming=True,
+                        width=None,
+                        height=None
+                    )
+                
+                # Step 5: Pin video in groups (best effort)
+                if message.chat.type != 'private':
+                    try:
+                        await bot.pin_chat_message(chat_id, sent_msg.message_id)
+                    except TelegramForbiddenError:
+                        pass
+                
+            except TelegramRetryAfter as e:
+                await asyncio.sleep(e.timeout)
+                continue
+            except Exception:
+                pass
+            finally:
+                # Step 6: Delete status
+                try:
+                    await bot.delete_message(chat_id, status_msg.message_id)
+                except:
+                    pass
+                
+                # Step 7: Cleanup
+                try:
+                    os.unlink(video_path)
+                except:
+                    pass
+                
         except Exception:
-            pass
+            try:
+                await bot.delete_message(chat_id, status_msg.message_id)
+            except:
+                pass
+            continue
 
-async def safe_edit(msg: Message, text: str):
-    try:
-        await msg.edit_text(text)
-    except TelegramRetryAfter as e:
-        await asyncio.sleep(e.retry_after)
-        try:
-            await msg.edit_text(text)
-        except Exception:
-            pass
-    except Exception:
-        pass
-
-async def safe_send(func, *args, **kwargs):
-    try:
-        return await func(*args, **kwargs)
-    except TelegramRetryAfter as e:
-        await asyncio.sleep(e.retry_after)
-        return await func(*args, **kwargs)
-
-# ---------------- HANDLERS ----------------
-@dp.message(Command("start"))
-async def start_handler(message: Message):
-    await safe_send(message.answer, "Send a video link")
-
-@dp.message(F.text)
-async def video_handler(message: Message):
-    url = extract_url(message.text or "")
-    if not url:
-        return  # ✅ IGNORE NORMAL CHAT COMPLETELY
-
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
-    status = await safe_send(message.answer, "⬇️ Downloading...")
-
-    info = await extract_info(url)
-    if not info:
-        await safe_edit(status, "❌ Unsupported or invalid link")
-        await asyncio.sleep(2)
-        try:
-            await status.delete()
-        except Exception:
-            pass
-        return
-
-    duration = info.get("duration", 9999)
-    is_short = duration <= 60 or looks_like_short_url(url)
-
-    video_path = await download_video(url)
-    if not video_path or not video_path.exists():
-        await safe_edit(status, "❌ Download failed")
-        await asyncio.sleep(2)
-        try:
-            await status.delete()
-        except Exception:
-            pass
-        return
-
-    if is_short and video_path.stat().st_size > MAX_SHORT_SIZE:
-        optimized = await optimize_short_video(video_path)
-        if optimized:
-            await cleanup(video_path)
-            video_path = optimized
-
-    await safe_edit(status, "⬆️ Uploading...")
-
-    try:
-        with open(video_path, "rb") as f:
-            sent = await safe_send(
-                message.answer_video,
-                video=f,
-                caption="@nagudownloaderbot 🤍",
-                supports_streaming=True
-            )
-        try:
-            await bot.pin_chat_message(message.chat.id, sent.message_id)
-        except Exception:
-            pass
-    except Exception:
-        await safe_edit(status, "❌ Failed to send video")
-        await asyncio.sleep(2)
-    finally:
-        try:
-            await status.delete()
-        except Exception:
-            pass
-        await cleanup(video_path)
-
-# ---------------- MAIN ----------------
 async def main():
-    me = await bot.get_me()
-    logger.info("[INFO] Bot starting...")
-    logger.info(f"[INFO] Bot username: @{me.username}")
-    logger.info("[INFO] Polling started successfully")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
