@@ -18,7 +18,7 @@ from yt_dlp import YoutubeDL
 # ================= CONFIG =================
 BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
 
-MAX_VIDEO_SIZE = 50 * 1024 * 1024               # sendVideo limit
+MAX_VIDEO_SIZE = 45 * 1024 * 1024               # sendVideo limit
 MAX_DOCUMENT_SIZE = 2 * 1024 * 1024 * 1024      # Telegram bot hard limit (2GB)
 
 # =========================================
