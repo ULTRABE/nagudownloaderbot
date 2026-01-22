@@ -18,8 +18,8 @@ from yt_dlp import YoutubeDL
 # ================= CONFIG =================
 BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
 
-MAX_VIDEO_SIZE = 45 * 1024 * 1024               # sendVideo limit
-MAX_DOCUMENT_SIZE = 2 * 1024 * 1024 * 1024      # Telegram bot hard limit (2GB)
+MAX_VIDEO_SIZE = 45 * 1024 * 1024              # SAFE sendVideo margin
+MAX_DOCUMENT_SIZE = 2 * 1024 * 1024 * 1024     # Telegram bot hard limit
 
 # =========================================
 logging.basicConfig(level=logging.INFO)
@@ -130,7 +130,7 @@ async def handler(message: Message):
 
     for url in urls:
 
-        # 🔞 PRIVATE — DOCUMENT / VIDEO
+        # 🔞 PRIVATE — XHAMSTER / PORNHUB
         if is_private_doc(url):
             if chat_type != "private":
                 continue
@@ -144,7 +144,7 @@ async def handler(message: Message):
 
             file_size = os.path.getsize(path)
 
-            # Try compression ONLY if exceeds Telegram hard limit
+            # Hard Telegram stop
             if file_size > MAX_DOCUMENT_SIZE:
                 compressed = compress_video(path)
                 if compressed:
@@ -169,7 +169,6 @@ async def handler(message: Message):
                     chat_id,
                     media,
                     caption="⚠️ This video will be deleted in 30 seconds.",
-                    spoiler=True,
                     supports_streaming=False
                 )
             else:
@@ -188,7 +187,7 @@ async def handler(message: Message):
             os.unlink(path)
             continue
 
-        # 🌍 PUBLIC — VIDEO (UNCHANGED)
+        # 🌍 PUBLIC — INSTAGRAM / FB (UNCHANGED)
         if not is_public(url):
             continue
 
