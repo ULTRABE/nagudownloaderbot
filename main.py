@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import glob
+import secrets
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -15,9 +16,7 @@ from aiogram.types import Message, FSInputFile
 from yt_dlp import YoutubeDL
 
 # ================= CONFIG =================
-BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
-OWNER_ID = 7363967303  # <-- your Telegram user ID
-COOKIES_FILE = "cookies.txt"
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
 
 # =========================================
 logging.basicConfig(level=logging.INFO)
@@ -27,97 +26,127 @@ logging.getLogger("aiogram.event").setLevel(logging.WARNING)
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
+# ================= DOMAINS =================
+PUBLIC_DOMAINS = [
+    "instagram.com",
+    "facebook.com",
+    "fb.watch",
+    "x.com",
+    "twitter.com",
+    "pinterest.com"
+]
+
+PRIVATE_DOC_DOMAINS = [
+    "pornhub.com",
+    "xhamster.com",
+    "xhamster.xxx",
+    "xhamster.desi"
+]
+
+def domain(url: str) -> str:
+    return urlparse(url).netloc.lower()
+
+def is_public(url: str) -> bool:
+    return any(d in domain(url) for d in PUBLIC_DOMAINS)
+
+def is_private_doc(url: str) -> bool:
+    return any(d in domain(url) for d in PRIVATE_DOC_DOMAINS)
+
 # ================= FILTER =================
-class HasVideoURL(BaseFilter):
+class HasURL(BaseFilter):
     async def __call__(self, message: Message) -> bool:
-        text = message.text or message.caption or ""
-        return bool(re.search(r"https?://", text))
+        return bool(re.search(r"https?://", message.text or ""))
 
 # ================= HELPERS =================
-def is_youtube(url: str) -> bool:
-    return any(x in url for x in ["youtube.com", "youtu.be"])
+def random_filename():
+    return f"file_{secrets.token_hex(8)}"
 
-def find_downloaded_file(ts: str):
-    files = glob.glob(f"video_{ts}.*")
+def find_file(prefix: str):
+    files = glob.glob(f"{prefix}.*")
     return files[0] if files else None
 
-async def notify_cookie_expired():
-    try:
-        await bot.send_message(
-            OWNER_ID,
-            "⚠️ <b>YouTube cookies are expired or invalid.</b>\n\n"
-            "Please update <code>cookies.txt</code> in the GitHub repo and redeploy."
-        )
-    except:
-        pass
-
 # ================= DOWNLOAD =================
-async def download_video(url: str, status_msg_id: int, chat_id: int):
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+async def download_video(url: str, status_id: int, chat_id: int):
+    prefix = random_filename()
 
     ydl_opts = {
-        "outtmpl": f"video_{ts}.%(ext)s",
+        "outtmpl": f"{prefix}.%(ext)s",
         "quiet": True,
         "no_warnings": True,
-        "merge_output_format": "mp4",
         "noplaylist": True,
-        "format": (
-            "bv*[vcodec^=avc1][height<=1080]+ba[acodec^=mp4a]/"
-            "b[vcodec^=avc1]/b"
-        ),
-        "postprocessors": [{
-            "key": "FFmpegVideoConvertor",
-            "preferedformat": "mp4"
-        }],
-        "postprocessor_args": [
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-crf", "23",
-            "-c:a", "aac",
-            "-b:a", "128k",
-            "-movflags", "+faststart"
-        ],
+        "merge_output_format": "mp4",
+        "format": "bestvideo+bestaudio/best"
     }
-
-    # Use cookies ONLY if YouTube
-    if is_youtube(url):
-        if os.path.exists(COOKIES_FILE):
-            ydl_opts["cookiefile"] = COOKIES_FILE
 
     try:
         with YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
 
-        video_path = find_downloaded_file(ts)
-        if not video_path or os.path.getsize(video_path) == 0:
-            raise Exception("Empty output file")
+        path = find_file(prefix)
+        if not path or os.path.getsize(path) == 0:
+            return None
 
         await bot.edit_message_text(
             text="⬆️ Uploading...",
             chat_id=chat_id,
-            message_id=status_msg_id
+            message_id=status_id
         )
-
-        return video_path
+        return path
 
     except Exception as e:
-        err = str(e).lower()
         logger.error(f"Download failed: {e}")
-
-        if is_youtube(url) and any(x in err for x in ["sign in", "cookie", "403", "empty"]):
-            await notify_cookie_expired()
-
         return None
 
 # ================= HANDLER =================
-@dp.message(HasVideoURL())
-async def handle_video(message: Message):
+@dp.message(HasURL())
+async def handler(message: Message):
     chat_id = message.chat.id
+    chat_type = message.chat.type
     urls = re.findall(r"https?://[^\s]+", message.text or "")
 
     for url in urls:
-        status_msg = None
-        video_path = None
+
+        # 🔞 PRIVATE — DOCUMENT ONLY — AUTO DELETE
+        if is_private_doc(url):
+            if chat_type != "private":
+                continue
+
+            status = await bot.send_message(chat_id, "⬇️ Downloading...")
+            path = await download_video(url, status.message_id, chat_id)
+
+            if not path:
+                await bot.delete_message(chat_id, status.message_id)
+                continue
+
+            doc = FSInputFile(path)
+            sent = await bot.send_document(
+                chat_id,
+                doc,
+                caption="⚠️ This document will be deleted in 30 seconds."
+            )
+
+            await bot.delete_message(chat_id, status.message_id)
+
+            # ⏱️ Auto delete after 30 seconds
+            await asyncio.sleep(30)
+            try:
+                await bot.delete_message(chat_id, sent.message_id)
+            except:
+                pass
+
+            try:
+                os.unlink(path)
+            except:
+                pass
+
+            continue
+
+        # 🌍 PUBLIC PLATFORMS — VIDEO
+        if not is_public(url):
+            continue
+
+        status = None
+        path = None
 
         try:
             try:
@@ -125,13 +154,14 @@ async def handle_video(message: Message):
             except:
                 pass
 
-            status_msg = await bot.send_message(chat_id, "⬇️ Downloading...")
+            status = await bot.send_message(chat_id, "⬇️ Downloading...")
+            path = await download_video(url, status.message_id, chat_id)
 
-            video_path = await download_video(url, status_msg.message_id, chat_id)
-            if not video_path:
+            if not path:
+                await bot.delete_message(chat_id, status.message_id)
                 continue
 
-            video = FSInputFile(video_path)
+            video = FSInputFile(path)
             sent = await bot.send_video(
                 chat_id,
                 video,
@@ -139,20 +169,23 @@ async def handle_video(message: Message):
                 supports_streaming=True
             )
 
-            if message.chat.type != "private":
+            if chat_type != "private":
                 try:
                     await bot.pin_chat_message(chat_id, sent.message_id)
                 except TelegramForbiddenError:
                     pass
 
-            await bot.delete_message(chat_id, status_msg.message_id)
+            await bot.delete_message(chat_id, status.message_id)
 
         except TelegramRetryAfter as e:
             await asyncio.sleep(e.retry_after)
 
         finally:
-            if video_path and os.path.exists(video_path):
-                os.unlink(video_path)
+            if path and os.path.exists(path):
+                try:
+                    os.unlink(path)
+                except:
+                    pass
 
 # ================= MAIN =================
 async def main():
