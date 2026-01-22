@@ -7,13 +7,21 @@ from pathlib import Path
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
 from aiogram.filters import Command
+from aiogram.exceptions import TelegramRetryAfter
 import yt_dlp
 
 # ---------------- LOGGING ----------------
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s:%(name)s:%(message)s"
+)
+
+# Silence noisy aiogram logs
+logging.getLogger("aiogram.event").setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
-# ---------------- TOKEN (HARDCODE LOCALLY) ----------------
+# ---------------- BOT TOKEN (HARDCODED) ----------------
 BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
 
 bot = Bot(token=BOT_TOKEN)
@@ -23,12 +31,12 @@ dp = Dispatcher()
 TEMP_DIR = Path("temp")
 TEMP_DIR.mkdir(exist_ok=True)
 
-MAX_SHORT_SIZE = 6 * 1024 * 1024  # 6 MB hard cap
+MAX_SHORT_SIZE = 6 * 1024 * 1024  # 6 MB
 
 SHORT_URL_HINTS = [
-    r'instagram\.com/reel/',
-    r'facebook\.com.*shorts',
-    r'pinterest\.com.*short'
+    r"instagram\.com/reel/",
+    r"facebook\.com.*shorts",
+    r"pinterest\.com.*short"
 ]
 
 # ---------------- HELPERS ----------------
@@ -57,7 +65,7 @@ async def download_video(url: str) -> Path | None:
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
-        # find the produced file
+
         prefix = Path(outtmpl.replace(".%(ext)s", ""))
         for f in TEMP_DIR.iterdir():
             if f.stem.startswith(prefix.name):
@@ -99,30 +107,49 @@ async def cleanup(path: Path | None):
         except Exception:
             pass
 
+async def safe_edit(msg: Message, text: str):
+    try:
+        await msg.edit_text(text)
+    except TelegramRetryAfter as e:
+        await asyncio.sleep(e.retry_after)
+        try:
+            await msg.edit_text(text)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+async def safe_send(func, *args, **kwargs):
+    try:
+        return await func(*args, **kwargs)
+    except TelegramRetryAfter as e:
+        await asyncio.sleep(e.retry_after)
+        return await func(*args, **kwargs)
+
 # ---------------- HANDLERS ----------------
 @dp.message(Command("start"))
 async def start_handler(message: Message):
-    await message.answer("Send a video link")
+    await safe_send(message.answer, "Send a video link")
 
 @dp.message(F.text)
 async def video_handler(message: Message):
     url = message.text.strip()
 
-    # delete user link
     try:
         await message.delete()
     except Exception:
         pass
 
-    status = await message.answer("⬇️ Downloading...")
+    status = await safe_send(message.answer, "⬇️ Downloading...")
 
     info = await extract_info(url)
     if not info:
+        await safe_edit(status, "❌ Unsupported or invalid link")
+        await asyncio.sleep(2)
         try:
             await status.delete()
         except Exception:
             pass
-        await message.answer("❌ Unsupported or invalid link")
         return
 
     duration = info.get("duration", 9999)
@@ -130,37 +157,41 @@ async def video_handler(message: Message):
 
     video_path = await download_video(url)
 
-    try:
-        await status.delete()
-    except Exception:
-        pass
-
     if not video_path or not video_path.exists():
-        await message.answer("❌ Download failed")
+        await safe_edit(status, "❌ Download failed")
+        await asyncio.sleep(2)
+        try:
+            await status.delete()
+        except Exception:
+            pass
         return
 
-    # Shorts: only re-encode if size exceeds cap
     if is_short and video_path.stat().st_size > MAX_SHORT_SIZE:
         optimized = await optimize_short_video(video_path)
         if optimized:
             await cleanup(video_path)
             video_path = optimized
 
-    uploading = await message.answer("⬆️ Uploading...")
+    await safe_edit(status, "⬆️ Uploading...")
 
     try:
         with open(video_path, "rb") as f:
-            sent = await message.answer_video(
+            sent = await safe_send(
+                message.answer_video,
                 video=f,
                 caption="@nagudownloaderbot 🤍",
                 supports_streaming=True
             )
-        await bot.pin_chat_message(message.chat.id, sent.message_id)
+        try:
+            await bot.pin_chat_message(message.chat.id, sent.message_id)
+        except Exception:
+            pass
     except Exception:
-        await message.answer("❌ Failed to send video")
+        await safe_edit(status, "❌ Failed to send video")
+        await asyncio.sleep(2)
     finally:
         try:
-            await uploading.delete()
+            await status.delete()
         except Exception:
             pass
         await cleanup(video_path)
