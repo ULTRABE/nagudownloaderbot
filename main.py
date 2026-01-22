@@ -16,9 +16,13 @@ from aiogram.types import Message, FSInputFile
 from yt_dlp import YoutubeDL
 
 # ================= CONFIG =================
-BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
+BOT_TOKEN = "PASTE_YOUR_NEW_TOKEN_HERE"
 
-MAX_DOCUMENT_SIZE = 2 * 1024 * 1024 * 1024  # 2GB Telegram bot limit
+# Adult video limits
+MAX_DURATION = 30 * 60          # 30 minutes
+SEGMENT_TIME = 300              # 5 minutes
+VIDEO_BITRATE = "1.2M"
+AUDIO_BITRATE = "128k"
 
 # =========================================
 logging.basicConfig(level=logging.INFO)
@@ -62,54 +66,23 @@ class HasURL(BaseFilter):
         return bool(re.search(r"https?://", message.text or ""))
 
 # ================= HELPERS =================
-def random_filename():
-    return f"file_{secrets.token_hex(8)}"
+def random_prefix():
+    return f"vid_{secrets.token_hex(6)}"
 
 def find_file(prefix: str):
     files = glob.glob(f"{prefix}.*")
     return files[0] if files else None
 
-def compress_video(input_path: str) -> str | None:
-    """
-    NORMALIZATION COMPRESSION:
-    - Keeps quality reasonable
-    - Reduces bitrate spikes
-    - NOT trying to force small size
-    """
-    output_path = input_path.replace(".mp4", "_c.mp4")
-
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", input_path,
-        "-map", "0:v:0",
-        "-map", "0:a?",
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-crf", "24",              # balanced CRF
-        "-maxrate", "2M",          # cap spikes
-        "-bufsize", "4M",
-        "-pix_fmt", "yuv420p",
-        "-profile:v", "high",
-        "-level", "4.1",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-movflags", "+faststart",
-        output_path
-    ]
-
-    try:
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if os.path.exists(output_path):
-            return output_path
-    except Exception as e:
-        logger.error(f"Compression failed: {e}")
-
-    return None
+# ================= METADATA =================
+def get_duration(url: str) -> int | None:
+    ydl_opts = {"quiet": True, "skip_download": True}
+    with YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        return info.get("duration")
 
 # ================= DOWNLOAD =================
-async def download_video(url: str):
-    prefix = random_filename()
-
+def download_video(url: str) -> str | None:
+    prefix = random_prefix()
     ydl_opts = {
         "outtmpl": f"{prefix}.%(ext)s",
         "quiet": True,
@@ -118,20 +91,35 @@ async def download_video(url: str):
         "merge_output_format": "mp4",
         "format": "bestvideo+bestaudio/best",
     }
+    with YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+    return find_file(prefix)
 
-    try:
-        with YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
+# ================= SEGMENT =================
+def segment_video(input_path: str) -> list[str]:
+    base = input_path.replace(".mp4", "")
+    out_pattern = f"{base}_part%03d.mp4"
 
-        path = find_file(prefix)
-        if not path or os.path.getsize(path) == 0:
-            return None
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", input_path,
+        "-c:v", "libx264",
+        "-b:v", VIDEO_BITRATE,
+        "-maxrate", VIDEO_BITRATE,
+        "-bufsize", "2.4M",
+        "-pix_fmt", "yuv420p",
+        "-profile:v", "high",
+        "-level", "4.1",
+        "-c:a", "aac",
+        "-b:a", AUDIO_BITRATE,
+        "-f", "segment",
+        "-segment_time", str(SEGMENT_TIME),
+        "-reset_timestamps", "1",
+        out_pattern
+    ]
 
-        return path
-
-    except Exception as e:
-        logger.error(f"Download failed: {e}")
-        return None
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return sorted(glob.glob(f"{base}_part*.mp4"))
 
 # ================= HANDLER =================
 @dp.message(HasURL())
@@ -142,53 +130,57 @@ async def handler(message: Message):
 
     for url in urls:
 
-        # 🔞 PRIVATE DOMAINS (XHAMSTER / PORNHUB)
+        # 🔞 PRIVATE ADULT DOMAINS
         if is_private_doc(url):
             if chat_type != "private":
                 continue
 
-            status = await bot.send_message(chat_id, "⬇️ Downloading…")
-            path = await download_video(url)
+            status = await bot.send_message(chat_id, "🔍 Checking video…")
+            duration = get_duration(url)
 
+            if not duration or duration > MAX_DURATION:
+                await bot.edit_message_text(
+                    "❌ Video too long. Max allowed duration is 30 minutes.",
+                    chat_id,
+                    status.message_id
+                )
+                continue
+
+            await bot.edit_message_text("⬇️ Downloading…", chat_id, status.message_id)
+            path = download_video(url)
             if not path:
                 await bot.delete_message(chat_id, status.message_id)
                 continue
 
-            # Normalize video to avoid bitrate spikes
-            compressed = compress_video(path)
-            if compressed:
-                os.unlink(path)
-                path = compressed
-
-            file_size = os.path.getsize(path)
-
-            if file_size > MAX_DOCUMENT_SIZE:
-                await bot.edit_message_text(
-                    "❌ File exceeds Telegram upload limit.",
-                    chat_id,
-                    status.message_id
-                )
-                os.unlink(path)
-                continue
+            await bot.edit_message_text("✂️ Processing…", chat_id, status.message_id)
+            parts = segment_video(path)
 
             await bot.delete_message(chat_id, status.message_id)
 
-            sent = await bot.send_document(
-                chat_id,
-                FSInputFile(path),
-                caption="⚠️ This file will be deleted in 30 seconds."
-            )
+            sent_ids = []
+            total = len(parts)
+
+            for i, part in enumerate(parts, start=1):
+                msg = await bot.send_video(
+                    chat_id,
+                    FSInputFile(part),
+                    caption=f"Part {i}/{total}"
+                )
+                sent_ids.append(msg.message_id)
 
             await asyncio.sleep(30)
-            try:
-                await bot.delete_message(chat_id, sent.message_id)
-            except:
-                pass
+            for mid in sent_ids:
+                try:
+                    await bot.delete_message(chat_id, mid)
+                except:
+                    pass
 
+            for p in parts:
+                os.unlink(p)
             os.unlink(path)
             continue
 
-        # 🌍 PUBLIC DOMAINS (INSTAGRAM / FB) — UNCHANGED
+        # 🌍 PUBLIC DOMAINS (ORIGINAL BEHAVIOR)
         if not is_public(url):
             continue
 
@@ -199,7 +191,7 @@ async def handler(message: Message):
                 pass
 
             status = await bot.send_message(chat_id, "⬇️ Downloading…")
-            path = await download_video(url)
+            path = download_video(url)
 
             if not path:
                 await bot.delete_message(chat_id, status.message_id)
