@@ -17,14 +17,19 @@ from yt_dlp import YoutubeDL
 
 # ================= CONFIG =================
 BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
-MAX_TG_SIZE = 45 * 1024 * 1024  # 45 MB safe limit
+
+MAX_VIDEO_SIZE = 50 * 1024 * 1024               # sendVideo limit
+MAX_DOCUMENT_SIZE = 2 * 1024 * 1024 * 1024      # Telegram bot hard limit (2GB)
 
 # =========================================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 logging.getLogger("aiogram.event").setLevel(logging.WARNING)
 
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+bot = Bot(
+    token=BOT_TOKEN,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+)
 dp = Dispatcher()
 
 # ================= DOMAINS =================
@@ -34,7 +39,6 @@ PUBLIC_DOMAINS = [
     "fb.watch",
     "x.com",
     "twitter.com",
-    "pin.it.com",
 ]
 
 PRIVATE_DOC_DOMAINS = [
@@ -91,7 +95,7 @@ def compress_video(input_path: str) -> str | None:
     return None
 
 # ================= DOWNLOAD =================
-async def download_video(url: str, status_id: int, chat_id: int):
+async def download_video(url: str):
     prefix = random_filename()
 
     ydl_opts = {
@@ -111,11 +115,6 @@ async def download_video(url: str, status_id: int, chat_id: int):
         if not path or os.path.getsize(path) == 0:
             return None
 
-        await bot.edit_message_text(
-            text="⬆️ Uploading...",
-            chat_id=chat_id,
-            message_id=status_id
-        )
         return path
 
     except Exception as e:
@@ -131,43 +130,56 @@ async def handler(message: Message):
 
     for url in urls:
 
-        # 🔞 PRIVATE — DOCUMENT ONLY
+        # 🔞 PRIVATE — DOCUMENT / VIDEO
         if is_private_doc(url):
             if chat_type != "private":
                 continue
 
-            status = await bot.send_message(chat_id, "⬇️ Downloading...")
-            path = await download_video(url, status.message_id, chat_id)
+            status = await bot.send_message(chat_id, "⬇️ Downloading…")
+            path = await download_video(url)
 
             if not path:
                 await bot.delete_message(chat_id, status.message_id)
                 continue
 
-            if os.path.getsize(path) > MAX_TG_SIZE:
+            file_size = os.path.getsize(path)
+
+            # Try compression ONLY if exceeds Telegram hard limit
+            if file_size > MAX_DOCUMENT_SIZE:
                 compressed = compress_video(path)
-                if compressed and os.path.getsize(compressed) <= MAX_TG_SIZE:
+                if compressed:
                     os.unlink(path)
                     path = compressed
+                    file_size = os.path.getsize(path)
 
-            if os.path.getsize(path) > MAX_TG_SIZE:
+            if file_size > MAX_DOCUMENT_SIZE:
                 await bot.edit_message_text(
-                    "❌ File too large for Telegram.",
+                    "❌ File exceeds Telegram upload limit.",
                     chat_id,
                     status.message_id
                 )
                 os.unlink(path)
                 continue
 
-            doc = FSInputFile(path)
-            sent = await bot.send_document(
-                chat_id,
-                doc,
-                caption="⚠️ This document will be deleted in 30 seconds."
-            )
-
             await bot.delete_message(chat_id, status.message_id)
-            await asyncio.sleep(30)
+            media = FSInputFile(path)
 
+            if file_size <= MAX_VIDEO_SIZE:
+                sent = await bot.send_video(
+                    chat_id,
+                    media,
+                    caption="⚠️ This video will be deleted in 30 seconds.",
+                    spoiler=True,
+                    supports_streaming=False
+                )
+            else:
+                sent = await bot.send_document(
+                    chat_id,
+                    media,
+                    caption="⚠️ This file will be deleted in 30 seconds."
+                )
+
+            await asyncio.sleep(30)
             try:
                 await bot.delete_message(chat_id, sent.message_id)
             except:
@@ -176,7 +188,7 @@ async def handler(message: Message):
             os.unlink(path)
             continue
 
-        # 🌍 PUBLIC — VIDEO
+        # 🌍 PUBLIC — VIDEO (UNCHANGED)
         if not is_public(url):
             continue
 
@@ -186,35 +198,29 @@ async def handler(message: Message):
             except:
                 pass
 
-            status = await bot.send_message(chat_id, "⬇️ Downloading...")
-            path = await download_video(url, status.message_id, chat_id)
+            status = await bot.send_message(chat_id, "⬇️ Downloading…")
+            path = await download_video(url)
 
             if not path:
                 await bot.delete_message(chat_id, status.message_id)
                 continue
 
-            if os.path.getsize(path) > MAX_TG_SIZE:
-                compressed = compress_video(path)
-                if compressed and os.path.getsize(compressed) <= MAX_TG_SIZE:
-                    os.unlink(path)
-                    path = compressed
+            file_size = os.path.getsize(path)
+            media = FSInputFile(path)
 
-            if os.path.getsize(path) > MAX_TG_SIZE:
-                await bot.edit_message_text(
-                    "❌ File too large for Telegram.",
+            if file_size <= MAX_VIDEO_SIZE:
+                sent = await bot.send_video(
                     chat_id,
-                    status.message_id
+                    media,
+                    caption="@nagudownloaderbot 🤍",
+                    supports_streaming=True
                 )
-                os.unlink(path)
-                continue
-
-            video = FSInputFile(path)
-            sent = await bot.send_video(
-                chat_id,
-                video,
-                caption="@nagudownloaderbot 🤍",
-                supports_streaming=True
-            )
+            else:
+                sent = await bot.send_document(
+                    chat_id,
+                    media,
+                    caption="@nagudownloaderbot 🤍"
+                )
 
             if chat_type != "private":
                 try:
