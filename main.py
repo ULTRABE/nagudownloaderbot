@@ -124,10 +124,11 @@ async def download_video(url: str, status_message_id: int, chat_id: int):
         
         logger.info(f"Download successful: {video_path}")
         
+        # ✅ FIXED: aiogram v3 requires keyword arguments
         await bot.edit_message_text(
-            "⬆️ Uploading...",
-            chat_id,
-            status_message_id
+            text="⬆️ Uploading...",
+            chat_id=chat_id,
+            message_id=status_message_id
         )
         
         return video_path
@@ -177,7 +178,7 @@ async def handle_video_url(message: Message):
                 except Exception as e:
                     logger.error(f"Pin error: {e}")
             
-            # ✅ delete status ONLY after successful send
+            # delete status only after successful send
             try:
                 await bot.delete_message(chat_id, status_msg.message_id)
             except:
