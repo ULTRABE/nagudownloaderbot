@@ -34,14 +34,14 @@ PUBLIC_DOMAINS = [
     "fb.watch",
     "x.com",
     "twitter.com",
-    "pinterest.com",
+    "pin.it.com",
 ]
 
 PRIVATE_DOC_DOMAINS = [
-    "pornhub.com",
+    "pornhub.org",
     "xhamster.com",
     "xhamster.xxx",
-    "xhamster.desi",
+    "xhamster44.desi",
 ]
 
 def domain(url: str) -> str:
