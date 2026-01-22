@@ -24,8 +24,8 @@ from yt_dlp import YoutubeDL
 # ================= CONFIG =================
 BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
 
-MAX_DURATION = 30 * 60          # 30 minutes
-SEGMENT_TIME = 300              # 5 minutes
+MAX_DURATION = 30 * 60        # 30 minutes
+SEGMENT_TIME = 300            # 5 minutes
 AUDIO_BITRATE = "128k"
 
 QUALITY_PRESETS = {
@@ -105,7 +105,7 @@ def download_video(url: str) -> str | None:
         ydl.download([url])
     return find_file(prefix)
 
-# ================= SEGMENT (FIXED QUALITY) =================
+# ================= SEGMENT (QUALITY FIXED) =================
 def segment_video(input_path: str, video_bitrate: str) -> list[str]:
     base = input_path.replace(".mp4", "")
     out_pattern = f"{base}_part%03d.mp4"
@@ -114,18 +114,18 @@ def segment_video(input_path: str, video_bitrate: str) -> list[str]:
         "ffmpeg", "-y",
         "-i", input_path,
 
-        # ✅ SCALE + ASPECT SAFE
+        # Aspect safe
         "-vf",
         "scale=iw*min(1280/iw\\,720/ih):ih*min(1280/iw\\,720/ih),"
         "pad=1280:720:(ow-iw)/2:(oh-ih)/2",
 
-        # ✅ FRAME STABILITY
+        # Frame stability
         "-r", "30",
         "-g", "60",
         "-keyint_min", "60",
         "-sc_threshold", "0",
 
-        # ✅ QUALITY CONTROL
+        # Quality
         "-c:v", "libx264",
         "-preset", "slow",
         "-crf", "23",
@@ -135,7 +135,7 @@ def segment_video(input_path: str, video_bitrate: str) -> list[str]:
         "-c:a", "aac",
         "-b:a", AUDIO_BITRATE,
 
-        # ✅ PREVIEW + SEGMENTS
+        # Preview + segments
         "-movflags", "+faststart",
         "-force_key_frames", f"expr:gte(t,n_forced*{SEGMENT_TIME})",
 
@@ -149,7 +149,7 @@ def segment_video(input_path: str, video_bitrate: str) -> list[str]:
     return sorted(glob.glob(f"{base}_part*.mp4"))
 
 # ================= STATE =================
-pending_quality = {}  # chat_id -> (url, message_id)
+pending_quality: dict[int, tuple[str, int]] = {}
 
 # ================= HANDLERS =================
 @dp.message(HasURL())
@@ -167,28 +167,31 @@ async def handle_link(message: Message):
             duration = get_duration(url)
             if not duration or duration > MAX_DURATION:
                 await bot.edit_message_text(
-                    "❌ Video too long. Max allowed duration is 30 minutes.",
-                    chat_id,
-                    status.message_id
+                    text="❌ Video too long. Max allowed duration is 30 minutes.",
+                    chat_id=chat_id,
+                    message_id=status.message_id
                 )
                 return
 
-            kb = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="1080p", callback_data="q_1080p"),
-                InlineKeyboardButton(text="720p", callback_data="q_720p"),
-                InlineKeyboardButton(text="480p", callback_data="q_480p"),
-            ]])
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[[
+                    InlineKeyboardButton(text="1080p", callback_data="q_1080p"),
+                    InlineKeyboardButton(text="720p", callback_data="q_720p"),
+                    InlineKeyboardButton(text="480p", callback_data="q_480p"),
+                ]]
+            )
 
             await bot.edit_message_text(
-                "🎛️ Select video quality:",
-                chat_id,
-                status.message_id,
-                reply_markup=kb
+                text="🎛️ Select video quality:",
+                chat_id=chat_id,
+                message_id=status.message_id,
+                reply_markup=keyboard
             )
 
             pending_quality[chat_id] = (url, status.message_id)
 
             await asyncio.sleep(SELECTION_TIMEOUT)
+
             if chat_id in pending_quality:
                 pending_quality.pop(chat_id)
                 await process_video(chat_id, url, DEFAULT_QUALITY, status.message_id)
@@ -205,11 +208,11 @@ async def handle_link(message: Message):
 
             if not path:
                 await bot.delete_message(chat_id, status.message_id)
-                continue
+                return
 
             sent = await bot.send_video(
-                chat_id,
-                FSInputFile(path),
+                chat_id=chat_id,
+                video=FSInputFile(path),
                 caption="@nagudownloaderbot 🤍",
                 supports_streaming=True
             )
@@ -240,9 +243,9 @@ async def on_quality(call: CallbackQuery):
 # ================= PROCESS =================
 async def process_video(chat_id: int, url: str, quality: str, status_id: int):
     await bot.edit_message_text(
-        f"⬇️ Downloading ({quality})…",
-        chat_id,
-        status_id
+        text=f"⬇️ Downloading ({quality})…",
+        chat_id=chat_id,
+        message_id=status_id
     )
 
     path = download_video(url)
@@ -250,24 +253,30 @@ async def process_video(chat_id: int, url: str, quality: str, status_id: int):
         return
 
     await bot.edit_message_text(
-        "✂️ Processing…",
-        chat_id,
-        status_id
+        text="✂️ Processing…",
+        chat_id=chat_id,
+        message_id=status_id
     )
 
     parts = segment_video(path, QUALITY_PRESETS[quality])
     await bot.delete_message(chat_id, status_id)
 
     sent_ids = []
+    total = len(parts)
+
     for i, part in enumerate(parts, start=1):
         msg = await bot.send_video(
-            chat_id,
-            FSInputFile(part),
-            caption=f"Part {i}/{len(parts)} ({quality})"
+            chat_id=chat_id,
+            video=FSInputFile(part),
+            caption=f"Part {i}/{total} ({quality})"
         )
         sent_ids.append(msg.message_id)
 
-    warn = await bot.send_message(chat_id, "⚠️ This video will be deleted in 30 seconds.")
+    warn = await bot.send_message(
+        chat_id,
+        "⚠️ This video will be deleted in 30 seconds."
+    )
+
     await asyncio.sleep(30)
 
     for mid in sent_ids:
