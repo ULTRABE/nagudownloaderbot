@@ -177,19 +177,38 @@ async def handler(message: Message):
                 )
                 sent_ids.append(msg.message_id)
 
+            # ⚠️ Warning message (temporary)
+            warning = await bot.send_message(
+                chat_id,
+                "⚠️ This video will be deleted in 30 seconds."
+            )
+
             await asyncio.sleep(30)
+
+            # Delete video parts + warning
             for mid in sent_ids:
                 try:
                     await bot.delete_message(chat_id, mid)
                 except:
                     pass
 
+            try:
+                await bot.delete_message(chat_id, warning.message_id)
+            except:
+                pass
+
+            # 🧹 Final confirmation (permanent)
+            await bot.send_message(
+                chat_id,
+                "🧹 Your history was cleared."
+            )
+
             for p in parts:
                 os.unlink(p)
             os.unlink(path)
             continue
 
-        # 🌍 PUBLIC DOMAINS (ORIGINAL BEHAVIOR)
+        # 🌍 PUBLIC DOMAINS (UNCHANGED)
         if not is_public(url):
             continue
 
