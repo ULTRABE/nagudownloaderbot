@@ -38,7 +38,7 @@ PUBLIC_DOMAINS = [
 ]
 
 PRIVATE_DOC_DOMAINS = [
-    "pornhub.com",
+    "pornhub.org",
     "xhamster.com",
     "xhamster.xxx",
     "xhamster44.desi"
