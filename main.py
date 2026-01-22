@@ -16,7 +16,7 @@ from aiogram.types import Message, FSInputFile
 from yt_dlp import YoutubeDL
 
 # ================= CONFIG =================
-BOT_TOKEN = "PASTE_YOUR_NEW_TOKEN_HERE"
+BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
 
 # Adult video limits
 MAX_DURATION = 30 * 60          # 30 minutes
