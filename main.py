@@ -7,22 +7,35 @@ import secrets
 import subprocess
 from urllib.parse import urlparse
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError
 from aiogram.filters import BaseFilter
-from aiogram.types import Message, FSInputFile
+from aiogram.types import (
+    Message,
+    FSInputFile,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    CallbackQuery,
+)
 from yt_dlp import YoutubeDL
 
 # ================= CONFIG =================
 BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
 
-# Adult video limits
 MAX_DURATION = 30 * 60          # 30 minutes
-SEGMENT_TIME = 300              # 5 minutes per segment
-VIDEO_BITRATE = "1.2M"
+SEGMENT_TIME = 300              # 5 minutes
 AUDIO_BITRATE = "128k"
+
+QUALITY_PRESETS = {
+    "1080p": "2.0M",
+    "720p": "1.2M",
+    "480p": "0.8M",
+}
+
+DEFAULT_QUALITY = "720p"
+SELECTION_TIMEOUT = 15
 
 # =========================================
 logging.basicConfig(level=logging.INFO)
@@ -44,7 +57,6 @@ PUBLIC_DOMAINS = [
     "twitter.com",
 ]
 
-# 🔒 XHAMSTER ONLY
 PRIVATE_DOMAINS = [
     "xhamster.com",
     "xhamster.xxx",
@@ -75,28 +87,26 @@ def find_file(prefix: str):
 
 # ================= METADATA =================
 def get_duration(url: str) -> int | None:
-    ydl_opts = {"quiet": True, "skip_download": True}
-    with YoutubeDL(ydl_opts) as ydl:
+    with YoutubeDL({"quiet": True, "skip_download": True}) as ydl:
         info = ydl.extract_info(url, download=False)
         return info.get("duration")
 
 # ================= DOWNLOAD =================
 def download_video(url: str) -> str | None:
     prefix = random_prefix()
-    ydl_opts = {
+    with YoutubeDL({
         "outtmpl": f"{prefix}.%(ext)s",
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
         "merge_output_format": "mp4",
         "format": "bestvideo+bestaudio/best",
-    }
-    with YoutubeDL(ydl_opts) as ydl:
+    }) as ydl:
         ydl.download([url])
     return find_file(prefix)
 
-# ================= SEGMENT (PREVIEW SAFE) =================
-def segment_video(input_path: str) -> list[str]:
+# ================= SEGMENT (FIXED QUALITY) =================
+def segment_video(input_path: str, video_bitrate: str) -> list[str]:
     base = input_path.replace(".mp4", "")
     out_pattern = f"{base}_part%03d.mp4"
 
@@ -104,19 +114,30 @@ def segment_video(input_path: str) -> list[str]:
         "ffmpeg", "-y",
         "-i", input_path,
 
-        # 🔑 PREVIEW FIX
-        "-force_key_frames", f"expr:gte(t,n_forced*{SEGMENT_TIME})",
-        "-movflags", "+faststart",
+        # ✅ SCALE + ASPECT SAFE
+        "-vf",
+        "scale=iw*min(1280/iw\\,720/ih):ih*min(1280/iw\\,720/ih),"
+        "pad=1280:720:(ow-iw)/2:(oh-ih)/2",
 
+        # ✅ FRAME STABILITY
+        "-r", "30",
+        "-g", "60",
+        "-keyint_min", "60",
+        "-sc_threshold", "0",
+
+        # ✅ QUALITY CONTROL
         "-c:v", "libx264",
-        "-b:v", VIDEO_BITRATE,
-        "-maxrate", VIDEO_BITRATE,
-        "-bufsize", "2.4M",
-        "-pix_fmt", "yuv420p",
-        "-profile:v", "high",
-        "-level", "4.1",
+        "-preset", "slow",
+        "-crf", "23",
+        "-maxrate", video_bitrate,
+        "-bufsize", "2.5M",
+
         "-c:a", "aac",
         "-b:a", AUDIO_BITRATE,
+
+        # ✅ PREVIEW + SEGMENTS
+        "-movflags", "+faststart",
+        "-force_key_frames", f"expr:gte(t,n_forced*{SEGMENT_TIME})",
 
         "-f", "segment",
         "-segment_time", str(SEGMENT_TIME),
@@ -127,98 +148,53 @@ def segment_video(input_path: str) -> list[str]:
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return sorted(glob.glob(f"{base}_part*.mp4"))
 
-# ================= HANDLER =================
+# ================= STATE =================
+pending_quality = {}  # chat_id -> (url, message_id)
+
+# ================= HANDLERS =================
 @dp.message(HasURL())
-async def handler(message: Message):
+async def handle_link(message: Message):
     chat_id = message.chat.id
     chat_type = message.chat.type
     urls = re.findall(r"https?://[^\s]+", message.text or "")
 
     for url in urls:
 
-        # 🔞 XHAMSTER (PRIVATE ONLY)
-        if is_private(url):
-            if chat_type != "private":
-                continue
-
+        # 🔞 XHAMSTER (PRIVATE)
+        if is_private(url) and chat_type == "private":
             status = await bot.send_message(chat_id, "🔍 Checking video…")
 
             duration = get_duration(url)
             if not duration or duration > MAX_DURATION:
                 await bot.edit_message_text(
-                    text="❌ Video too long. Max allowed duration is 30 minutes.",
-                    chat_id=chat_id,
-                    message_id=status.message_id
+                    "❌ Video too long. Max allowed duration is 30 minutes.",
+                    chat_id,
+                    status.message_id
                 )
-                continue
+                return
+
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="1080p", callback_data="q_1080p"),
+                InlineKeyboardButton(text="720p", callback_data="q_720p"),
+                InlineKeyboardButton(text="480p", callback_data="q_480p"),
+            ]])
 
             await bot.edit_message_text(
-                text="⬇️ Downloading…",
-                chat_id=chat_id,
-                message_id=status.message_id
-            )
-
-            path = download_video(url)
-            if not path:
-                await bot.delete_message(chat_id, status.message_id)
-                continue
-
-            await bot.edit_message_text(
-                text="✂️ Processing…",
-                chat_id=chat_id,
-                message_id=status.message_id
-            )
-
-            parts = segment_video(path)
-            await bot.delete_message(chat_id, status.message_id)
-
-            sent_ids = []
-            total = len(parts)
-
-            for i, part in enumerate(parts, start=1):
-                msg = await bot.send_video(
-                    chat_id=chat_id,
-                    video=FSInputFile(part),
-                    caption=f"Part {i}/{total}"
-                )
-                sent_ids.append(msg.message_id)
-
-            # ⚠️ Temporary warning
-            warning = await bot.send_message(
+                "🎛️ Select video quality:",
                 chat_id,
-                "⚠️ This video will be deleted in 30 seconds."
+                status.message_id,
+                reply_markup=kb
             )
 
-            await asyncio.sleep(30)
+            pending_quality[chat_id] = (url, status.message_id)
 
-            # Delete videos + warning
-            for mid in sent_ids:
-                try:
-                    await bot.delete_message(chat_id, mid)
-                except:
-                    pass
+            await asyncio.sleep(SELECTION_TIMEOUT)
+            if chat_id in pending_quality:
+                pending_quality.pop(chat_id)
+                await process_video(chat_id, url, DEFAULT_QUALITY, status.message_id)
 
-            try:
-                await bot.delete_message(chat_id, warning.message_id)
-            except:
-                pass
-
-            # 🧹 Permanent confirmation
-            await bot.send_message(
-                chat_id,
-                "🧹 Your history was cleared."
-            )
-
-            for p in parts:
-                os.unlink(p)
-            os.unlink(path)
-            continue
-
-        # 🌍 PUBLIC SITES (ORIGINAL BEHAVIOR)
-        if not is_public(url):
-            continue
-
-        try:
+        # 🌍 PUBLIC LINKS
+        elif is_public(url):
             try:
                 await message.delete()
             except:
@@ -232,8 +208,8 @@ async def handler(message: Message):
                 continue
 
             sent = await bot.send_video(
-                chat_id=chat_id,
-                video=FSInputFile(path),
+                chat_id,
+                FSInputFile(path),
                 caption="@nagudownloaderbot 🤍",
                 supports_streaming=True
             )
@@ -245,13 +221,71 @@ async def handler(message: Message):
                     pass
 
             await bot.delete_message(chat_id, status.message_id)
+            os.unlink(path)
 
-        except TelegramRetryAfter as e:
-            await asyncio.sleep(e.retry_after)
+# ================= CALLBACK =================
+@dp.callback_query(F.data.startswith("q_"))
+async def on_quality(call: CallbackQuery):
+    chat_id = call.message.chat.id
+    quality = call.data.replace("q_", "")
 
-        finally:
-            if path and os.path.exists(path):
-                os.unlink(path)
+    if chat_id not in pending_quality:
+        await call.answer("Expired.", show_alert=True)
+        return
+
+    url, msg_id = pending_quality.pop(chat_id)
+    await call.answer()
+    await process_video(chat_id, url, quality, msg_id)
+
+# ================= PROCESS =================
+async def process_video(chat_id: int, url: str, quality: str, status_id: int):
+    await bot.edit_message_text(
+        f"⬇️ Downloading ({quality})…",
+        chat_id,
+        status_id
+    )
+
+    path = download_video(url)
+    if not path:
+        return
+
+    await bot.edit_message_text(
+        "✂️ Processing…",
+        chat_id,
+        status_id
+    )
+
+    parts = segment_video(path, QUALITY_PRESETS[quality])
+    await bot.delete_message(chat_id, status_id)
+
+    sent_ids = []
+    for i, part in enumerate(parts, start=1):
+        msg = await bot.send_video(
+            chat_id,
+            FSInputFile(part),
+            caption=f"Part {i}/{len(parts)} ({quality})"
+        )
+        sent_ids.append(msg.message_id)
+
+    warn = await bot.send_message(chat_id, "⚠️ This video will be deleted in 30 seconds.")
+    await asyncio.sleep(30)
+
+    for mid in sent_ids:
+        try:
+            await bot.delete_message(chat_id, mid)
+        except:
+            pass
+
+    try:
+        await bot.delete_message(chat_id, warn.message_id)
+    except:
+        pass
+
+    await bot.send_message(chat_id, "🧹 Your history was cleared.")
+
+    for p in parts:
+        os.unlink(p)
+    os.unlink(path)
 
 # ================= MAIN =================
 async def main():
