@@ -16,12 +16,12 @@ logging.basicConfig(
     format="%(levelname)s:%(name)s:%(message)s"
 )
 
-# Silence noisy aiogram logs
+# Silence noisy aiogram "update not handled" logs
 logging.getLogger("aiogram.event").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
-# ---------------- BOT TOKEN (HARDCODED) ----------------
+# ---------------- BOT TOKEN ----------------
 BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
 
 bot = Bot(token=BOT_TOKEN)
@@ -31,7 +31,7 @@ dp = Dispatcher()
 TEMP_DIR = Path("temp")
 TEMP_DIR.mkdir(exist_ok=True)
 
-MAX_SHORT_SIZE = 6 * 1024 * 1024  # 6 MB
+MAX_SHORT_SIZE = 20 * 1024 * 1024  # 6 MB
 
 SHORT_URL_HINTS = [
     r"instagram\.com/reel/",
@@ -60,8 +60,15 @@ async def download_video(url: str) -> Path | None:
         "merge_output_format": "mp4",
         "quiet": True,
         "no_warnings": True,
-        "format": "bestvideo[height<=720][fps<=30]+bestaudio/best[height<=720]"
+        # UNIVERSAL, PLATFORM-SAFE FORMAT STRATEGY
+        "format": (
+            "best[ext=mp4]/"
+            "bestvideo[ext=mp4]+bestaudio[ext=m4a]/"
+            "best"
+        ),
+        "format_sort": ["res:720", "codec:h264", "br"],
     }
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
@@ -135,6 +142,7 @@ async def start_handler(message: Message):
 async def video_handler(message: Message):
     url = message.text.strip()
 
+    # Delete user link message
     try:
         await message.delete()
     except Exception:
@@ -156,7 +164,6 @@ async def video_handler(message: Message):
     is_short = duration <= 60 or looks_like_short_url(url)
 
     video_path = await download_video(url)
-
     if not video_path or not video_path.exists():
         await safe_edit(status, "❌ Download failed")
         await asyncio.sleep(2)
@@ -166,6 +173,7 @@ async def video_handler(message: Message):
             pass
         return
 
+    # Shorts: re-encode ONLY if size exceeds limit
     if is_short and video_path.stat().st_size > MAX_SHORT_SIZE:
         optimized = await optimize_short_video(video_path)
         if optimized:
