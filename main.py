@@ -18,8 +18,7 @@ from yt_dlp import YoutubeDL
 # ================= CONFIG =================
 BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
 
-MAX_VIDEO_SIZE = 45 * 1024 * 1024              # SAFE sendVideo margin
-MAX_DOCUMENT_SIZE = 2 * 1024 * 1024 * 1024     # Telegram bot hard limit
+MAX_DOCUMENT_SIZE = 2 * 1024 * 1024 * 1024  # 2GB Telegram bot limit
 
 # =========================================
 logging.basicConfig(level=logging.INFO)
@@ -71,14 +70,27 @@ def find_file(prefix: str):
     return files[0] if files else None
 
 def compress_video(input_path: str) -> str | None:
+    """
+    NORMALIZATION COMPRESSION:
+    - Keeps quality reasonable
+    - Reduces bitrate spikes
+    - NOT trying to force small size
+    """
     output_path = input_path.replace(".mp4", "_c.mp4")
 
     cmd = [
         "ffmpeg", "-y",
         "-i", input_path,
+        "-map", "0:v:0",
+        "-map", "0:a?",
         "-c:v", "libx264",
         "-preset", "veryfast",
-        "-crf", "26",
+        "-crf", "24",              # balanced CRF
+        "-maxrate", "2M",          # cap spikes
+        "-bufsize", "4M",
+        "-pix_fmt", "yuv420p",
+        "-profile:v", "high",
+        "-level", "4.1",
         "-c:a", "aac",
         "-b:a", "128k",
         "-movflags", "+faststart",
@@ -130,7 +142,7 @@ async def handler(message: Message):
 
     for url in urls:
 
-        # 🔞 PRIVATE — XHAMSTER / PORNHUB
+        # 🔞 PRIVATE DOMAINS (XHAMSTER / PORNHUB)
         if is_private_doc(url):
             if chat_type != "private":
                 continue
@@ -142,15 +154,13 @@ async def handler(message: Message):
                 await bot.delete_message(chat_id, status.message_id)
                 continue
 
-            file_size = os.path.getsize(path)
+            # Normalize video to avoid bitrate spikes
+            compressed = compress_video(path)
+            if compressed:
+                os.unlink(path)
+                path = compressed
 
-            # Hard Telegram stop
-            if file_size > MAX_DOCUMENT_SIZE:
-                compressed = compress_video(path)
-                if compressed:
-                    os.unlink(path)
-                    path = compressed
-                    file_size = os.path.getsize(path)
+            file_size = os.path.getsize(path)
 
             if file_size > MAX_DOCUMENT_SIZE:
                 await bot.edit_message_text(
@@ -162,21 +172,12 @@ async def handler(message: Message):
                 continue
 
             await bot.delete_message(chat_id, status.message_id)
-            media = FSInputFile(path)
 
-            if file_size <= MAX_VIDEO_SIZE:
-                sent = await bot.send_video(
-                    chat_id,
-                    media,
-                    caption="⚠️ This video will be deleted in 30 seconds.",
-                    supports_streaming=False
-                )
-            else:
-                sent = await bot.send_document(
-                    chat_id,
-                    media,
-                    caption="⚠️ This file will be deleted in 30 seconds."
-                )
+            sent = await bot.send_document(
+                chat_id,
+                FSInputFile(path),
+                caption="⚠️ This file will be deleted in 30 seconds."
+            )
 
             await asyncio.sleep(30)
             try:
@@ -187,7 +188,7 @@ async def handler(message: Message):
             os.unlink(path)
             continue
 
-        # 🌍 PUBLIC — INSTAGRAM / FB (UNCHANGED)
+        # 🌍 PUBLIC DOMAINS (INSTAGRAM / FB) — UNCHANGED
         if not is_public(url):
             continue
 
@@ -204,22 +205,12 @@ async def handler(message: Message):
                 await bot.delete_message(chat_id, status.message_id)
                 continue
 
-            file_size = os.path.getsize(path)
-            media = FSInputFile(path)
-
-            if file_size <= MAX_VIDEO_SIZE:
-                sent = await bot.send_video(
-                    chat_id,
-                    media,
-                    caption="@nagudownloaderbot 🤍",
-                    supports_streaming=True
-                )
-            else:
-                sent = await bot.send_document(
-                    chat_id,
-                    media,
-                    caption="@nagudownloaderbot 🤍"
-                )
+            sent = await bot.send_video(
+                chat_id,
+                FSInputFile(path),
+                caption="@nagudownloaderbot 🤍",
+                supports_streaming=True
+            )
 
             if chat_type != "private":
                 try:
