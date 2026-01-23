@@ -1,5 +1,5 @@
 # =========================
-# main.py — FINAL STABLE BUILD
+# main.py — FINAL STABLE BUILD (LOCKED)
 # =========================
 
 import asyncio
@@ -23,22 +23,20 @@ OWNER_ID = 7363967303
 # Encoding
 CRF_NORMAL = "24"
 CRF_ADULT = "23"
-MAXRATE = "4M"
-BUFSIZE = "8M"
 FPS_CAP = "30"
 
 # Limits
-SOFT_LIMIT_NORMAL = 10 * 60      # 10 min
-MAX_LIMIT_ADULT = 30 * 60        # 30 min
+SOFT_LIMIT_NORMAL = 10 * 60
+MAX_LIMIT_ADULT = 30 * 60
 TG_LIMIT_MB = 45
 
-# Delete timers
+# Timers
 DELETE_ADULT_AFTER = 10
 
-# Adult GC invite (edit if needed)
-ADULT_GC_LINK = "https://t.me/+5BX6H7j4osVjOWZl"
+# Adult GC invite
+ADULT_GC_LINK = "https://t.me/+VUujjb34k9s2YTU1"
 
-# Adult domains (kept minimal + stable)
+# Stable adult domains
 ADULT_KEYWORDS = [
     "pornhub", "xhamster", "xnxx", "xvideos",
     "redtube", "youporn", "spankbang",
@@ -63,9 +61,7 @@ def domain(url: str) -> str:
     return urlparse(url).netloc.lower()
 
 def is_adult(url: str, info: dict) -> bool:
-    if any(k in domain(url) for k in ADULT_KEYWORDS):
-        return True
-    return info.get("age_limit", 0) >= 18
+    return any(k in domain(url) for k in ADULT_KEYWORDS) or info.get("age_limit", 0) >= 18
 
 def run(cmd: list):
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -90,28 +86,51 @@ def download_normal(url: str, out: str):
     }) as ydl:
         ydl.download([url])
 
-def download_adult(url: str, out: str):
+def download_adult_720(url: str, out: str):
     with YoutubeDL({
         "outtmpl": out,
+        "format": (
+            "bv*[height=720][vcodec^=avc1]/"
+            "bv*[height<=720][vcodec^=avc1]+ba[acodec^=mp4a]"
+        ),
         "merge_output_format": "mp4",
-        "format": "bv*[height<=720]/bv*[height<=540]/best+ba/best",
+        "concurrent_fragment_downloads": 8,
+        "http_chunk_size": 10 * 1024 * 1024,
+        "nopart": True,
         "quiet": True,
         "noplaylist": True,
     }) as ydl:
         ydl.download([url])
+
+def encode(src: str, dst: str, height: int) -> bool:
+    run([
+        "ffmpeg", "-y", "-i", src,
+        "-vf", f"scale=-2:{height},fps={FPS_CAP}",
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", CRF_ADULT,
+        "-maxrate", "2500k",
+        "-bufsize", "5000k",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-movflags", "+faststart",
+        dst
+    ])
+    return os.path.exists(dst) and os.path.getsize(dst) > 0
 
 # ================= AUTH =================
 @dp.message(Command("auth"))
 async def auth(m: Message):
     if m.from_user.id == OWNER_ID:
         AUTHORIZED_ADULT_CHATS.add(m.chat.id)
-        await bot.send_message(m.chat.id, "Adult downloads enabled here.")
+        await bot.send_message(m.chat.id, "Adult downloads enabled.")
 
 @dp.message(Command("unauth"))
 async def unauth(m: Message):
     if m.from_user.id == OWNER_ID:
         AUTHORIZED_ADULT_CHATS.discard(m.chat.id)
-        await bot.send_message(m.chat.id, "Adult downloads disabled here.")
+        await bot.send_message(m.chat.id, "Adult downloads disabled.")
 
 # ================= HANDLER =================
 @dp.message(HasURL())
@@ -137,7 +156,7 @@ async def handler(m: Message):
 
     adult = is_adult(url, info)
 
-    # ========== BLOCK ADULT IN UNAUTHORIZED GC ==========
+    # ===== BLOCK ADULT IN UNAUTHORIZED GC =====
     if adult and m.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP) and m.chat.id not in AUTHORIZED_ADULT_CHATS:
         kb = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="Use 18+ here", url=ADULT_GC_LINK)
@@ -145,7 +164,7 @@ async def handler(m: Message):
         await bot.send_message(m.chat.id, "18+ content not allowed here.", reply_markup=kb)
         return
 
-    # ========== NORMAL ==========
+    # ===== NORMAL =====
     if not adult:
         if (info.get("duration") or 0) > SOFT_LIMIT_NORMAL:
             return
@@ -157,16 +176,16 @@ async def handler(m: Message):
         out = f"{base}.mp4"
 
         download_normal(url, raw)
-        await bot.edit_message_text("Uploading…", m.chat.id, status.message_id)
 
         run([
             "ffmpeg", "-y", "-i", raw,
-            "-c:v", "libx264", "-preset", "veryfast",
+            "-c:v", "libx264",
+            "-preset", "veryfast",
             "-crf", CRF_NORMAL,
-            "-maxrate", MAXRATE, "-bufsize", BUFSIZE,
             "-pix_fmt", "yuv420p",
             "-movflags", "+faststart",
-            "-c:a", "aac", "-b:a", "128k",
+            "-c:a", "aac",
+            "-b:a", "128k",
             out
         ])
 
@@ -188,54 +207,53 @@ async def handler(m: Message):
         await bot.delete_message(m.chat.id, status.message_id)
         return
 
-    # ========== ADULT ==========
+    # ===== ADULT =====
     if (info.get("duration") or 0) > MAX_LIMIT_ADULT:
         return
 
     status = await bot.send_message(m.chat.id, "Downloading…")
 
     base = f"a_{secrets.token_hex(6)}"
-    raw = f"{base}.mp4"
+    raw = f"{base}_720.mp4"
+    out540 = f"{base}_540.mp4"
+    out480 = f"{base}_480.mp4"
 
-    download_adult(url, raw)
-    await bot.edit_message_text("Uploading…", m.chat.id, status.message_id)
+    try:
+        download_adult_720(url, raw)
 
-    # Re-encode with size control
-    encoded = f"{base}_enc.mp4"
-    run([
-        "ffmpeg", "-y", "-i", raw,
-        "-vf", f"fps={FPS_CAP}",
-        "-c:v", "libx264", "-preset", "veryfast",
-        "-crf", CRF_ADULT,
-        "-maxrate", MAXRATE, "-bufsize", BUFSIZE,
-        "-pix_fmt", "yuv420p",
-        "-movflags", "+faststart",
-        "-c:a", "aac", "-b:a", "96k",
-        encoded
-    ])
-    os.remove(raw)
+        if encode(raw, out540, 540):
+            final = out540
+        elif encode(raw, out480, 480):
+            final = out480
+        else:
+            raise RuntimeError
 
-    # Chunk if needed
+    except:
+        await bot.delete_message(m.chat.id, status.message_id)
+        for f in (raw, out540, out480):
+            if os.path.exists(f):
+                os.remove(f)
+        return
+
+    size_mb = os.path.getsize(final) / (1024 * 1024)
     parts = []
-    size_mb = os.path.getsize(encoded) / (1024 * 1024)
 
     if size_mb <= TG_LIMIT_MB:
-        parts.append(encoded)
+        parts = [final]
     else:
         run([
-            "ffmpeg", "-y", "-i", encoded,
+            "ffmpeg", "-y", "-i", final,
             "-c", "copy",
             "-f", "segment",
             "-segment_time", "300",
             f"{base}_part_%03d.mp4"
         ])
-        os.remove(encoded)
-        parts = sorted(f for f in os.listdir() if f.startswith(base) and f.endswith(".mp4"))
+        os.remove(final)
+        parts = sorted(p for p in os.listdir() if p.startswith(base) and p.endswith(".mp4"))
 
     sent_msgs = []
     for p in parts:
-        msg = await bot.send_document(m.chat.id, FSInputFile(p))
-        sent_msgs.append(msg)
+        sent_msgs.append(await bot.send_document(m.chat.id, FSInputFile(p)))
 
     warn = await bot.send_message(m.chat.id, "This media will be removed in 10 seconds. Save it now.")
     await asyncio.sleep(DELETE_ADULT_AFTER)
@@ -248,18 +266,13 @@ async def handler(m: Message):
 
     try:
         await bot.delete_message(m.chat.id, warn.message_id)
+        await bot.delete_message(m.chat.id, status.message_id)
     except:
         pass
 
-    await bot.send_message(m.chat.id, "History cleared.")
-
-    for p in parts:
-        try:
-            os.remove(p)
-        except:
-            pass
-
-    await bot.delete_message(m.chat.id, status.message_id)
+    for f in parts + [raw, out540, out480]:
+        if os.path.exists(f):
+            os.remove(f)
 
 # ================= MAIN =================
 async def main():
