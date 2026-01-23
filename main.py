@@ -1,12 +1,11 @@
-# ===================== IMPORTS =====================
 import asyncio
 import logging
 import os
 import re
 import glob
 import secrets
-import subprocess
 import sqlite3
+import subprocess
 import time
 from contextlib import closing
 from urllib.parse import urlparse
@@ -14,21 +13,21 @@ from urllib.parse import urlparse
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode, ChatType
-from aiogram.filters import BaseFilter, Command
+from aiogram.filters import Command, BaseFilter
 from aiogram.types import (
     Message,
+    CallbackQuery,
     FSInputFile,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
-    CallbackQuery,
 )
-from aiogram.exceptions import TelegramForbiddenError
 from yt_dlp import YoutubeDL
 
-# ===================== CONFIG =====================
+# ==================================================
+# CONFIG
+# ==================================================
 BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
 OWNER_ID = 7363967303
-
 FORCE_JOIN_CHANNEL = "@downloaderbackup"
 DB_PATH = "bot.db"
 
@@ -47,9 +46,10 @@ QUALITY_PRESETS = {
 }
 
 DEFAULT_QUALITY = "720p"
-SELECTION_TIMEOUT = 15
 
-# ===================== BOT =====================
+# ==================================================
+# BOT
+# ==================================================
 logging.basicConfig(level=logging.INFO)
 bot = Bot(
     token=BOT_TOKEN,
@@ -57,7 +57,9 @@ bot = Bot(
 )
 dp = Dispatcher()
 
-# ===================== DATABASE =====================
+# ==================================================
+# DATABASE
+# ==================================================
 def db():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
 
@@ -66,7 +68,6 @@ def init_db():
         conn.execute("""
         CREATE TABLE IF NOT EXISTS authorized_chats (
             chat_id INTEGER PRIMARY KEY,
-            authorized_at INTEGER,
             expires_at INTEGER
         )""")
         conn.execute("""
@@ -81,14 +82,152 @@ def init_db():
             count INTEGER
         )""")
 
-# ===================== DB HELPERS =====================
+# ==================================================
+# PREMIUM UI CONSTANTS (CANONICAL)
+# ==================================================
+UI_ACCESS_RESTRICTED = """━━━━━━━━━━━━━━━━━━━━━━
+ACCESS RESTRICTED
+━━━━━━━━━━━━━━━━━━━━━━
+
+This service operates under
+controlled access.
+
+Channel membership is mandatory
+to proceed further.
+
+Failure to comply will result in
+continued access denial.
+
+━━━━━━━━━━━━━━━━━━━━━━
+"""
+
+UI_ACCESS_DENIED = """━━━━━━━━━━━━━━━━━━━━━━
+ACCESS DENIED
+━━━━━━━━━━━━━━━━━━━━━━
+
+Verification could not be completed.
+
+Required channel membership
+has not been detected.
+
+This session remains locked.
+Repeated attempts may result in
+permanent access suspension.
+
+━━━━━━━━━━━━━━━━━━━━━━
+"""
+
+UI_ACCESS_GRANTED = """━━━━━━━━━━━━━━━━━━━━━━
+ACCESS GRANTED
+━━━━━━━━━━━━━━━━━━━━━━
+
+Welcome to the private service.
+
+High-speed processing
+Quality-controlled downloads
+Session-based cleanup enabled
+
+This environment is monitored.
+
+━━━━━━━━━━━━━━━━━━━━━━
+"""
+
+UI_START_MENU = """━━━━━━━━━━━━━━━━━━━━━━
+Downloader Bot
+━━━━━━━━━━━━━━━━━━━━━━
+
+• High-quality media downloads
+• Premium group access control
+• Private processing pipeline
+• Automatic cleanup & protection
+
+› Use /help to view commands
+› Unauthorized usage is restricted
+
+━━━━━━━━━━━━━━━━━━━━━━
+"""
+
+UI_SERVICE_OVERVIEW = """━━━━━━━━━━━━━━━━━━━━━━
+SERVICE OVERVIEW
+━━━━━━━━━━━━━━━━━━━━━━
+
+• Multi-source media processing
+• Adaptive quality control
+• Chunk-safe delivery system
+• Automatic session cleanup
+• Group & private support
+
+Usage is logged per session.
+
+━━━━━━━━━━━━━━━━━━━━━━
+"""
+
+UI_NOTICE_DELETE = """━━━━━━━━━━━━━━━━━━━━━━
+NOTICE
+━━━━━━━━━━━━━━━━━━━━━━
+
+This media will be removed
+automatically in 30 seconds.
+
+━━━━━━━━━━━━━━━━━━━━━━
+"""
+
+UI_SESSION_CLEARED = """━━━━━━━━━━━━━━━━━━━━━━
+SESSION CLEARED
+━━━━━━━━━━━━━━━━━━━━━━
+
+Your history was cleared.
+
+━━━━━━━━━━━━━━━━━━━━━━
+"""
+
+UI_ADMIN_PANEL = """━━━━━━━━━━━━━━━━━━━━━━
+Admin Control Panel
+━━━━━━━━━━━━━━━━━━━━━━
+
+▸ /auth <days>
+  Authorize this chat
+
+▸ /unauth
+  Revoke chat access
+
+▸ /extend <days>
+  Extend subscription
+
+▸ /autodelete on|off
+  Toggle auto-delete
+
+▸ /status
+  View chat status
+
+━━━━━━━━━━━━━━━━━━━━━━
+"""
+
+UI_HELP = """━━━━━━━━━━━━━━━━━━━━━━
+Help & Commands
+━━━━━━━━━━━━━━━━━━━━━━
+
+▸ /start
+  Open main menu
+
+▸ /status
+  View chat authorization & expiry
+
+▸ /help_admin
+  Admin-only controls
+
+━━━━━━━━━━━━━━━━━━━━━━
+"""
+
+# ==================================================
+# DB HELPERS
+# ==================================================
 def authorize_chat(chat_id: int, days: int):
-    now = int(time.time())
-    exp = now + days * 86400
+    exp = int(time.time()) + days * 86400
     with closing(db()) as conn, conn:
         conn.execute(
-            "INSERT OR REPLACE INTO authorized_chats VALUES (?,?,?)",
-            (chat_id, now, exp),
+            "INSERT OR REPLACE INTO authorized_chats VALUES (?,?)",
+            (chat_id, exp),
         )
         conn.execute(
             "INSERT OR IGNORE INTO gc_settings(chat_id) VALUES (?)",
@@ -159,20 +298,14 @@ def check_rate_limit(user_id: int):
         )
         return True, 3600 - (now - start)
 
-# ===================== FORCE JOIN =====================
-async def ensure_joined(user_id: int) -> bool:
-    try:
-        m = await bot.get_chat_member(FORCE_JOIN_CHANNEL, user_id)
-        return m.status in ("member", "administrator", "creator")
-    except:
-        return False
-
-# ===================== UTIL =====================
+# ==================================================
+# UTIL
+# ==================================================
 def human_time(seconds: int) -> str:
     d, r = divmod(seconds, 86400)
     h, r = divmod(r, 3600)
     m, s = divmod(r, 60)
-    return f"{d}d {h}h {m}m {s}s"
+    return f"{d} days, {h} hours, {m} minutes, {s} seconds"
 
 def mention(user) -> str:
     if user.username:
@@ -182,11 +315,9 @@ def mention(user) -> str:
 def random_prefix():
     return f"vid_{secrets.token_hex(6)}"
 
-def find_file(prefix: str):
-    files = glob.glob(f"{prefix}.*")
-    return files[0] if files else None
-
-# ===================== DOMAINS =====================
+# ==================================================
+# DOMAINS (EXTENSIBLE)
+# ==================================================
 PUBLIC_DOMAINS = [
     "instagram.com",
     "facebook.com",
@@ -194,6 +325,7 @@ PUBLIC_DOMAINS = [
     "x.com",
     "twitter.com",
 ]
+
 PRIVATE_DOMAINS = [
     "xhamster.com",
     "xhamster.xxx",
@@ -209,18 +341,31 @@ def is_public(url: str) -> bool:
 def is_private(url: str) -> bool:
     return any(d in domain(url) for d in PRIVATE_DOMAINS)
 
-# ===================== FILTER =====================
+# ==================================================
+# FILTER
+# ==================================================
 class HasURL(BaseFilter):
     async def __call__(self, message: Message) -> bool:
         return bool(re.search(r"https?://", message.text or ""))
 
-# ===================== METADATA =====================
+# ==================================================
+# FORCE JOIN
+# ==================================================
+async def ensure_joined(user_id: int) -> bool:
+    try:
+        m = await bot.get_chat_member(FORCE_JOIN_CHANNEL, user_id)
+        return m.status in ("member", "administrator", "creator")
+    except:
+        return False
+
+# ==================================================
+# DOWNLOAD PIPELINE
+# ==================================================
 def get_duration(url: str):
     with YoutubeDL({"quiet": True, "skip_download": True}) as ydl:
         info = ydl.extract_info(url, download=False)
         return info.get("duration")
 
-# ===================== DOWNLOAD =====================
 def download_video(url: str):
     prefix = random_prefix()
     with YoutubeDL({
@@ -230,22 +375,16 @@ def download_video(url: str):
         "format": "bestvideo+bestaudio/best",
     }) as ydl:
         ydl.download([url])
-    return find_file(prefix)
+    files = glob.glob(f"{prefix}.*")
+    return files[0] if files else None
 
-# ===================== SEGMENT =====================
 def segment_video(path: str, bitrate: str):
     base = path.replace(".mp4", "")
     out = f"{base}_part%03d.mp4"
 
     cmd = [
         "ffmpeg", "-y", "-i", path,
-        "-vf",
-        "scale=iw*min(1280/iw\\,720/ih):ih*min(1280/iw\\,720/ih),"
-        "pad=1280:720:(ow-iw)/2:(oh-ih)/2",
         "-r", "30",
-        "-g", "60",
-        "-keyint_min", "60",
-        "-sc_threshold", "0",
         "-c:v", "libx264",
         "-preset", "slow",
         "-crf", "23",
@@ -254,7 +393,6 @@ def segment_video(path: str, bitrate: str):
         "-c:a", "aac",
         "-b:a", AUDIO_BITRATE,
         "-movflags", "+faststart",
-        "-force_key_frames", f"expr:gte(t,n_forced*{SEGMENT_TIME})",
         "-f", "segment",
         "-segment_time", str(SEGMENT_TIME),
         "-reset_timestamps", "1",
@@ -263,83 +401,57 @@ def segment_video(path: str, bitrate: str):
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return sorted(glob.glob(f"{base}_part*.mp4"))
 
-# ===================== PREMIUM UI TEXTS =====================
-UI_START = (
-    "━━━━━━━━━━━━━━━━━━━━━━\n"
-    "Downloader Bot\n"
-    "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    "• High-quality media downloads\n"
-    "• Premium group access\n"
-    "• Privacy-first processing\n"
-    "• Clean, automated handling\n\n"
-    "› Use /help to view commands\n"
-    "› Premium features require authorization\n\n"
-    "━━━━━━━━━━━━━━━━━━━━━━"
-)
-
-UI_HELP = (
-    "━━━━━━━━━━━━━━━━━━━━━━\n"
-    "Help & Commands\n"
-    "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    "▸ /start\n  Open main menu\n\n"
-    "▸ /status\n  View chat status\n\n"
-    "▸ /help_admin\n  Admin controls\n\n"
-    "━━━━━━━━━━━━━━━━━━━━━━"
-)
-
-# ===================== START =====================
+# ==================================================
+# START / VERIFY
+# ==================================================
 @dp.message(Command("start"))
 async def start_cmd(m: Message):
     if not await ensure_joined(m.from_user.id):
-        kb = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="Join Channel", url="https://t.me/downloaderbackup")
-        ]])
-        await m.reply(
-            "━━━━━━━━━━━━━━━━━━━━━━\n"
-            "Access Restricted\n"
-            "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            "This service requires channel membership.\n\n"
-            "› Join the channel to continue\n\n"
-            "━━━━━━━━━━━━━━━━━━━━━━",
-            reply_markup=kb,
-        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Join Channel", url="https://t.me/downloaderbackup")],
+            [InlineKeyboardButton(text="I Have Joined", callback_data="verify_join")],
+        ])
+        await m.reply(UI_ACCESS_RESTRICTED, reply_markup=kb)
         return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="Features", callback_data="features"),
+            InlineKeyboardButton(text="Help", callback_data="help"),
             InlineKeyboardButton(text="Status", callback_data="status"),
         ],
-        [InlineKeyboardButton(text="Contact Admin", url="https://t.me/downloaderbackup")],
     ])
-    await m.reply(UI_START, reply_markup=kb)
+    await m.reply(UI_START_MENU, reply_markup=kb)
 
-# ===================== HELP =====================
-@dp.message(Command("help"))
-async def help_cmd(m: Message):
-    await m.reply(UI_HELP)
+@dp.callback_query(F.data == "verify_join")
+async def verify_join(cb: CallbackQuery):
+    await cb.answer()
+    await asyncio.sleep(2)
 
-# ===================== ADMIN HELP =====================
-@dp.message(Command("help_admin"))
-async def help_admin(m: Message):
-    await m.reply(
-        "━━━━━━━━━━━━━━━━━━━━━━\n"
-        "Admin Control Panel\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "▸ /auth <days>\n"
-        "▸ /unauth\n"
-        "▸ /extend <days>\n"
-        "▸ /autodelete on|off\n"
-        "▸ /status\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━━"
-    )
+    if not await ensure_joined(cb.from_user.id):
+        await cb.message.edit_text(
+            UI_ACCESS_DENIED,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Join Channel", url="https://t.me/downloaderbackup")]
+            ]),
+        )
+        return
 
-# ===================== STATUS =====================
-@dp.message(Command("status"))
-async def status_cmd(m: Message):
-    exp = get_auth_expiry(m.chat.id)
+    await cb.message.edit_text(UI_ACCESS_GRANTED)
+
+# ==================================================
+# HELP / STATUS / ADMIN
+# ==================================================
+@dp.callback_query(F.data == "help")
+async def help_cb(cb: CallbackQuery):
+    await cb.answer()
+    await cb.message.reply(UI_HELP)
+
+@dp.callback_query(F.data == "status")
+async def status_cb(cb: CallbackQuery):
+    await cb.answer()
+    exp = get_auth_expiry(cb.message.chat.id)
     if not exp:
-        await m.reply(
+        await cb.message.reply(
             "━━━━━━━━━━━━━━━━━━━━━━\n"
             "Chat Status\n"
             "━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -349,17 +461,22 @@ async def status_cmd(m: Message):
         )
         return
 
-    await m.reply(
+    await cb.message.reply(
         "━━━━━━━━━━━━━━━━━━━━━━\n"
         "Chat Status\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"⟡ Authorization : Active\n"
         f"⟡ Expiry        : {human_time(exp - int(time.time()))}\n"
-        f"⟡ Auto-Delete   : {'ON' if get_autodelete(m.chat.id) else 'OFF'}\n\n"
+        f"⟡ Auto-Delete   : {'ON' if get_autodelete(cb.message.chat.id) else 'OFF'}\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━"
     )
 
-# ===================== AUTH COMMANDS =====================
+@dp.message(Command("help_admin"))
+async def help_admin(m: Message):
+    if m.from_user.id != OWNER_ID:
+        return
+    await m.reply(UI_ADMIN_PANEL)
+
 @dp.message(Command("auth"))
 async def auth_cmd(m: Message):
     if m.from_user.id != OWNER_ID:
@@ -370,7 +487,8 @@ async def auth_cmd(m: Message):
         "━━━━━━━━━━━━━━━━━━━━━━\n"
         "Authorization Updated\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"⟡ Duration : {days} days\n\n"
+        f"⟡ Chat Status : Authorized\n"
+        f"⟡ Duration    : {days} days\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━"
     )
 
@@ -383,7 +501,8 @@ async def unauth_cmd(m: Message):
         "━━━━━━━━━━━━━━━━━━━━━━\n"
         "Authorization Revoked\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "⟡ Access : Removed\n\n"
+        "⟡ Chat Status : Disabled\n"
+        "⟡ Access      : Removed\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━"
     )
 
@@ -394,72 +513,80 @@ async def extend_cmd(m: Message):
     days = int(m.text.split()[1])
     exp = get_auth_expiry(m.chat.id)
     if not exp:
-        await m.reply("Chat not authorized.")
         return
-    authorize_chat(m.chat.id, days + (exp - int(time.time())) // 86400)
+    new_exp = exp + days * 86400
+    with closing(db()) as conn, conn:
+        conn.execute(
+            "UPDATE authorized_chats SET expires_at=? WHERE chat_id=?",
+            (new_exp, m.chat.id),
+        )
     await m.reply(
         "━━━━━━━━━━━━━━━━━━━━━━\n"
         "Subscription Extended\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"⟡ Added Time : {days} days\n\n"
+        f"⟡ Added Time : {days} days\n"
+        f"⟡ Remaining : {human_time(new_exp - int(time.time()))}\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━"
     )
 
 @dp.message(Command("autodelete"))
-async def autodel_cmd(m: Message):
+async def autodelete_cmd(m: Message):
     if m.from_user.id != OWNER_ID:
         return
     arg = m.text.split()[1].lower()
     set_autodelete(m.chat.id, arg == "on")
+    state = "ON" if get_autodelete(m.chat.id) else "OFF"
     await m.reply(
         "━━━━━━━━━━━━━━━━━━━━━━\n"
         "Group Settings\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"⟡ Auto-Delete : {arg.upper()}\n\n"
+        f"⟡ Auto-Delete : {state}\n"
+        f"⟡ Status      : Updated\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━"
     )
 
-# ===================== URL HANDLER (MAIN LOGIC) =====================
+# ==================================================
+# URL HANDLER
+# ==================================================
 @dp.message(HasURL())
 async def url_handler(m: Message):
-    chat = m.chat
-    user = m.from_user
     urls = re.findall(r"https?://[^\s]+", m.text or "")
-
     for url in urls:
+
         # PUBLIC
         if is_public(url):
-            try:
-                await m.delete()
-            except:
-                pass
             path = download_video(url)
-            if not path:
-                return
-            await bot.send_video(
-                chat_id=chat.id,
-                video=FSInputFile(path),
-                supports_streaming=True,
-            )
-            os.unlink(path)
+            if path:
+                await m.reply_video(FSInputFile(path))
+                os.unlink(path)
             return
 
-        # PRIVATE (XHAMSTER)
+        # PRIVATE
         if is_private(url):
-            if chat.type == ChatType.PRIVATE:
-                allowed, reset = check_rate_limit(user.id)
+            if m.chat.type != ChatType.PRIVATE and not get_auth_expiry(m.chat.id):
+                return
+
+            if m.chat.type == ChatType.PRIVATE:
+                allowed, reset = check_rate_limit(m.from_user.id)
                 if not allowed:
                     await m.reply(
-                        f"Rate limit reached. Try again in {reset//60} minutes."
+                        "━━━━━━━━━━━━━━━━━━━━━━\n"
+                        "Rate Limit\n"
+                        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                        f"Try again in {reset // 60} minutes.\n\n"
+                        "━━━━━━━━━━━━━━━━━━━━━━"
                     )
-                    return
-            else:
-                if not get_auth_expiry(chat.id):
                     return
 
             duration = get_duration(url)
             if not duration or duration > MAX_HARD:
-                await m.reply("Video too long.")
+                await m.reply(
+                    "━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "Rejected\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                    "Video duration exceeds limit.\n\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━"
+                )
                 return
 
             quality = DEFAULT_QUALITY
@@ -469,33 +596,31 @@ async def url_handler(m: Message):
             path = download_video(url)
             parts = segment_video(path, QUALITY_PRESETS[quality])
 
-            mention_text = mention(user)
             sent_ids = []
-
             for i, part in enumerate(parts, 1):
-                msg = await bot.send_video(
-                    chat_id=chat.id,
-                    video=FSInputFile(part),
-                    caption=f"Part {i}/{len(parts)} ({quality})\nRequested by {mention_text}",
-                    reply_to_message_id=m.message_id if chat.type != ChatType.PRIVATE else None,
+                msg = await m.reply_video(
+                    FSInputFile(part),
+                    caption=f"Part {i}/{len(parts)} ({quality})\nRequested by {mention(m.from_user)}",
                 )
                 sent_ids.append(msg.message_id)
+                os.unlink(part)
 
-            if get_autodelete(chat.id):
+            if get_autodelete(m.chat.id):
+                await m.reply(UI_NOTICE_DELETE)
                 await asyncio.sleep(30)
                 for mid in sent_ids:
                     try:
-                        await bot.delete_message(chat.id, mid)
+                        await bot.delete_message(m.chat.id, mid)
                     except:
                         pass
-                await bot.send_message(chat.id, "History cleared.")
+                await m.reply(UI_SESSION_CLEARED)
 
-            for p in parts:
-                os.unlink(p)
             os.unlink(path)
             return
 
-# ===================== MAIN =====================
+# ==================================================
+# MAIN
+# ==================================================
 async def main():
     init_db()
     await dp.start_polling(bot)
