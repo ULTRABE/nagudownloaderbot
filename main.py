@@ -1,5 +1,5 @@
 # =========================
-# main.py — FINAL MERGED UNIVERSAL YT-DLP BOT
+# main.py — FINAL MERGED UNIVERSAL YT-DLP BOT (PATCHED)
 # =========================
 
 import asyncio
@@ -33,7 +33,6 @@ BUFSIZE = "8M"
 SOFT_LIMIT_NORMAL = 10 * 60
 MAX_LIMIT_ADULT = 30 * 60
 
-DELETE_NORMAL_LINK_AFTER = 5
 DELETE_ADULT_AFTER = 10
 
 ADULT_GC_LINK = "https://t.me/+5BX6H7j4osVjOWZl"
@@ -110,49 +109,45 @@ async def unauth(m: Message):
 async def handler(m: Message):
     url = re.findall(r"https?://[^\s]+", m.text or "")[0]
 
+    # 🔥 IMMEDIATE LINK DELETION (EVERYWHERE)
+    try:
+        await m.delete()
+    except:
+        pass
+
     try:
         info = extract_info(url)
     except:
-        await m.reply("Unsupported link.")
+        await bot.send_message(m.chat.id, "Unsupported link.")
         return
 
     if info.get("is_live"):
-        await m.reply("Livestreams are not supported.")
+        await bot.send_message(m.chat.id, "Livestreams are not supported.")
         return
     if info.get("_type") == "playlist":
-        await m.reply("Playlists are not supported.")
+        await bot.send_message(m.chat.id, "Playlists are not supported.")
         return
 
     adult = is_adult(url, info)
 
-    # 🔴 HARD BLOCK adult in normal GCs
+    # 🔴 HARD BLOCK adult in non-authorized GCs
     if adult and m.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP) and m.chat.id not in AUTHORIZED_ADULT_CHATS:
-        try:
-            await m.delete()
-        except:
-            pass
-
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text="Join private group to use 18+ content",
                 url=ADULT_GC_LINK
             )]
         ])
-        await m.chat.send_message("Unsupported link.", reply_markup=kb)
+        await bot.send_message(m.chat.id, "Unsupported link.", reply_markup=kb)
         return
 
     # ========= NORMAL =========
     if not adult:
         if (info.get("duration") or 0) > SOFT_LIMIT_NORMAL:
-            await m.reply("Video is too long to download here.")
+            await bot.send_message(m.chat.id, "Video is too long to download here.")
             return
 
-        status = await m.reply("Downloading…")
-        await asyncio.sleep(DELETE_NORMAL_LINK_AFTER)
-        try:
-            await m.delete()
-        except:
-            pass
+        status = await bot.send_message(m.chat.id, "Downloading…")
 
         base = f"n_{secrets.token_hex(6)}"
         raw = f"{base}_raw.mp4"
@@ -192,10 +187,10 @@ async def handler(m: Message):
 
     # ========= ADULT (AUTHORIZED GC ONLY) =========
     if (info.get("duration") or 0) > MAX_LIMIT_ADULT:
-        await m.reply("18+ video is too long.")
+        await bot.send_message(m.chat.id, "18+ video is too long.")
         return
 
-    status = await m.reply("Downloading…")
+    status = await bot.send_message(m.chat.id, "Downloading…")
     base = f"a_{secrets.token_hex(6)}"
     raw = f"{base}.mp4"
 
@@ -208,7 +203,10 @@ async def handler(m: Message):
         supports_streaming=True
     )
 
-    warn = await m.reply("This media will be deleted in 10 seconds. Save it now.")
+    warn = await bot.send_message(
+        m.chat.id,
+        "This media will be deleted in 10 seconds. Save it now."
+    )
 
     await asyncio.sleep(DELETE_ADULT_AFTER)
 
@@ -218,7 +216,7 @@ async def handler(m: Message):
         except:
             pass
 
-    await m.chat.send_message("History cleared.")
+    await bot.send_message(m.chat.id, "History cleared.")
     os.remove(raw)
     await status.delete()
 
