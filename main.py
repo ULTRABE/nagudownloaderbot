@@ -1,5 +1,5 @@
 # =========================
-# main.py — FINAL FIXED BUILD
+# main.py — FINAL MERGED UNIVERSAL YT-DLP BOT
 # =========================
 
 import asyncio
@@ -16,7 +16,7 @@ from aiogram.types import (
     Message,
     FSInputFile,
     InlineKeyboardMarkup,
-    InlineKeyboardButton
+    InlineKeyboardButton,
 )
 from aiogram.enums import ChatType
 from yt_dlp import YoutubeDL
@@ -33,17 +33,17 @@ BUFSIZE = "8M"
 SOFT_LIMIT_NORMAL = 10 * 60
 MAX_LIMIT_ADULT = 30 * 60
 
-CHUNK_MB = 45
 DELETE_NORMAL_LINK_AFTER = 5
 DELETE_ADULT_AFTER = 10
 
-# Placeholder GC for adult content (you fill later)
 ADULT_GC_LINK = "https://t.me/+5BX6H7j4osVjOWZl"
 
-ADULT_DOMAINS = [
-    "pornhub", "xhamster", "xnxx", "xvideos", "redtube",
-    "youporn", "spankbang", "tube8", "txxx", "eporner",
-    "beeg", "thisvid", "motherless"
+ADULT_KEYWORDS = [
+    "porn", "sex", "xxx",
+    "pornhub", "xhamster", "xnxx", "xvideos",
+    "redtube", "youporn", "spankbang", "tube8",
+    "eporner", "beeg", "thisvid", "motherless",
+    "hentai", "hanime", "ecchi"
 ]
 
 AUTHORIZED_ADULT_CHATS = set()
@@ -63,7 +63,12 @@ def domain(url: str) -> str:
     return urlparse(url).netloc.lower()
 
 def is_adult(url: str, info: dict) -> bool:
-    return any(x in domain(url) for x in ADULT_DOMAINS) or info.get("age_limit", 0) >= 18
+    d = domain(url)
+    if any(k in d for k in ADULT_KEYWORDS):
+        return True
+    if info.get("age_limit", 0) >= 18:
+        return True
+    return False
 
 def run(cmd):
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -108,7 +113,7 @@ async def handler(m: Message):
     try:
         info = extract_info(url)
     except:
-        await m.reply("Unsupported link. Download not possible.")
+        await m.reply("Unsupported link.")
         return
 
     if info.get("is_live"):
@@ -118,97 +123,103 @@ async def handler(m: Message):
         await m.reply("Playlists are not supported.")
         return
 
-    # ========== ADULT ==========
-    if is_adult(url, info):
-        if m.chat.id not in AUTHORIZED_ADULT_CHATS:
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text="Join private group to use 18+ content",
-                    url=ADULT_GC_LINK
-                )]
-            ])
-            await m.reply("18+ content cannot be downloaded here.", reply_markup=kb)
-            return
+    adult = is_adult(url, info)
 
-        if (info.get("duration") or 0) > MAX_LIMIT_ADULT:
-            await m.reply("18+ video is too long.")
+    # 🔴 HARD BLOCK adult in normal GCs
+    if adult and m.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP) and m.chat.id not in AUTHORIZED_ADULT_CHATS:
+        try:
+            await m.delete()
+        except:
+            pass
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="Join private group to use 18+ content",
+                url=ADULT_GC_LINK
+            )]
+        ])
+        await m.chat.send_message("Unsupported link.", reply_markup=kb)
+        return
+
+    # ========= NORMAL =========
+    if not adult:
+        if (info.get("duration") or 0) > SOFT_LIMIT_NORMAL:
+            await m.reply("Video is too long to download here.")
             return
 
         status = await m.reply("Downloading…")
+        await asyncio.sleep(DELETE_NORMAL_LINK_AFTER)
+        try:
+            await m.delete()
+        except:
+            pass
 
-        base = f"a_{secrets.token_hex(6)}"
-        raw = f"{base}.mp4"
+        base = f"n_{secrets.token_hex(6)}"
+        raw = f"{base}_raw.mp4"
+        out = f"{base}.mp4"
 
         download(url, raw)
         await status.edit_text("Uploading…")
 
+        run([
+            "ffmpeg", "-y", "-i", raw,
+            "-c:v", "libx264", "-preset", "veryfast",
+            "-crf", CRF_NORMAL,
+            "-maxrate", MAXRATE, "-bufsize", BUFSIZE,
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            "-c:a", "aac", "-b:a", "128k",
+            out
+        ])
+
         sent = await bot.send_video(
             chat_id=m.chat.id,
-            video=FSInputFile(raw),
+            video=FSInputFile(out),
+            caption="@nagudownloaderbot 🤍",
             supports_streaming=True
         )
 
-        warn = await m.reply("This media will be deleted in 10 seconds. Forward/save now.")
-
-        await asyncio.sleep(DELETE_ADULT_AFTER)
-
-        for msg in (sent, warn, m):
+        if m.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
             try:
-                await bot.delete_message(m.chat.id, msg.message_id)
+                await bot.pin_chat_message(m.chat.id, sent.message_id)
             except:
                 pass
 
-        await m.chat.send_message("History cleared.")
         os.remove(raw)
+        os.remove(out)
         await status.delete()
         return
 
-    # ========== NORMAL ==========
-    if (info.get("duration") or 0) > SOFT_LIMIT_NORMAL:
-        await m.reply("Video is too long to download here.")
+    # ========= ADULT (AUTHORIZED GC ONLY) =========
+    if (info.get("duration") or 0) > MAX_LIMIT_ADULT:
+        await m.reply("18+ video is too long.")
         return
 
     status = await m.reply("Downloading…")
-    await asyncio.sleep(DELETE_NORMAL_LINK_AFTER)
-
-    try:
-        await m.delete()
-    except:
-        pass
-
-    base = f"n_{secrets.token_hex(6)}"
-    raw = f"{base}_raw.mp4"
-    out = f"{base}.mp4"
+    base = f"a_{secrets.token_hex(6)}"
+    raw = f"{base}.mp4"
 
     download(url, raw)
     await status.edit_text("Uploading…")
 
-    run([
-        "ffmpeg", "-y", "-i", raw,
-        "-c:v", "libx264", "-preset", "veryfast",
-        "-crf", CRF_NORMAL,
-        "-maxrate", MAXRATE, "-bufsize", BUFSIZE,
-        "-pix_fmt", "yuv420p",
-        "-movflags", "+faststart",
-        "-c:a", "aac", "-b:a", "128k",
-        out
-    ])
-
     sent = await bot.send_video(
         chat_id=m.chat.id,
-        video=FSInputFile(out),
-        caption="@nagudownloaderbot 🤍",
+        video=FSInputFile(raw),
         supports_streaming=True
     )
 
-    if m.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
+    warn = await m.reply("This media will be deleted in 10 seconds. Save it now.")
+
+    await asyncio.sleep(DELETE_ADULT_AFTER)
+
+    for msg in (sent, warn):
         try:
-            await bot.pin_chat_message(m.chat.id, sent.message_id)
+            await bot.delete_message(m.chat.id, msg.message_id)
         except:
             pass
 
+    await m.chat.send_message("History cleared.")
     os.remove(raw)
-    os.remove(out)
     await status.delete()
 
 # ================= MAIN =================
