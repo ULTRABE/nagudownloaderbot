@@ -18,7 +18,7 @@ from aiogram.enums import ChatType
 from yt_dlp import YoutubeDL
 
 # ================= CONFIG =================
-BOT_TOKEN = "PUT_YOUR_BOT_TOKEN_HERE"
+BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
 OWNER_ID = 7363967303
 
 # Encoding (fast, small, clean)
