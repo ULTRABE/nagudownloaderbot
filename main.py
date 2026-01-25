@@ -76,8 +76,8 @@ async def start(m: Message):
         
         f"{name}\n\n".strip()
         
-        "Download short-form videos instantly\n"
-        "in stunning quality — delivered fast.\n\n"
+        " ◈ Download short-form videos instantly\n"
+        " ◈ Stunning quality — delivered fast.\n\n"
         "──────────────\n"
         "Send a link to begin\n"
         "──────────────"
