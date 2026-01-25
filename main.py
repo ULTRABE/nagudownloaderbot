@@ -4,14 +4,14 @@ from aiogram.filters import CommandStart
 from aiogram.types import Message, FSInputFile
 from yt_dlp import YoutubeDL
 
-BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
+BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"  # safer
 
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 
 # ───── SPEED CORE ─────
 MAX_WORKERS = 10
-FRAGMENTS = 48     # 100 breaks VPS – this is fastest stable tier
+FRAGMENTS = 48
 queue = asyncio.Semaphore(MAX_WORKERS)
 
 LINK_RE = re.compile(r"https?://\S+")
@@ -40,45 +40,47 @@ def fast_download(url, out):
     with YoutubeDL(opts) as y:
         y.download([url])
 
+
 def sharp_compress(src, dst):
     run([
         "ffmpeg","-y","-i",src,
         "-vf","scale=720:-2:flags=lanczos",
         "-c:v","libx264",
         "-preset","veryfast",
-        "-crf","27",                # sweet spot for shorts
+        "-crf","27",
         "-profile:v","high",
         "-level","4.1",
         "-pix_fmt","yuv420p",
-        "-movflags","+faststart",   # fixes Telegram preview
+        "-movflags","+faststart",
         "-c:a","aac","-b:a","96k",
         dst
     ])
 
 
-
-# ───── PREMIUM SERIF TEXTS ─────
-
-START_TEXT = (
-    "⟣—◈𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑 𝐁𝐎𝐓◈—⟢\n\n"
-    "Welcome Telegram Addict {name}\n\n"
-    "Download short-form videos instantly\n"
-    "in stunning quality — delivered fast.\n\n"
-    "──────────────\n"
-    "Send a link to begin\n"
-    "──────────────"
-)
-
+# ───── PREMIUM SERIF UI ─────
 
 GROUP_TEXT = (
-    "𝐓𝐡𝐚𝐧𝐤 𝐲𝐨𝐮 𝐟𝐨𝐫 𝐚𝐝𝐝𝐢𝐧𝐠 𝐦𝐞 ⚡\n\n"
+    "𝐓𝐡𝐚𝐧𝐤 𝐲𝐨𝐮 𝐟𝐨𝐫 𝐚𝐝𝐝𝐢𝐧𝐠 𝐦𝐞\n\n"
     "Send any video link and I’ll fetch it instantly."
 )
 
 
 @dp.message(CommandStart())
 async def start(m: Message):
-    await m.answer(START_TEXT)
+    user = m.from_user
+    name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+
+    welcome = (
+        "⟣—◈𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑 𝐁𝐎𝐓◈—⟢\n\n"
+        f"{name}\n\n"
+        "Download short-form videos instantly\n"
+        "in stunning quality — delivered fast.\n\n"
+        "──────────────\n"
+        "Send a link to begin\n"
+        "──────────────"
+    )
+
+    await m.answer(welcome)
 
 
 @dp.message(F.new_chat_members)
@@ -97,7 +99,6 @@ async def handle(m: Message):
 
         url = LINK_RE.search(m.text).group(0)
 
-        # instant zap
         try:
             await m.delete()
         except:
@@ -112,7 +113,7 @@ async def handle(m: Message):
             await asyncio.to_thread(sharp_compress, raw, final)
 
             caption = (
-                "@nagudownloaderbot 🤍\n"
+                "@nagudownloaderbot 🤍\n\n"
                 f"𝐑𝐞𝐪𝐮𝐞𝐬𝐭𝐞𝐝 𝐛𝐲 {mention(m.from_user)}"
             )
 
