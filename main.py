@@ -83,9 +83,6 @@ async def start(m: Message):
     await m.answer(welcome)
 
 
-    await m.answer(welcome)
-
-
 @dp.message(F.new_chat_members)
 async def added(m: Message):
     await m.answer(GROUP_TEXT)
