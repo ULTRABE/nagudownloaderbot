@@ -161,7 +161,7 @@ async def handler(m: Message):
         kb = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="Use 18+ here", url=ADULT_GC_LINK)
         ]])
-        await bot.send_message(m.chat.id, "18+ content not allowed here.", reply_markup=kb)
+        await bot.send_message(m.chat.id, "Yahi pe muth marega kya dalle ?.", reply_markup=kb)
         return
 
     # ===== NORMAL =====
@@ -169,7 +169,7 @@ async def handler(m: Message):
         if (info.get("duration") or 0) > SOFT_LIMIT_NORMAL:
             return
 
-        status = await bot.send_message(m.chat.id, "Downloading…")
+        status = await bot.send_message(m.chat.id, "apke material download ho raha hai mutthal")
 
         base = f"n_{secrets.token_hex(6)}"
         raw = f"{base}_raw.mp4"
@@ -211,7 +211,7 @@ async def handler(m: Message):
     if (info.get("duration") or 0) > MAX_LIMIT_ADULT:
         return
 
-    status = await bot.send_message(m.chat.id, "Downloading…")
+    status = await bot.send_message(m.chat.id, "pro max mutthal apka video download hone laga hai l*du")
 
     base = f"a_{secrets.token_hex(6)}"
     raw = f"{base}_720.mp4"
