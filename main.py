@@ -10,7 +10,7 @@ bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 
 # ───── SPEED CORE ─────
-MAX_WORKERS = 8
+MAX_WORKERS = 10
 FRAGMENTS = 48     # 100 breaks VPS – this is fastest stable tier
 queue = asyncio.Semaphore(MAX_WORKERS)
 
@@ -47,7 +47,7 @@ def sharp_compress(src, dst):
         "-vf","scale=-2:720",
         "-c:v","libx264",
         "-preset","ultrafast",
-        "-crf","21",
+        "-crf","25",
         "-pix_fmt","yuv420p",
         "-c:a","aac","-b:a","96k",
         "-movflags","+faststart",
