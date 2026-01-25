@@ -40,32 +40,34 @@ def fast_download(url, out):
     with YoutubeDL(opts) as y:
         y.download([url])
 
-
 def sharp_compress(src, dst):
     run([
         "ffmpeg","-y","-i",src,
-        "-vf","scale=-2:720",
+        "-vf","scale=720:-2:flags=lanczos",
         "-c:v","libx264",
-        "-preset","ultrafast",
-        "-crf","25",
+        "-preset","veryfast",
+        "-crf","27",                # sweet spot for shorts
+        "-profile:v","high",
+        "-level","4.1",
         "-pix_fmt","yuv420p",
+        "-movflags","+faststart",   # fixes Telegram preview
         "-c:a","aac","-b:a","96k",
-        "-movflags","+faststart",
         dst
     ])
+
 
 
 # ───── PREMIUM SERIF TEXTS ─────
 
 START_TEXT = (
-    "𝐍𝐀𝐆𝐔 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑 ⚡\n\n"
+    "⟣—◈𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑 𝐁𝐎𝐓◈—⟢\n\n"
     "Download short-form videos instantly\n"
-    "in high quality & optimized size.\n\n"
-    "⚡ Ultra fast\n"
-    "🎬 Crisp output\n"
-    "📦 Smart compression\n\n"
-    "Just send a link."
+    "in stunning quality — delivered fast.\n\n"
+    "──────────────\n"
+    "Send a link to begin\n"
+    "──────────────"
 )
+
 
 GROUP_TEXT = (
     "𝐓𝐡𝐚𝐧𝐤 𝐲𝐨𝐮 𝐟𝐨𝐫 𝐚𝐝𝐝𝐢𝐧𝐠 𝐦𝐞 ⚡\n\n"
@@ -110,7 +112,7 @@ async def handle(m: Message):
 
             caption = (
                 "@nagudownloaderbot 🤍\n"
-                f"requested by {mention(m.from_user)}"
+                f"𝐑𝐞𝐪𝐮𝐞𝐬𝐭𝐞𝐝 𝐛𝐲 {mention(m.from_user)}"
             )
 
             sent = await bot.send_video(
