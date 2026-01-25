@@ -1,9 +1,0 @@
-__pycache__/
-*.pyc
-.env
-
-# temp video files
-temp/
-*.mp4
-*.mkv
-*.webm
