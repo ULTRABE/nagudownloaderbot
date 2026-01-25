@@ -61,7 +61,7 @@ def sharp_compress(src, dst):
 
 START_TEXT = (
     "⟣—◈𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑 𝐁𝐎𝐓◈—⟢\n\n"
-    "Welcome Telegram Addict f"{user.first_name or ''} {user.last_name or ''}".strip()"
+    "Welcome Telegram Addict {name}\n\n"
     "Download short-form videos instantly\n"
     "in stunning quality — delivered fast.\n\n"
     "──────────────\n"
