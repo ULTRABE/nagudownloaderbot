@@ -73,7 +73,9 @@ async def start(m: Message):
     welcome = (
         "⟣—◈𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑 𝐁𝐎𝐓◈—⟢\n\n"
         "Welcome Telegram Addict"
-        f"{name}\n\n"
+        
+        f"{name}\n\n".strip()
+        
         "Download short-form videos instantly\n"
         "in stunning quality — delivered fast.\n\n"
         "──────────────\n"
