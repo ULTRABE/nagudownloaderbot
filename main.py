@@ -11,7 +11,7 @@ dp = Dispatcher()
 
 # ───── SPEED CORE ─────
 MAX_WORKERS = 10
-FRAGMENTS = 48
+FRAGMENTS = 30
 queue = asyncio.Semaphore(MAX_WORKERS)
 
 LINK_RE = re.compile(r"https?://\S+")
