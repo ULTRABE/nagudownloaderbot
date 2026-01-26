@@ -4,26 +4,27 @@ from aiogram.filters import CommandStart
 from aiogram.types import Message, FSInputFile
 from yt_dlp import YoutubeDL
 
-BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"  # rotate your leaked token
+BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
 
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 
-# ───── SPEED CORE ─────
-MAX_WORKERS = 10
-FRAGMENTS = 30
+# ───── SAFE + FAST CORE ─────
+MAX_WORKERS = 6
+FRAGMENTS = 6
 queue = asyncio.Semaphore(MAX_WORKERS)
 
 LINK_RE = re.compile(r"https?://\S+")
 
-YDL_FAST = {
+BASE_YDL = {
     "quiet": True,
     "format": "bv*+ba/best",
     "merge_output_format": "mp4",
     "noplaylist": True,
     "concurrent_fragment_downloads": FRAGMENTS,
-    "http_chunk_size": 20 * 1024 * 1024,
-    "retries": 0,
+    "http_chunk_size": 4 * 1024 * 1024,
+    "retries": 2,
+    "fragment_retries": 2,
     "nopart": True,
     "nooverwrites": True,
 }
@@ -33,33 +34,42 @@ YDL_FAST = {
 
 def pick_cookies(url: str):
     u = url.lower()
-
     if "instagram.com" in u:
         return "cookies_instagram.txt"
-
     if "youtube.com" in u or "youtu.be" in u:
         return "cookies_youtube.txt"
-
     return None
 
 
-# ───── CORE HELPERS ─────
+# ───── HELPERS ─────
 
 def run(cmd):
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def fast_download(url, out):
-    opts = YDL_FAST.copy()
-
-    cookie_file = pick_cookies(url)
-    if cookie_file:
-        opts["cookies"] = cookie_file
-
+def attempt_download(url, out, cookies=None):
+    opts = BASE_YDL.copy()
     opts["outtmpl"] = out
+    if cookies:
+        opts["cookies"] = cookies
 
     with YoutubeDL(opts) as y:
         y.download([url])
+
+
+def smart_download(url, out):
+    # 1️⃣ try clean (fastest)
+    try:
+        attempt_download(url, out)
+        if os.path.exists(out):
+            return
+    except:
+        pass
+
+    # 2️⃣ fallback to cookies if needed
+    cookie_file = pick_cookies(url)
+    if cookie_file:
+        attempt_download(url, out, cookie_file)
 
 
 def sharp_compress(src, dst):
@@ -132,7 +142,7 @@ async def handle(m: Message):
         final = f"{base}.mp4"
 
         try:
-            await asyncio.to_thread(fast_download, url, raw)
+            await asyncio.to_thread(smart_download, url, raw)
             await asyncio.to_thread(sharp_compress, raw, final)
 
             caption = (
