@@ -4,7 +4,7 @@ from aiogram.filters import CommandStart
 from aiogram.types import Message, FSInputFile
 from yt_dlp import YoutubeDL
 
-BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"  # safer
+BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"  # rotate your leaked token
 
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
@@ -26,9 +26,24 @@ YDL_FAST = {
     "retries": 0,
     "nopart": True,
     "nooverwrites": True,
-    "cookies": "cookies.txt",
 }
 
+
+# ───── COOKIE PICKER ─────
+
+def pick_cookies(url: str):
+    u = url.lower()
+
+    if "instagram.com" in u:
+        return "cookies_instagram.txt"
+
+    if "youtube.com" in u or "youtu.be" in u:
+        return "cookies_youtube.txt"
+
+    return None
+
+
+# ───── CORE HELPERS ─────
 
 def run(cmd):
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -36,7 +51,13 @@ def run(cmd):
 
 def fast_download(url, out):
     opts = YDL_FAST.copy()
+
+    cookie_file = pick_cookies(url)
+    if cookie_file:
+        opts["cookies"] = cookie_file
+
     opts["outtmpl"] = out
+
     with YoutubeDL(opts) as y:
         y.download([url])
 
@@ -57,7 +78,7 @@ def sharp_compress(src, dst):
     ])
 
 
-# ───── PREMIUM SERIF UI ─────
+# ───── PREMIUM UI ─────
 
 GROUP_TEXT = (
     "𝐓𝐡𝐚𝐧𝐤 𝐲𝐨𝐮 𝐟𝐨𝐫 𝐚𝐝𝐝𝐢𝐧𝐠 𝐦𝐞\n\n"
@@ -92,6 +113,8 @@ def mention(user):
     name = f"{user.first_name or ''} {user.last_name or ''}".strip()
     return f'<a href="tg://user?id={user.id}">{name}</a>'
 
+
+# ───── LINK HANDLER ─────
 
 @dp.message(F.text.regexp(LINK_RE))
 async def handle(m: Message):
