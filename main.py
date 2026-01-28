@@ -10,22 +10,27 @@ bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 
 # ⚡ FAST + STABLE MODE
-MAX_WORKERS = 24
-FRAGMENTS = 8
+MAX_WORKERS = 8
 queue = asyncio.Semaphore(MAX_WORKERS)
 
 LINK_RE = re.compile(r"https?://\S+")
 
+# 🚀 FIXED CORE — no broken ranges, no retry lag
 BASE_YDL = {
     "quiet": True,
     "format": "bv*+ba/best",
     "merge_output_format": "mp4",
     "noplaylist": True,
-    "concurrent_fragment_downloads": FRAGMENTS,
-    "http_chunk_size": 6 * 1024 * 1024,
-    "retries": 2,
-    "fragment_retries": 2,
+
+    "continuedl": False,
     "nopart": True,
+
+    "retries": 0,
+    "fragment_retries": 0,
+
+    "concurrent_fragment_downloads": 1,
+    "http_chunk_size": 0,
+
     "nooverwrites": True,
 }
 
@@ -55,10 +60,8 @@ def run(cmd):
 def attempt_download(url, out, cookies=None, proxy=None):
     opts = BASE_YDL.copy()
     opts["outtmpl"] = out
-    if cookies:
-        opts["cookies"] = cookies
-    if proxy:
-        opts["proxy"] = proxy
+    if cookies: opts["cookies"] = cookies
+    if proxy: opts["proxy"] = proxy
 
     with YoutubeDL(opts) as y:
         y.download([url])
@@ -78,12 +81,11 @@ def smart_download(url, out):
         except:
             pass
 
-    for _ in range(3):
-        try:
-            attempt_download(url, out, proxy=pick_proxy())
-            if os.path.exists(out): return
-        except:
-            continue
+    try:
+        attempt_download(url, out, proxy=pick_proxy())
+        if os.path.exists(out): return
+    except:
+        pass
 
     raise RuntimeError("Blocked")
 
