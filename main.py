@@ -10,7 +10,7 @@ bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 
 # ⚡ FAST + STABLE MODE
-MAX_WORKERS = 20
+MAX_WORKERS = 24
 FRAGMENTS = 8
 queue = asyncio.Semaphore(MAX_WORKERS)
 
