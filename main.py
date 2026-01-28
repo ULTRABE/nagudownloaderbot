@@ -4,7 +4,7 @@ from aiogram.filters import CommandStart
 from aiogram.types import Message, FSInputFile
 from yt_dlp import YoutubeDL
 
-BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
@@ -147,8 +147,7 @@ def smart_download(url, out):
 def smart_output(src, dst):
     size_mb = os.path.getsize(src) / (1024 * 1024)
 
-    # if already small → remux only (super fast)
-    if size_mb <= 15:
+    if size_mb <= 12:
         run([
             "ffmpeg","-y","-i",src,
             "-c","copy",
@@ -157,18 +156,18 @@ def smart_output(src, dst):
         ])
         return
 
-    # else compress
     run([
         "ffmpeg","-y","-i",src,
         "-vf","scale=720:-2:flags=fast_bilinear",
         "-c:v","libx264",
-        "-preset","superfast",
-        "-crf","28",
+        "-preset","veryfast",
+        "-crf","27",
         "-pix_fmt","yuv420p",
         "-movflags","+faststart",
         "-c:a","aac","-b:a","96k",
         dst
     ])
+
 
 
 # ───── UI ─────
