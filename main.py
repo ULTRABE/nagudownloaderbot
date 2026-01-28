@@ -1,4 +1,4 @@
-import asyncio, os, re, secrets, subprocess
+import asyncio, os, re, secrets, subprocess, random
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
 from aiogram.types import Message, FSInputFile
@@ -29,6 +29,35 @@ BASE_YDL = {
     "nooverwrites": True,
 }
 
+# ───── PROXY POOL ─────
+
+PROXIES = [
+    "http://196.51.85.7:8800",
+    "http://196.51.218.227:8800",
+    "http://196.51.106.149:8800",
+    "http://170.130.62.211:8800",
+    "http://196.51.106.30:8800",
+    "http://196.51.85.207:8800",
+    "http://196.51.221.174:8800",
+    "http://196.51.221.102:8800",
+    "http://77.83.170.222:8800",
+    "http://196.51.109.52:8800",
+    "http://196.51.109.151:8800",
+    "http://77.83.170.79:8800",
+    "http://196.51.221.38:8800",
+    "http://196.51.82.112:8800",
+    "http://170.130.62.42:8800",
+    "http://196.51.218.250:8800",
+    "http://77.83.170.30:8800",
+    "http://196.51.82.198:8800",
+    "http://196.51.218.236:8800",
+    "http://196.51.82.120:8800",
+]
+
+
+def pick_proxy():
+    return random.choice(PROXIES)
+
 
 # ───── COOKIE PICKER ─────
 
@@ -47,18 +76,24 @@ def run(cmd):
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def attempt_download(url, out, cookies=None):
+def attempt_download(url, out, cookies=None, proxy=None):
     opts = BASE_YDL.copy()
     opts["outtmpl"] = out
+
     if cookies:
         opts["cookies"] = cookies
+    if proxy:
+        opts["proxy"] = proxy
 
     with YoutubeDL(opts) as y:
         y.download([url])
 
 
+# ───── SMART MULTI-STAGE DOWNLOADER ─────
+
 def smart_download(url, out):
-    # 1️⃣ try clean (fastest)
+
+    # 1️⃣ Clean mode (fastest & safest)
     try:
         attempt_download(url, out)
         if os.path.exists(out):
@@ -66,10 +101,26 @@ def smart_download(url, out):
     except:
         pass
 
-    # 2️⃣ fallback to cookies if needed
+    # 2️⃣ Cookie fallback
     cookie_file = pick_cookies(url)
     if cookie_file:
-        attempt_download(url, out, cookie_file)
+        try:
+            attempt_download(url, out, cookies=cookie_file)
+            if os.path.exists(out):
+                return
+        except:
+            pass
+
+    # 3️⃣ Proxy rotation fallback
+    for _ in range(4):
+        try:
+            attempt_download(url, out, proxy=pick_proxy())
+            if os.path.exists(out):
+                return
+        except:
+            continue
+
+    raise RuntimeError("All methods blocked")
 
 
 def sharp_compress(src, dst):
