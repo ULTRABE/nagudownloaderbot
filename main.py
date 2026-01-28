@@ -7,7 +7,7 @@ from yt_dlp import YoutubeDL
 
 logging.basicConfig(level=logging.INFO)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
 
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
