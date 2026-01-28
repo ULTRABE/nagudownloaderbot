@@ -1,4 +1,4 @@
-import asyncio, os, re, subprocess, random, tempfile, time
+import asyncio, os, re, subprocess, random, tempfile, time, requests
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
 from aiogram.types import Message, FSInputFile
@@ -11,25 +11,37 @@ dp = Dispatcher()
 
 # ⚡ FULL POWER VPS MODE
 MAX_WORKERS = 20
-FRAGMENTS = 16
 queue = asyncio.Semaphore(MAX_WORKERS)
 
 LINK_RE = re.compile(r"https?://\S+")
+
+# 🚀 UNLOCKED yt-dlp ENGINE (FAST + NO 403)
 
 BASE_YDL = {
     "quiet": True,
     "format": "bv*+ba/best",
     "merge_output_format": "mp4",
     "noplaylist": True,
-    "concurrent_fragment_downloads": FRAGMENTS,
-    "http_chunk_size": 20 * 1024 * 1024,
-    "buffersize": 16 * 1024 * 1024,
-    "socket_timeout": 10,
+
+    "external_downloader": "aria2c",
+    "external_downloader_args": [
+        "-x16", "-k1M", "--file-allocation=none"
+    ],
+
+    "extractor_args": {
+        "youtube": {
+            "player_client": ["android", "web"]
+        }
+    },
+
+    "concurrent_fragment_downloads": 16,
     "retries": 2,
     "fragment_retries": 2,
     "nopart": True,
     "nooverwrites": True,
 }
+
+# 🌍 PROXIES (kept)
 
 PROXIES = [
     "http://203033:JmNd95Z3vcX@196.51.85.7:8800",
@@ -51,19 +63,30 @@ def pick_cookies(url):
         return "cookies_youtube.txt"
     return None
 
+# 🔁 PINTEREST SHORT LINK EXPANDER
+
+def expand_url(url):
+    try:
+        return requests.head(url, allow_redirects=True, timeout=5).url
+    except:
+        return url
+
 def run(cmd):
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def attempt_download(url, out, cookies=None, proxy=None):
     opts = BASE_YDL.copy()
     opts["outtmpl"] = out
-    if cookies: opts["cookies"] = cookies
-    if proxy: opts["proxy"] = proxy
+    if cookies:
+        opts["cookies"] = cookies
+    if proxy:
+        opts["proxy"] = proxy
 
     with YoutubeDL(opts) as y:
         y.download([url])
 
 def smart_download(url, out):
+
     try:
         attempt_download(url, out)
         if os.path.exists(out): return
@@ -100,7 +123,10 @@ def smart_output(src, dst):
         "ffmpeg","-y","-i",src,
         "-vf","scale=720:-2:flags=fast_bilinear",
         "-c:v","libvpx-vp9",
-        "-b:v","380k",
+        "-b:v","240k",
+        "-minrate","180k",
+        "-maxrate","320k",
+        "-bufsize","600k",
         "-deadline","realtime",
         "-cpu-used","32",
         "-threads","32",
@@ -108,9 +134,11 @@ def smart_output(src, dst):
         "-pix_fmt","yuv420p",
         "-movflags","+faststart",
         "-c:a","libopus",
-        "-b:a","32k",
+        "-b:a","24k",
         dst
     ])
+
+# ───── UI ─────
 
 GROUP_TEXT = (
     "𝐓𝐡𝐚𝐧𝐤 𝐲𝐨𝐮 𝐟𝐨𝐫 𝐚𝐝𝐝𝐢𝐧𝐠 𝐦𝐞\n\n"
@@ -140,12 +168,16 @@ def mention(u):
     name = f"{u.first_name or ''} {u.last_name or ''}".strip()
     return f'<a href="tg://user?id={u.id}">{name}</a>'
 
+# ───── MAIN HANDLER ─────
+
 @dp.message(F.text.regexp(LINK_RE))
 async def handle(m: Message):
     async with queue:
 
         start_time = time.perf_counter()
+
         url = LINK_RE.search(m.text).group(0)
+        url = expand_url(url)
 
         try:
             await m.delete()
