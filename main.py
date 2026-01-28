@@ -1,3 +1,4 @@
+print("BOT STARTED")
 import asyncio, os, re, subprocess, tempfile, time, logging, requests
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
