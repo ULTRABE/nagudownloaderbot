@@ -1,4 +1,5 @@
 print("BOT STARTED")
+
 import asyncio, os, re, subprocess, tempfile, time, logging, requests
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
@@ -14,34 +15,32 @@ dp = Dispatcher()
 
 queue = asyncio.Semaphore(8)
 
-VIDEO_RE = re.compile(r"https?://(?!music\.youtube|open\.spotify)\S+")
-YTM_RE = re.compile(r"https?://music\.youtube\.com/\S+")
+VIDEO_RE   = re.compile(r"https?://(?!music\.youtube|open\.spotify)\S+")
+YTM_RE     = re.compile(r"https?://music\.youtube\.com/\S+")
 SPOTIFY_RE = re.compile(r"https?://open\.spotify\.com/track/\S+")
 
-# ---------------- VIDEO ----------------
+# ───────────── VIDEO ENGINE ─────────────
 
 BASE_YDL = {
     "quiet": True,
     "format": "bv*+ba/best",
     "merge_output_format": "mp4",
     "noplaylist": True,
-    "retries": 0,
-    "fragment_retries": 0,
-    "concurrent_fragment_downloads": 1,
     "nopart": True,
 }
 
 def run(cmd):
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-def smart_download(url, out):
+def smart_download(url, folder):
+    raw = os.path.join(folder, "raw.mp4")
 
-    fast_opts = BASE_YDL.copy()
-    fast_opts["outtmpl"] = out
+    fast = BASE_YDL.copy()
+    fast["outtmpl"] = raw
 
-    segmented_opts = BASE_YDL.copy()
-    segmented_opts.update({
-        "outtmpl": out,
+    segmented = BASE_YDL.copy()
+    segmented.update({
+        "outtmpl": raw,
         "concurrent_fragment_downloads": 8,
         "http_chunk_size": 5 * 1024 * 1024,
         "retries": 2,
@@ -50,21 +49,25 @@ def smart_download(url, out):
 
     domain = url.lower()
 
-    # YT + Instagram NEED segmented mode
     if "youtube.com" in domain or "youtu.be" in domain or "instagram.com" in domain:
-        with YoutubeDL(segmented_opts) as y:
+        with YoutubeDL(segmented) as y:
             y.download([url])
-        return
+    else:
+        with YoutubeDL(fast) as y:
+            y.download([url])
 
-    # Pinterest + others = ultra fast single stream
-    with YoutubeDL(fast_opts) as y:
-        y.download([url])
+    if not os.path.exists(raw):
+        raise RuntimeError("Download failed")
+
+    return raw
 
 def compress(src, dst):
     size = os.path.getsize(src) / 1024 / 1024
+
     if size <= 12:
         run(["ffmpeg","-y","-i",src,"-c","copy","-movflags","+faststart",dst])
         return
+
     run([
         "ffmpeg","-y","-i",src,
         "-vf","scale=720:-2",
@@ -74,7 +77,7 @@ def compress(src, dst):
         dst
     ])
 
-# ---------------- AUDIO ----------------
+# ───────────── AUDIO ENGINE ─────────────
 
 AUDIO_YDL = {
     "quiet": True,
@@ -95,7 +98,10 @@ def yt_to_mp3(url, folder):
         return os.path.join(folder, f"{info['title']}.mp3")
 
 def spotify_title(url):
-    return requests.get(f"https://open.spotify.com/oembed?url={url}",timeout=5).json()["title"]
+    return requests.get(
+        f"https://open.spotify.com/oembed?url={url}",
+        timeout=5
+    ).json()["title"]
 
 def spotify_mp3(title, folder):
     opts = AUDIO_YDL.copy()
@@ -109,20 +115,24 @@ def spotify_mp3(title, folder):
 def mention(u):
     return f'<a href="tg://user?id={u.id}">{u.first_name}</a>'
 
-# ---------------- START ----------------
+# ───────────── START ─────────────
 
 @dp.message(CommandStart())
 async def start(m: Message):
     await m.answer("Send video, YouTube Music or Spotify links.")
 
-# -------- YOUTUBE MUSIC --------
+# ───────────── YT MUSIC ─────────────
 
 @dp.message(F.text.regexp(YTM_RE))
 async def yt_music(m: Message):
+    try: await m.delete()
+    except: pass
+
     start = time.perf_counter()
 
     with tempfile.TemporaryDirectory() as tmp:
         mp3 = await asyncio.to_thread(yt_to_mp3, m.text, tmp)
+
         elapsed = (time.perf_counter()-start)*1000
 
         caption = (
@@ -131,22 +141,31 @@ async def yt_music(m: Message):
             f"> Response Time : {elapsed:.0f} ms"
         )
 
-        await bot.send_audio(m.chat.id, FSInputFile(mp3), caption=caption, parse_mode="HTML")
+        await bot.send_audio(
+            m.chat.id,
+            FSInputFile(mp3),
+            caption=caption,
+            parse_mode="HTML"
+        )
 
-# -------- SPOTIFY --------
+# ───────────── SPOTIFY ─────────────
 
 @dp.message(F.text.regexp(SPOTIFY_RE))
 async def spotify(m: Message):
+    try: await m.delete()
+    except: pass
+
     start = time.perf_counter()
 
     try:
         title = spotify_title(m.text)
     except:
-        await m.answer("Spotify link invalid")
+        await m.answer("Spotify link invalid or expired ✘")
         return
 
     with tempfile.TemporaryDirectory() as tmp:
         mp3 = await asyncio.to_thread(spotify_mp3, title, tmp)
+
         elapsed = (time.perf_counter()-start)*1000
 
         caption = (
@@ -155,19 +174,26 @@ async def spotify(m: Message):
             f"> Response Time : {elapsed:.0f} ms"
         )
 
-        await bot.send_audio(m.chat.id, FSInputFile(mp3), caption=caption, parse_mode="HTML")
+        await bot.send_audio(
+            m.chat.id,
+            FSInputFile(mp3),
+            caption=caption,
+            parse_mode="HTML"
+        )
 
-# -------- VIDEO --------
+# ───────────── VIDEO ─────────────
 
 @dp.message(F.text.regexp(VIDEO_RE))
 async def video(m: Message):
-    async with queue:
+    try: await m.delete()
+    except: pass
 
+    async with queue:
         start = time.perf_counter()
 
         with tempfile.TemporaryDirectory() as tmp:
             try:
-                raw = await asyncio.to_thread(download_video, m.text, tmp)
+                raw = await asyncio.to_thread(smart_download, m.text, tmp)
                 final = os.path.join(tmp, "final.mp4")
 
                 await asyncio.to_thread(compress, raw, final)
@@ -187,11 +213,12 @@ async def video(m: Message):
                     parse_mode="HTML",
                     supports_streaming=True
                 )
+
             except Exception as e:
-                logging.error(e)
+                logging.exception(e)
                 await m.answer("Download failed")
 
-# ---------------- RUN ----------------
+# ───────────── RUN ─────────────
 
 async def main():
     logging.info("Bot running")
