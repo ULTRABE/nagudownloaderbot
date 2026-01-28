@@ -34,14 +34,31 @@ BASE_YDL = {
 def run(cmd):
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-def download_video(url, folder):
-    out = os.path.join(folder, "%(title)s.%(ext)s")
-    opts = BASE_YDL.copy()
-    opts["outtmpl"] = out
+def smart_download(url, out):
 
-    with YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        return ydl.prepare_filename(info)
+    fast_opts = BASE_YDL.copy()
+    fast_opts["outtmpl"] = out
+
+    segmented_opts = BASE_YDL.copy()
+    segmented_opts.update({
+        "outtmpl": out,
+        "concurrent_fragment_downloads": 8,
+        "http_chunk_size": 5 * 1024 * 1024,
+        "retries": 2,
+        "fragment_retries": 2,
+    })
+
+    domain = url.lower()
+
+    # YT + Instagram NEED segmented mode
+    if "youtube.com" in domain or "youtu.be" in domain or "instagram.com" in domain:
+        with YoutubeDL(segmented_opts) as y:
+            y.download([url])
+        return
+
+    # Pinterest + others = ultra fast single stream
+    with YoutubeDL(fast_opts) as y:
+        y.download([url])
 
 def compress(src, dst):
     size = os.path.getsize(src) / 1024 / 1024
