@@ -1,6 +1,4 @@
-from yt_dlp import YoutubeDL
-import time, tempfile
-import asyncio, os, re, subprocess, random, tempfile, time
+import asyncio, os, re, subprocess, tempfile, time, requests
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
 from aiogram.types import Message, FSInputFile
@@ -11,98 +9,42 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 
-# ⚡ FAST + STABLE MODE
 MAX_WORKERS = 8
 queue = asyncio.Semaphore(MAX_WORKERS)
 
 LINK_RE = re.compile(r"https?://\S+")
+SPOTIFY_RE = re.compile(r"https?://open\.spotify\.com/track/\S+")
 
-# 🚀 FIXED CORE — no broken ranges, no retry lag
+# ---------------- VIDEO CORE ----------------
+
 BASE_YDL = {
     "quiet": True,
     "format": "bv*+ba/best",
     "merge_output_format": "mp4",
     "noplaylist": True,
-
     "continuedl": False,
     "nopart": True,
-
     "retries": 0,
     "fragment_retries": 0,
-
     "concurrent_fragment_downloads": 1,
     "http_chunk_size": 0,
-
     "nooverwrites": True,
 }
-
-PROXIES = [
-    "http://203033:JmNd95Z3vcX@196.51.85.7:8800",
-    "http://203033:JmNd95Z3vcX@196.51.218.227:8800",
-    "http://203033:JmNd95Z3vcX@196.51.106.149:8800",
-    "http://203033:JmNd95Z3vcX@170.130.62.211:8800",
-    "http://203033:JmNd95Z3vcX@196.51.106.30:8800",
-    "http://203033:JmNd95Z3vcX@196.51.85.207:8800",
-]
-
-def pick_proxy():
-    return random.choice(PROXIES)
-
-def pick_cookies(url):
-    u = url.lower()
-    if "instagram" in u:
-        return "cookies_instagram.txt"
-    if "youtube" in u or "youtu.be" in u:
-        return "cookies_youtube.txt"
-    return None
 
 def run(cmd):
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-def attempt_download(url, out, cookies=None, proxy=None):
+def smart_download(url, out):
     opts = BASE_YDL.copy()
     opts["outtmpl"] = out
-    if cookies: opts["cookies"] = cookies
-    if proxy: opts["proxy"] = proxy
-
     with YoutubeDL(opts) as y:
         y.download([url])
-
-def smart_download(url, out):
-    try:
-        attempt_download(url, out)
-        if os.path.exists(out): return
-    except:
-        pass
-
-    cookies = pick_cookies(url)
-    if cookies:
-        try:
-            attempt_download(url, out, cookies=cookies)
-            if os.path.exists(out): return
-        except:
-            pass
-
-    try:
-        attempt_download(url, out, proxy=pick_proxy())
-        if os.path.exists(out): return
-    except:
-        pass
-
-    raise RuntimeError("Blocked")
-
-# 🎯 SMALL + SHARP VP9
 
 def smart_output(src, dst):
     size_mb = os.path.getsize(src) / (1024 * 1024)
 
     if size_mb <= 12:
-        run([
-            "ffmpeg","-y","-i",src,
-            "-c","copy",
-            "-movflags","+faststart",
-            dst
-        ])
+        run(["ffmpeg","-y","-i",src,"-c","copy","-movflags","+faststart",dst])
         return
 
     run([
@@ -120,45 +62,18 @@ def smart_output(src, dst):
         dst
     ])
 
-# ───── UI ─────
-
-GROUP_TEXT = (
-    "𝐓𝐡𝐚𝐧𝐤 𝐲𝐨𝐮 𝐟𝐨𝐫 𝐚𝐝𝐝𝐢𝐧𝐠 𝐦𝐞\n\n"
-    "Send any video link and I’ll fetch it instantly."
-)
-
-@dp.message(CommandStart())
-async def start(m: Message):
-    u = m.from_user
-    name = f"{u.first_name or ''} {u.last_name or ''}".strip()
-
-    await m.answer(
-        "⟣—◈𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑 𝐁𝐎𝐓◈—⟢\n\n"
-        f"{name}\n\n"
-        "Download short-form videos instantly\n"
-        "in stunning quality — delivered fast.\n\n"
-        "──────────────\n"
-        "Send a link to begin\n"
-        "──────────────"
-    )
-
-@dp.message(F.new_chat_members)
-async def added(m: Message):
-    await m.answer(GROUP_TEXT)
-
 def mention(u):
     name = f"{u.first_name or ''} {u.last_name or ''}".strip()
     return f'<a href="tg://user?id={u.id}">{name}</a>'
-YT_MUSIC_RE = re.compile(r"https?://music\.youtube\.com/\S+")
 
-YTM_DLP = {
+# ---------------- AUDIO CORE ----------------
+
+AUDIO_DLP = {
     "quiet": True,
-    "no_warnings": True,
     "format": "bestaudio/best",
     "noplaylist": True,
-    "outtmpl": "%(title)s.%(ext)s",
     "postprocessors": [
-        {"key": "FFmpegExtractAudio","preferredcodec": "mp3","preferredquality": "192"},
+        {"key": "FFmpegExtractAudio","preferredcodec": "mp3","preferredquality": "96"},
         {"key": "FFmpegMetadata"},
         {"key": "EmbedThumbnail"},
     ],
@@ -166,54 +81,96 @@ YTM_DLP = {
 }
 
 def yt_music_to_mp3(url, folder):
-    opts = YTM_DLP.copy()
+    opts = AUDIO_DLP.copy()
     opts["outtmpl"] = os.path.join(folder, "%(title)s.%(ext)s")
 
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
         title = info.get("title", "song")
-        artist = info.get("artist") or info.get("uploader", "Unknown Artist")
-        mp3 = os.path.join(folder, f"{title}.mp3")
-        return mp3, title, artist
-        
-# ───── MAIN HANDLER ─────
+        return os.path.join(folder, f"{title}.mp3")
 
-@dp.message(F.text)
-async def handle_all(message: Message):
+def get_spotify_title(url):
+    data = requests.get(f"https://open.spotify.com/oembed?url={url}", timeout=5).json()
+    return data["title"]
 
-    if "music.youtube.com" in message.text:
-        start = time.perf_counter()
+def spotify_to_mp3(query, folder):
+    opts = AUDIO_DLP.copy()
+    opts["default_search"] = "ytsearch1"
+    opts["outtmpl"] = os.path.join(folder, "%(title)s.%(ext)s")
 
-        with tempfile.TemporaryDirectory() as tmp:
-            mp3, title, artist = await asyncio.to_thread(
-                yt_music_to_mp3, message.text, tmp
-            )
+    with YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(query, download=True)
+        title = info["entries"][0]["title"]
+        return os.path.join(folder, f"{title}.mp3")
 
-            elapsed = (time.perf_counter() - start) * 1000
+# ---------------- UI ----------------
 
-            caption = (
-                f"> @nagudownloaderbot 💝\n"
-                f">\n"
-                f"> 𝐑𝐞𝐪𝐮𝐞𝐬𝐭𝐞𝐝 𝐛𝐲 "
-                f'<a href="tg://user?id={message.from_user.id}">'
-                f'{message.from_user.first_name}</a>\n'
-                f"> 𝐑𝐞𝐬𝐩𝐨𝐧𝐬𝐞 𝐓𝐢𝐦𝐞 : {elapsed:.0f} ms\n"
-                f">\n"
-                f"> 【{artist} — {title}】"
-            )
+@dp.message(CommandStart())
+async def start(m: Message):
+    await m.answer("Send video, YouTube Music or Spotify links.")
 
-            await message.answer_audio(
-                FSInputFile(mp3),
-                title=title,
-                performer=artist,
-                caption=caption,
-                parse_mode="HTML"
-            )
+# ---------------- YT MUSIC ----------------
 
-        return   # IMPORTANT — stops video handler from running
-        
+@dp.message(F.text.contains("music.youtube.com"))
+async def yt_music_handler(message: Message):
+
+    start = time.perf_counter()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        mp3 = await asyncio.to_thread(yt_music_to_mp3, message.text, tmp)
+        elapsed = (time.perf_counter() - start) * 1000
+
+        caption = (
+            f"> @nagudownloaderbot 💝\n>\n"
+            f"> 𝐑𝐞𝐪𝐮𝐞𝐬𝐭𝐞𝐝 𝐛𝐲 {mention(message.from_user)}\n"
+            f"> 𝐑𝐞𝐬𝐩𝐨𝐧𝐬𝐞 𝐓𝐢𝐦𝐞 : {elapsed:.0f} ms"
+        )
+
+        await bot.send_audio(
+            message.chat.id,
+            FSInputFile(mp3),
+            caption=caption,
+            parse_mode="HTML",
+            title="",
+            performer=""
+        )
+
+# ---------------- SPOTIFY ----------------
+
+@dp.message(F.text.regexp(SPOTIFY_RE))
+async def spotify_handler(message: Message):
+
+    start = time.perf_counter()
+
+    try:
+        title = get_spotify_title(message.text)
+    except:
+        await message.answer("❌ Spotify link invalid or expired")
+        return
+
+    with tempfile.TemporaryDirectory() as tmp:
+        mp3 = await asyncio.to_thread(spotify_to_mp3, title, tmp)
+        elapsed = (time.perf_counter() - start) * 1000
+
+        caption = (
+            f"> @nagudownloaderbot 💝\n>\n"
+            f"> 𝐑𝐞𝐪𝐮𝐞𝐬𝐭𝐞𝐝 𝐛𝐲 {mention(message.from_user)}\n"
+            f"> 𝐑𝐞𝐬𝐩𝐨𝐧𝐬𝐞 𝐓𝐢𝐦𝐞 : {elapsed:.0f} ms"
+        )
+
+        await bot.send_audio(
+            message.chat.id,
+            FSInputFile(mp3),
+            caption=caption,
+            parse_mode="HTML",
+            title="",
+            performer=""
+        )
+
+# ---------------- VIDEO ----------------
+
 @dp.message(F.text.regexp(LINK_RE))
-async def handle(m: Message):
+async def video_handler(m: Message):
     async with queue:
 
         start_time = time.perf_counter()
@@ -240,21 +197,17 @@ async def handle(m: Message):
                     f"𝐑𝐞𝐬𝐩𝐨𝐧𝐬𝐞 𝐓𝐢𝐦𝐞 : {elapsed:.0f} ms"
                 )
 
-                sent = await bot.send_video(
+                await bot.send_video(
                     m.chat.id,
                     FSInputFile(final),
                     caption=caption,
                     parse_mode="HTML",
                     supports_streaming=True
                 )
-
-                if m.chat.type != "private":
-                    try:
-                        await bot.pin_chat_message(m.chat.id, sent.message_id)
-                    except:
-                        pass
             except:
                 pass
+
+# ---------------- START ----------------
 
 async def main():
     await dp.start_polling(bot)
