@@ -1,4 +1,4 @@
-import asyncio, os, re, secrets, subprocess, random, tempfile, time
+import asyncio, os, re, subprocess, random, tempfile, time
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
 from aiogram.types import Message, FSInputFile
@@ -9,9 +9,9 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 
-# ───── PERFORMANCE CORE ─────
-MAX_WORKERS = 10
-FRAGMENTS = 4
+# ⚡ FULL POWER VPS MODE
+MAX_WORKERS = 20
+FRAGMENTS = 16
 queue = asyncio.Semaphore(MAX_WORKERS)
 
 LINK_RE = re.compile(r"https?://\S+")
@@ -22,11 +22,11 @@ BASE_YDL = {
     "merge_output_format": "mp4",
     "noplaylist": True,
     "concurrent_fragment_downloads": FRAGMENTS,
-    "http_chunk_size": 6 * 1024 * 1024,
+    "http_chunk_size": 20 * 1024 * 1024,
+    "buffersize": 16 * 1024 * 1024,
+    "socket_timeout": 10,
     "retries": 2,
     "fragment_retries": 2,
-    "socket_timeout": 8,
-    "source_address": "0.0.0.0",
     "nopart": True,
     "nooverwrites": True,
 }
@@ -45,9 +45,9 @@ def pick_proxy():
 
 def pick_cookies(url):
     u = url.lower()
-    if "instagram.com" in u:
+    if "instagram" in u:
         return "cookies_instagram.txt"
-    if "youtube.com" in u or "youtu.be" in u:
+    if "youtube" in u or "youtu.be" in u:
         return "cookies_youtube.txt"
     return None
 
@@ -57,10 +57,8 @@ def run(cmd):
 def attempt_download(url, out, cookies=None, proxy=None):
     opts = BASE_YDL.copy()
     opts["outtmpl"] = out
-    if cookies:
-        opts["cookies"] = cookies
-    if proxy:
-        opts["proxy"] = proxy
+    if cookies: opts["cookies"] = cookies
+    if proxy: opts["proxy"] = proxy
 
     with YoutubeDL(opts) as y:
         y.download([url])
@@ -68,42 +66,34 @@ def attempt_download(url, out, cookies=None, proxy=None):
 def smart_download(url, out):
     try:
         attempt_download(url, out)
-        if os.path.exists(out):
-            return
+        if os.path.exists(out): return
     except:
         pass
 
-    cookie = pick_cookies(url)
-    if cookie:
+    cookies = pick_cookies(url)
+    if cookies:
         try:
-            attempt_download(url, out, cookies=cookie)
-            if os.path.exists(out):
-                return
+            attempt_download(url, out, cookies=cookies)
+            if os.path.exists(out): return
         except:
             pass
 
     for _ in range(2):
         try:
             attempt_download(url, out, proxy=pick_proxy())
-            if os.path.exists(out):
-                return
+            if os.path.exists(out): return
         except:
             continue
 
     raise RuntimeError("Blocked")
 
-# ───── FAST SMALL OUTPUT ─────
+# 🎯 ULTRA SMALL + SHARP VP9
 
 def smart_output(src, dst):
     size_mb = os.path.getsize(src) / (1024 * 1024)
 
     if size_mb <= 12:
-        run([
-            "ffmpeg","-y","-i",src,
-            "-c","copy",
-            "-movflags","+faststart",
-            dst
-        ])
+        run(["ffmpeg","-y","-i",src,"-c","copy","-movflags","+faststart",dst])
         return
 
     run([
@@ -112,7 +102,8 @@ def smart_output(src, dst):
         "-c:v","libvpx-vp9",
         "-b:v","380k",
         "-deadline","realtime",
-        "-cpu-used","24",
+        "-cpu-used","32",
+        "-threads","32",
         "-row-mt","1",
         "-pix_fmt","yuv420p",
         "-movflags","+faststart",
@@ -120,8 +111,6 @@ def smart_output(src, dst):
         "-b:a","32k",
         dst
     ])
-
-# ───── UI ─────
 
 GROUP_TEXT = (
     "𝐓𝐡𝐚𝐧𝐤 𝐲𝐨𝐮 𝐟𝐨𝐫 𝐚𝐝𝐝𝐢𝐧𝐠 𝐦𝐞\n\n"
@@ -147,11 +136,9 @@ async def start(m: Message):
 async def added(m: Message):
     await m.answer(GROUP_TEXT)
 
-def mention(user):
-    name = f"{user.first_name or ''} {user.last_name or ''}".strip()
-    return f'<a href="tg://user?id={user.id}">{name}</a>'
-
-# ───── HANDLER ─────
+def mention(u):
+    name = f"{u.first_name or ''} {u.last_name or ''}".strip()
+    return f'<a href="tg://user?id={u.id}">{name}</a>'
 
 @dp.message(F.text.regexp(LINK_RE))
 async def handle(m: Message):
@@ -173,13 +160,12 @@ async def handle(m: Message):
                 await asyncio.to_thread(smart_download, url, raw)
                 await asyncio.to_thread(smart_output, raw, final)
 
-                elapsed = time.perf_counter() - start_time
-                resp = f"{elapsed:.2f}s"
+                elapsed = (time.perf_counter() - start_time) * 1000
 
                 caption = (
                     "@nagudownloaderbot 🤍\n\n"
                     f"𝐑𝐞𝐪𝐮𝐞𝐬𝐭𝐞𝐝 𝐛𝐲 {mention(m.from_user)}\n"
-                    f"𝐑𝐞𝐬𝐩𝐨𝐧𝐬𝐞 𝐓𝐢𝐦𝐞 — {resp}"
+                    f"𝐑𝐞𝐬𝐩𝐨𝐧𝐬𝐞 𝐓𝐢𝐦𝐞 : {elapsed:.0f} ms"
                 )
 
                 sent = await bot.send_video(
