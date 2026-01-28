@@ -1,4 +1,4 @@
-import asyncio, os, re, secrets, subprocess, random, tempfile
+import asyncio, os, re, secrets, subprocess, random, tempfile, time
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
 from aiogram.types import Message, FSInputFile
@@ -9,9 +9,9 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 
-# ───── FASTER CORE ─────
-MAX_WORKERS = 8          # +33% throughput safely
-FRAGMENTS = 10
+# ───── PERFORMANCE CORE ─────
+MAX_WORKERS = 10
+FRAGMENTS = 4
 queue = asyncio.Semaphore(MAX_WORKERS)
 
 LINK_RE = re.compile(r"https?://\S+")
@@ -25,6 +25,8 @@ BASE_YDL = {
     "http_chunk_size": 6 * 1024 * 1024,
     "retries": 2,
     "fragment_retries": 2,
+    "socket_timeout": 8,
+    "source_address": "0.0.0.0",
     "nopart": True,
     "nooverwrites": True,
 }
@@ -36,58 +38,12 @@ PROXIES = [
     "http://203033:JmNd95Z3vcX@170.130.62.211:8800",
     "http://203033:JmNd95Z3vcX@196.51.106.30:8800",
     "http://203033:JmNd95Z3vcX@196.51.85.207:8800",
-    "http://203033:JmNd95Z3vcX@196.51.221.174:8800",
-    "http://203033:JmNd95Z3vcX@196.51.221.102:8800",
-    "http://203033:JmNd95Z3vcX@77.83.170.222:8800",
-    "http://203033:JmNd95Z3vcX@196.51.109.52:8800",
-    "http://203033:JmNd95Z3vcX@196.51.109.151:8800",
-    "http://203033:JmNd95Z3vcX@77.83.170.79:8800",
-    "http://203033:JmNd95Z3vcX@196.51.221.38:8800",
-    "http://203033:JmNd95Z3vcX@196.51.82.112:8800",
-    "http://203033:JmNd95Z3vcX@170.130.62.42:8800",
-    "http://203033:JmNd95Z3vcX@196.51.218.250:8800",
-    "http://203033:JmNd95Z3vcX@77.83.170.30:8800",
-    "http://203033:JmNd95Z3vcX@196.51.82.198:8800",
-    "http://203033:JmNd95Z3vcX@196.51.218.236:8800",
-    "http://203033:JmNd95Z3vcX@196.51.82.120:8800",
-    "http://203033:JmNd95Z3vcX@196.51.221.125:8800",
-    "http://203033:JmNd95Z3vcX@77.83.170.91:8800",
-    "http://203033:JmNd95Z3vcX@196.51.82.59:8800",
-    "http://203033:JmNd95Z3vcX@196.51.109.138:8800",
-    "http://203033:JmNd95Z3vcX@170.130.62.24:8800",
-    "http://203033:JmNd95Z3vcX@170.130.62.27:8800",
-    "http://203033:JmNd95Z3vcX@196.51.109.8:8800",
-    "http://203033:JmNd95Z3vcX@196.51.85.156:8800",
-    "http://203033:JmNd95Z3vcX@196.51.218.169:8800",
-    "http://203033:JmNd95Z3vcX@77.83.170.124:8800",
-    "http://203033:JmNd95Z3vcX@196.51.82.106:8800",
-    "http://203033:JmNd95Z3vcX@196.51.85.127:8800",
-    "http://203033:JmNd95Z3vcX@170.130.62.151:8800",
-    "http://203033:JmNd95Z3vcX@196.51.106.117:8800",
-    "http://203033:JmNd95Z3vcX@170.130.62.221:8800",
-    "http://203033:JmNd95Z3vcX@196.51.106.16:8800",
-    "http://203033:JmNd95Z3vcX@170.130.62.223:8800",
-    "http://203033:JmNd95Z3vcX@196.51.85.59:8800",
-    "http://203033:JmNd95Z3vcX@170.130.62.251:8800",
-    "http://203033:JmNd95Z3vcX@196.51.218.179:8800",
-    "http://203033:JmNd95Z3vcX@196.51.82.238:8800",
-    "http://203033:JmNd95Z3vcX@196.51.109.31:8800",
-    "http://203033:JmNd95Z3vcX@196.51.106.100:8800",
-    "http://203033:JmNd95Z3vcX@77.83.170.168:8800",
-    "http://203033:JmNd95Z3vcX@196.51.221.46:8800",
-    "http://203033:JmNd95Z3vcX@196.51.218.60:8800",
-    "http://203033:JmNd95Z3vcX@196.51.221.158:8800",
-    "http://203033:JmNd95Z3vcX@196.51.106.69:8800",
-    "http://203033:JmNd95Z3vcX@196.51.109.6:8800",
-    "http://203033:JmNd95Z3vcX@196.51.85.213:8800",
 ]
-
 
 def pick_proxy():
     return random.choice(PROXIES)
 
-
-def pick_cookies(url: str):
+def pick_cookies(url):
     u = url.lower()
     if "instagram.com" in u:
         return "cookies_instagram.txt"
@@ -95,15 +51,12 @@ def pick_cookies(url: str):
         return "cookies_youtube.txt"
     return None
 
-
 def run(cmd):
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
 
 def attempt_download(url, out, cookies=None, proxy=None):
     opts = BASE_YDL.copy()
     opts["outtmpl"] = out
-
     if cookies:
         opts["cookies"] = cookies
     if proxy:
@@ -112,9 +65,7 @@ def attempt_download(url, out, cookies=None, proxy=None):
     with YoutubeDL(opts) as y:
         y.download([url])
 
-
 def smart_download(url, out):
-
     try:
         attempt_download(url, out)
         if os.path.exists(out):
@@ -122,16 +73,16 @@ def smart_download(url, out):
     except:
         pass
 
-    cookie_file = pick_cookies(url)
-    if cookie_file:
+    cookie = pick_cookies(url)
+    if cookie:
         try:
-            attempt_download(url, out, cookies=cookie_file)
+            attempt_download(url, out, cookies=cookie)
             if os.path.exists(out):
                 return
         except:
             pass
 
-    for _ in range(3):
+    for _ in range(2):
         try:
             attempt_download(url, out, proxy=pick_proxy())
             if os.path.exists(out):
@@ -141,8 +92,7 @@ def smart_download(url, out):
 
     raise RuntimeError("Blocked")
 
-
-# ───── SMART FAST COMPRESSION ─────
+# ───── FAST SMALL OUTPUT ─────
 
 def smart_output(src, dst):
     size_mb = os.path.getsize(src) / (1024 * 1024)
@@ -160,7 +110,7 @@ def smart_output(src, dst):
         "ffmpeg","-y","-i",src,
         "-vf","scale=720:-2:flags=fast_bilinear",
         "-c:v","libvpx-vp9",
-        "-b:v","380k",          # sweet spot for reels/shorts
+        "-b:v","380k",
         "-deadline","realtime",
         "-cpu-used","24",
         "-row-mt","1",
@@ -171,16 +121,12 @@ def smart_output(src, dst):
         dst
     ])
 
-
-
-
 # ───── UI ─────
 
 GROUP_TEXT = (
     "𝐓𝐡𝐚𝐧𝐤 𝐲𝐨𝐮 𝐟𝐨𝐫 𝐚𝐝𝐝𝐢𝐧𝐠 𝐦𝐞\n\n"
     "Send any video link and I’ll fetch it instantly."
 )
-
 
 @dp.message(CommandStart())
 async def start(m: Message):
@@ -197,16 +143,13 @@ async def start(m: Message):
         "──────────────"
     )
 
-
 @dp.message(F.new_chat_members)
 async def added(m: Message):
     await m.answer(GROUP_TEXT)
 
-
 def mention(user):
     name = f"{user.first_name or ''} {user.last_name or ''}".strip()
     return f'<a href="tg://user?id={user.id}">{name}</a>'
-
 
 # ───── HANDLER ─────
 
@@ -214,6 +157,7 @@ def mention(user):
 async def handle(m: Message):
     async with queue:
 
+        start_time = time.perf_counter()
         url = LINK_RE.search(m.text).group(0)
 
         try:
@@ -229,9 +173,13 @@ async def handle(m: Message):
                 await asyncio.to_thread(smart_download, url, raw)
                 await asyncio.to_thread(smart_output, raw, final)
 
+                elapsed = time.perf_counter() - start_time
+                resp = f"{elapsed:.2f}s"
+
                 caption = (
                     "@nagudownloaderbot 🤍\n\n"
-                    f"𝐑𝐞𝐪𝐮𝐞𝐬𝐭𝐞𝐝 𝐛𝐲 {mention(m.from_user)}"
+                    f"𝐑𝐞𝐪𝐮𝐞𝐬𝐭𝐞𝐝 𝐛𝐲 {mention(m.from_user)}\n"
+                    f"𝐑𝐞𝐬𝐩𝐨𝐧𝐬𝐞 𝐓𝐢𝐦𝐞 — {resp}"
                 )
 
                 sent = await bot.send_video(
@@ -250,10 +198,8 @@ async def handle(m: Message):
             except:
                 pass
 
-
 async def main():
     await dp.start_polling(bot)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
