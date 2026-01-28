@@ -115,10 +115,10 @@ def smart_output(src, dst):
     # else compress
     run([
         "ffmpeg","-y","-i",src,
-        "-vf","scale=720:-2:flags=lanczos",
+        "-vf","scale=720:-2:flags=fast_bilinear",
         "-c:v","libx264",
-        "-preset","veryfast",
-        "-crf","27",
+        "-preset","superfast",
+        "-crf","28",
         "-pix_fmt","yuv420p",
         "-movflags","+faststart",
         "-c:a","aac","-b:a","96k",
