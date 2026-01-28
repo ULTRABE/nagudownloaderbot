@@ -82,6 +82,11 @@ async def attempt(url, raw, proxy=None, cookies=None):
     opts = BASE_YDL.copy()
     opts["outtmpl"] = str(raw.with_suffix(".%(ext)s"))
 
+    # 🧠 Pinterest must NOT use chunk mode
+    if "pinterest.com" in url:
+        opts["concurrent_fragment_downloads"] = 1
+        opts["http_chunk_size"] = 0
+
     if proxy:
         opts["proxy"] = proxy
     if cookies:
