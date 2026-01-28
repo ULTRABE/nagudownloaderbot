@@ -15,13 +15,13 @@ dp = Dispatcher()
 
 queue = asyncio.Semaphore(8)
 
-VIDEO_RE   = re.compile(r"https?://(?!music\.youtube|open\.spotify)\S+")
 YTM_RE     = re.compile(r"https?://music\.youtube\.com/\S+")
 SPOTIFY_RE = re.compile(r"https?://open\.spotify\.com/track/\S+")
+VIDEO_RE   = re.compile(r"https?://\S+")
 
-# ───────────── VIDEO ENGINE ─────────────
+# ───────── VIDEO CORE ─────────
 
-BASE_YDL = {
+FAST_OPTS = {
     "quiet": True,
     "format": "bv*+ba/best",
     "merge_output_format": "mp4",
@@ -29,32 +29,31 @@ BASE_YDL = {
     "nopart": True,
 }
 
+SEGMENTED_OPTS = FAST_OPTS | {
+    "concurrent_fragment_downloads": 8,
+    "http_chunk_size": 5 * 1024 * 1024,
+    "retries": 2,
+    "fragment_retries": 2,
+}
+
 def run(cmd):
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def smart_download(url, folder):
     raw = os.path.join(folder, "raw.mp4")
-
-    fast = BASE_YDL.copy()
-    fast["outtmpl"] = raw
-
-    segmented = BASE_YDL.copy()
-    segmented.update({
-        "outtmpl": raw,
-        "concurrent_fragment_downloads": 8,
-        "http_chunk_size": 5 * 1024 * 1024,
-        "retries": 2,
-        "fragment_retries": 2,
-    })
-
     domain = url.lower()
 
-    if "youtube.com" in domain or "youtu.be" in domain or "instagram.com" in domain:
-        with YoutubeDL(segmented) as y:
-            y.download([url])
-    else:
-        with YoutubeDL(fast) as y:
-            y.download([url])
+    opts = SEGMENTED_OPTS if (
+        "youtube.com" in domain or
+        "youtu.be" in domain or
+        "instagram.com" in domain
+    ) else FAST_OPTS
+
+    opts = opts.copy()
+    opts["outtmpl"] = raw
+
+    with YoutubeDL(opts) as y:
+        y.download([url])
 
     if not os.path.exists(raw):
         raise RuntimeError("Download failed")
@@ -62,9 +61,7 @@ def smart_download(url, folder):
     return raw
 
 def compress(src, dst):
-    size = os.path.getsize(src) / 1024 / 1024
-
-    if size <= 12:
+    if os.path.getsize(src) / 1024 / 1024 <= 12:
         run(["ffmpeg","-y","-i",src,"-c","copy","-movflags","+faststart",dst])
         return
 
@@ -77,9 +74,9 @@ def compress(src, dst):
         dst
     ])
 
-# ───────────── AUDIO ENGINE ─────────────
+# ───────── AUDIO CORE ─────────
 
-AUDIO_YDL = {
+AUDIO_OPTS = {
     "quiet": True,
     "format": "bestaudio/best",
     "postprocessors": [
@@ -89,8 +86,8 @@ AUDIO_YDL = {
     "writethumbnail": True,
 }
 
-def yt_to_mp3(url, folder):
-    opts = AUDIO_YDL.copy()
+def yt_music_mp3(url, folder):
+    opts = AUDIO_OPTS.copy()
     opts["outtmpl"] = os.path.join(folder, "%(title)s.%(ext)s")
 
     with YoutubeDL(opts) as ydl:
@@ -104,7 +101,7 @@ def spotify_title(url):
     ).json()["title"]
 
 def spotify_mp3(title, folder):
-    opts = AUDIO_YDL.copy()
+    opts = AUDIO_OPTS.copy()
     opts["default_search"] = "ytsearch1"
     opts["outtmpl"] = os.path.join(folder, "%(title)s.%(ext)s")
 
@@ -115,13 +112,13 @@ def spotify_mp3(title, folder):
 def mention(u):
     return f'<a href="tg://user?id={u.id}">{u.first_name}</a>'
 
-# ───────────── START ─────────────
+# ───────── START ─────────
 
 @dp.message(CommandStart())
 async def start(m: Message):
-    await m.answer("Send video, YouTube Music or Spotify links.")
+    await m.answer("Send YouTube, Instagram, Pinterest, YT Music or Spotify links.")
 
-# ───────────── YT MUSIC ─────────────
+# ───────── YT MUSIC ─────────
 
 @dp.message(F.text.regexp(YTM_RE))
 async def yt_music(m: Message):
@@ -131,24 +128,17 @@ async def yt_music(m: Message):
     start = time.perf_counter()
 
     with tempfile.TemporaryDirectory() as tmp:
-        mp3 = await asyncio.to_thread(yt_to_mp3, m.text, tmp)
-
+        mp3 = await asyncio.to_thread(yt_music_mp3, m.text, tmp)
         elapsed = (time.perf_counter()-start)*1000
-
-        caption = (
-            f"> @nagudownloaderbot 💝\n>\n"
-            f"> Requested by {mention(m.from_user)}\n"
-            f"> Response Time : {elapsed:.0f} ms"
-        )
 
         await bot.send_audio(
             m.chat.id,
             FSInputFile(mp3),
-            caption=caption,
+            caption=f"> @nagudownloaderbot 💝\n>\n> Requested by {mention(m.from_user)}\n> Response Time : {elapsed:.0f} ms",
             parse_mode="HTML"
         )
 
-# ───────────── SPOTIFY ─────────────
+# ───────── SPOTIFY ─────────
 
 @dp.message(F.text.regexp(SPOTIFY_RE))
 async def spotify(m: Message):
@@ -165,26 +155,25 @@ async def spotify(m: Message):
 
     with tempfile.TemporaryDirectory() as tmp:
         mp3 = await asyncio.to_thread(spotify_mp3, title, tmp)
-
         elapsed = (time.perf_counter()-start)*1000
-
-        caption = (
-            f"> @nagudownloaderbot 💝\n>\n"
-            f"> Requested by {mention(m.from_user)}\n"
-            f"> Response Time : {elapsed:.0f} ms"
-        )
 
         await bot.send_audio(
             m.chat.id,
             FSInputFile(mp3),
-            caption=caption,
+            caption=f"> @nagudownloaderbot 💝\n>\n> Requested by {mention(m.from_user)}\n> Response Time : {elapsed:.0f} ms",
             parse_mode="HTML"
         )
 
-# ───────────── VIDEO ─────────────
+# ───────── VIDEO (NOW FILTERED PROPERLY) ─────────
 
 @dp.message(F.text.regexp(VIDEO_RE))
 async def video(m: Message):
+
+    text = m.text.lower()
+
+    if "music.youtube.com" in text or "open.spotify.com" in text:
+        return   # 🚫 stop double processing
+
     try: await m.delete()
     except: pass
 
@@ -200,16 +189,10 @@ async def video(m: Message):
 
                 elapsed = (time.perf_counter()-start)*1000
 
-                caption = (
-                    "@nagudownloaderbot 🤍\n\n"
-                    f"Requested by {mention(m.from_user)}\n"
-                    f"Response Time : {elapsed:.0f} ms"
-                )
-
                 await bot.send_video(
                     m.chat.id,
                     FSInputFile(final),
-                    caption=caption,
+                    caption=f"@nagudownloaderbot 🤍\n\nRequested by {mention(m.from_user)}\nResponse Time : {elapsed:.0f} ms",
                     parse_mode="HTML",
                     supports_streaming=True
                 )
@@ -218,7 +201,7 @@ async def video(m: Message):
                 logging.exception(e)
                 await m.answer("Download failed")
 
-# ───────────── RUN ─────────────
+# ───────── RUN ─────────
 
 async def main():
     logging.info("Bot running")
