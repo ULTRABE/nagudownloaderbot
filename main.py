@@ -29,7 +29,7 @@ BASE_YDL = {
     "nooverwrites": True,
 }
 
-PROXIES = PROXIES = [
+PROXIES = [
     "http://203033:JmNd95Z3vcX@196.51.85.7:8800",
     "http://203033:JmNd95Z3vcX@196.51.218.227:8800",
     "http://203033:JmNd95Z3vcX@196.51.106.149:8800",
