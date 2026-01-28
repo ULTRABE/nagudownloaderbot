@@ -119,27 +119,42 @@ async def smart_download(url, raw):
 
 # ---------------- compression ----------------
 
-def optimize(src, out):
+def optimize(src: Path, out: Path):
     size_mb = src.stat().st_size / 1024 / 1024
 
-    # fast remux if already small
-    if size_mb <= 15:
-        run(["ffmpeg","-y","-i",src,"-c","copy","-movflags","+faststart",out])
+    # If already small enough — don't touch it
+    if size_mb <= 18:
+        run([
+            "ffmpeg","-y","-i",src,
+            "-c","copy",
+            "-movflags","+faststart",
+            out
+        ])
         return
 
-    # high quality VP9 (no blur)
+    # Smart high-quality compression
     run([
         "ffmpeg","-y","-i",src,
+
+        # best scaler (no blur)
         "-vf","scale=720:-2:flags=lanczos",
+
+        # VP9 high quality mode
         "-c:v","libvpx-vp9",
-        "-crf","25",          # quality based (not trash bitrate)
+        "-crf","26",          # sweet spot (24=huge, 30=lower)
         "-b:v","0",
+
+        # speed vs quality balance
         "-deadline","realtime",
         "-cpu-used","4",
         "-row-mt","1",
+
         "-pix_fmt","yuv420p",
+
+        # light but clean audio
         "-c:a","libopus",
         "-b:a","48k",
+
         "-movflags","+faststart",
         out
     ])
