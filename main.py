@@ -1,3 +1,5 @@
+from yt_dlp import YoutubeDL
+import time, tempfile
 import asyncio, os, re, subprocess, random, tempfile, time
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
@@ -147,9 +149,69 @@ async def added(m: Message):
 def mention(u):
     name = f"{u.first_name or ''} {u.last_name or ''}".strip()
     return f'<a href="tg://user?id={u.id}">{name}</a>'
+YT_MUSIC_RE = re.compile(r"https?://music\.youtube\.com/\S+")
 
+YTM_DLP = {
+    "quiet": True,
+    "no_warnings": True,
+    "format": "bestaudio/best",
+    "noplaylist": True,
+    "outtmpl": "%(title)s.%(ext)s",
+    "postprocessors": [
+        {"key": "FFmpegExtractAudio","preferredcodec": "mp3","preferredquality": "192"},
+        {"key": "FFmpegMetadata"},
+        {"key": "EmbedThumbnail"},
+    ],
+    "writethumbnail": True,
+}
+
+def yt_music_to_mp3(url, folder):
+    opts = YTM_DLP.copy()
+    opts["outtmpl"] = os.path.join(folder, "%(title)s.%(ext)s")
+
+    with YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        title = info.get("title", "song")
+        artist = info.get("artist") or info.get("uploader", "Unknown Artist")
+        mp3 = os.path.join(folder, f"{title}.mp3")
+        return mp3, title, artist
+        
 # ───── MAIN HANDLER ─────
 
+@dp.message(F.text)
+async def handle_all(message: Message):
+
+    if "music.youtube.com" in message.text:
+        start = time.perf_counter()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            mp3, title, artist = await asyncio.to_thread(
+                yt_music_to_mp3, message.text, tmp
+            )
+
+            elapsed = (time.perf_counter() - start) * 1000
+
+            caption = (
+                f"> @nagudownloaderbot 💝\n"
+                f">\n"
+                f"> 𝐑𝐞𝐪𝐮𝐞𝐬𝐭𝐞𝐝 𝐛𝐲 "
+                f'<a href="tg://user?id={message.from_user.id}">'
+                f'{message.from_user.first_name}</a>\n'
+                f"> 𝐑𝐞𝐬𝐩𝐨𝐧𝐬𝐞 𝐓𝐢𝐦𝐞 : {elapsed:.0f} ms\n"
+                f">\n"
+                f"> 【{artist} — {title}】"
+            )
+
+            await message.answer_audio(
+                FSInputFile(mp3),
+                title=title,
+                performer=artist,
+                caption=caption,
+                parse_mode="HTML"
+            )
+
+        return   # IMPORTANT — stops video handler from running
+        
 @dp.message(F.text.regexp(LINK_RE))
 async def handle(m: Message):
     async with queue:
