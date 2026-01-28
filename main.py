@@ -1,4 +1,4 @@
-import asyncio, os, re, secrets, subprocess, random, tempfile, time
+import asyncio, os, re, subprocess, random, tempfile, time, shutil
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
 from aiogram.types import Message, FSInputFile
@@ -9,24 +9,36 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 
-# ───── PERFORMANCE CORE ─────
-MAX_WORKERS = 10
-FRAGMENTS = 4
+# ───── VPS POWER SETTINGS ─────
+MAX_WORKERS = 25
+FRAGMENTS = 16
 queue = asyncio.Semaphore(MAX_WORKERS)
 
 LINK_RE = re.compile(r"https?://\S+")
 
+# Use RAM disk if available (INSANE speedup)
+RAMDISK = "/dev/shm" if os.path.exists("/dev/shm") else None
+
 BASE_YDL = {
     "quiet": True,
-    "format": "bv*+ba/best",
-    "merge_output_format": "mp4",
     "noplaylist": True,
+
+    "format": "bv*[ext=mp4]/best[ext=mp4]",
+    "merge_output_format": "mp4",
+
     "concurrent_fragment_downloads": FRAGMENTS,
-    "http_chunk_size": 6 * 1024 * 1024,
-    "retries": 2,
-    "fragment_retries": 2,
-    "socket_timeout": 8,
-    "source_address": "0.0.0.0",
+    "http_chunk_size": 16 * 1024 * 1024,
+    "buffersize": 64 * 1024 * 1024,
+
+    "hls_prefer_native": True,
+    "hls_use_mpegts": True,
+
+    "throttledratelimit": 10000000,
+
+    "retries": 3,
+    "fragment_retries": 3,
+    "socket_timeout": 20,
+
     "nopart": True,
     "nooverwrites": True,
 }
@@ -92,32 +104,39 @@ def smart_download(url, out):
 
     raise RuntimeError("Blocked")
 
-# ───── FAST SMALL OUTPUT ─────
+# ───── ULTRA FAST VP9 OUTPUT ─────
 
 def smart_output(src, dst):
     size_mb = os.path.getsize(src) / (1024 * 1024)
 
-    if size_mb <= 12:
-        run([
-            "ffmpeg","-y","-i",src,
-            "-c","copy",
-            "-movflags","+faststart",
-            dst
-        ])
+    # instant path for small shorts
+    if size_mb < 8:
+        os.rename(src, dst)
         return
 
     run([
         "ffmpeg","-y","-i",src,
-        "-vf","scale=720:-2:flags=fast_bilinear",
+
+        "-vf","scale=720:-2",
+
         "-c:v","libvpx-vp9",
-        "-b:v","380k",
-        "-deadline","realtime",
-        "-cpu-used","24",
+        "-b:v","260k",
+        "-maxrate","320k",
+        "-bufsize","600k",
+
+        "-threads","0",
         "-row-mt","1",
+        "-tile-columns","4",
+        "-frame-parallel","1",
+        "-cpu-used","32",
+        "-deadline","realtime",
+
         "-pix_fmt","yuv420p",
-        "-movflags","+faststart",
+
         "-c:a","libopus",
         "-b:a","32k",
+
+        "-movflags","+faststart",
         dst
     ])
 
@@ -165,38 +184,43 @@ async def handle(m: Message):
         except:
             pass
 
-        with tempfile.TemporaryDirectory() as tmp:
-            raw = os.path.join(tmp, "raw.mp4")
-            final = os.path.join(tmp, "final.mp4")
+        # RAM disk temp dir
+        base_tmp = RAMDISK or tempfile.gettempdir()
+        tmp = tempfile.mkdtemp(dir=base_tmp)
 
-            try:
-                await asyncio.to_thread(smart_download, url, raw)
-                await asyncio.to_thread(smart_output, raw, final)
+        raw = os.path.join(tmp, "raw.mp4")
+        final = os.path.join(tmp, "final.mp4")
 
-                elapsed = time.perf_counter() - start_time
-                resp = f"{elapsed:.2f}s"
+        try:
+            await asyncio.to_thread(smart_download, url, raw)
+            await asyncio.to_thread(smart_output, raw, final)
 
-                caption = (
-                    "@nagudownloaderbot 🤍\n\n"
-                    f"𝐑𝐞𝐪𝐮𝐞𝐬𝐭𝐞𝐝 𝐛𝐲 {mention(m.from_user)}\n"
-                    f"𝐑𝐞𝐬𝐩𝐨𝐧𝐬𝐞 𝐓𝐢𝐦𝐞 — {resp}"
-                )
+            elapsed = time.perf_counter() - start_time
 
-                sent = await bot.send_video(
-                    m.chat.id,
-                    FSInputFile(final),
-                    caption=caption,
-                    parse_mode="HTML",
-                    supports_streaming=True
-                )
+            caption = (
+                "@nagudownloaderbot 🤍\n\n"
+                f"𝐑𝐞𝐪𝐮𝐞𝐬𝐭𝐞𝐝 𝐛𝐲 {mention(m.from_user)}\n"
+                f"𝐑𝐞𝐬𝐩𝐨𝐧𝐬𝐞 𝐓𝐢𝐦𝐞 — {elapsed:.2f}s"
+            )
 
-                if m.chat.type != "private":
-                    try:
-                        await bot.pin_chat_message(m.chat.id, sent.message_id)
-                    except:
-                        pass
-            except:
-                pass
+            sent = await bot.send_video(
+                m.chat.id,
+                FSInputFile(final),
+                caption=caption,
+                parse_mode="HTML",
+                supports_streaming=True
+            )
+
+            if m.chat.type != "private":
+                try:
+                    await bot.pin_chat_message(m.chat.id, sent.message_id)
+                except:
+                    pass
+
+        except:
+            pass
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 async def main():
     await dp.start_polling(bot)
