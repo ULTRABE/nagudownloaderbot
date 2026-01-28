@@ -126,15 +126,15 @@ def smart_download(url, out):
 def sharp_compress(src, dst):
     run([
         "ffmpeg","-y","-i",src,
-        "-vf","scale=720:-2:flags=lanczos",
-        "-c:v","libx264",
-        "-preset","veryfast",
-        "-crf","27",
-        "-profile:v","high",
-        "-level","4.1",
+        "-vf","scale=640:-2:flags=lanczos",
+        "-c:v","libvpx-vp9",
+        "-b:v","350k",          # magic number
+        "-row-mt","1",
+        "-deadline","realtime",
+        "-cpu-used","10",
         "-pix_fmt","yuv420p",
         "-movflags","+faststart",
-        "-c:a","aac","-b:a","96k",
+        "-c:a","libopus","-b:a","32k",
         dst
     ])
 
