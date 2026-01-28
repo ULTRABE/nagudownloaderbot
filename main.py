@@ -12,59 +12,64 @@ BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
 
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
-
 queue = asyncio.Semaphore(8)
 
-YTM_RE     = re.compile(r"https?://music\.youtube\.com/\S+")
+YT_COOKIES = "cookies_youtube.txt"
+IG_COOKIES = "cookies_instagram.txt"
+
+VIDEO_RE = re.compile(r"https?://(?!music\.youtube|open\.spotify)\S+")
+YTM_RE = re.compile(r"https?://music\.youtube\.com/\S+")
 SPOTIFY_RE = re.compile(r"https?://open\.spotify\.com/track/\S+")
-VIDEO_RE   = re.compile(r"https?://\S+")
 
 # ───────── VIDEO CORE ─────────
 
-FAST_OPTS = {
+BASE_YDL = {
     "quiet": True,
     "format": "bv*+ba/best",
     "merge_output_format": "mp4",
     "noplaylist": True,
+    "continuedl": False,
     "nopart": True,
-}
-
-SEGMENTED_OPTS = FAST_OPTS | {
-    "concurrent_fragment_downloads": 8,
-    "http_chunk_size": 5 * 1024 * 1024,
-    "retries": 2,
-    "fragment_retries": 2,
+    "nooverwrites": True,
+    "retries": 0,
+    "fragment_retries": 0,
 }
 
 def run(cmd):
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-def smart_download(url, folder):
-    raw = os.path.join(folder, "raw.mp4")
+def smart_download(url, out):
+
+    opts = BASE_YDL.copy()
+    opts["outtmpl"] = out
     domain = url.lower()
 
-    opts = SEGMENTED_OPTS if (
-        "youtube.com" in domain or
-        "youtu.be" in domain or
-        "instagram.com" in domain
-    ) else FAST_OPTS
+    # cookies (CRITICAL FIX)
+    if "youtube.com" in domain or "youtu.be" in domain:
+        if os.path.exists(YT_COOKIES):
+            opts["cookiefile"] = YT_COOKIES
 
-    opts = opts.copy()
-    opts["outtmpl"] = raw
+    if "instagram.com" in domain:
+        if os.path.exists(IG_COOKIES):
+            opts["cookiefile"] = IG_COOKIES
+
+    # segmented streams for heavy platforms
+    if "youtube" in domain or "instagram" in domain:
+        opts.update({
+            "concurrent_fragment_downloads": 8,
+            "http_chunk_size": 5 * 1024 * 1024,
+            "retries": 2,
+            "fragment_retries": 2,
+        })
 
     with YoutubeDL(opts) as y:
         y.download([url])
 
-    if not os.path.exists(raw):
-        raise RuntimeError("Download failed")
-
-    return raw
-
 def compress(src, dst):
-    if os.path.getsize(src) / 1024 / 1024 <= 12:
+    size = os.path.getsize(src) / 1024 / 1024
+    if size <= 12:
         run(["ffmpeg","-y","-i",src,"-c","copy","-movflags","+faststart",dst])
         return
-
     run([
         "ffmpeg","-y","-i",src,
         "-vf","scale=720:-2",
@@ -76,18 +81,19 @@ def compress(src, dst):
 
 # ───────── AUDIO CORE ─────────
 
-AUDIO_OPTS = {
+AUDIO_YDL = {
     "quiet": True,
     "format": "bestaudio/best",
     "postprocessors": [
         {"key":"FFmpegExtractAudio","preferredcodec":"mp3","preferredquality":"96"},
+        {"key":"FFmpegMetadata"},
         {"key":"EmbedThumbnail"},
     ],
     "writethumbnail": True,
 }
 
-def yt_music_mp3(url, folder):
-    opts = AUDIO_OPTS.copy()
+def yt_to_mp3(url, folder):
+    opts = AUDIO_YDL.copy()
     opts["outtmpl"] = os.path.join(folder, "%(title)s.%(ext)s")
 
     with YoutubeDL(opts) as ydl:
@@ -96,12 +102,11 @@ def yt_music_mp3(url, folder):
 
 def spotify_title(url):
     return requests.get(
-        f"https://open.spotify.com/oembed?url={url}",
-        timeout=5
+        f"https://open.spotify.com/oembed?url={url}", timeout=5
     ).json()["title"]
 
 def spotify_mp3(title, folder):
-    opts = AUDIO_OPTS.copy()
+    opts = AUDIO_YDL.copy()
     opts["default_search"] = "ytsearch1"
     opts["outtmpl"] = os.path.join(folder, "%(title)s.%(ext)s")
 
@@ -112,7 +117,7 @@ def spotify_mp3(title, folder):
 def mention(u):
     return f'<a href="tg://user?id={u.id}">{u.first_name}</a>'
 
-# ───────── START ─────────
+# ───────── UI ─────────
 
 @dp.message(CommandStart())
 async def start(m: Message):
@@ -122,19 +127,24 @@ async def start(m: Message):
 
 @dp.message(F.text.regexp(YTM_RE))
 async def yt_music(m: Message):
-    try: await m.delete()
-    except: pass
+    await m.delete()
 
     start = time.perf_counter()
 
     with tempfile.TemporaryDirectory() as tmp:
-        mp3 = await asyncio.to_thread(yt_music_mp3, m.text, tmp)
+        mp3 = await asyncio.to_thread(yt_to_mp3, m.text, tmp)
         elapsed = (time.perf_counter()-start)*1000
+
+        caption = (
+            f"> @nagudownloaderbot 💝\n>\n"
+            f"> Requested by {mention(m.from_user)}\n"
+            f"> Response Time : {elapsed:.0f} ms"
+        )
 
         await bot.send_audio(
             m.chat.id,
             FSInputFile(mp3),
-            caption=f"> @nagudownloaderbot 💝\n>\n> Requested by {mention(m.from_user)}\n> Response Time : {elapsed:.0f} ms",
+            caption=caption,
             parse_mode="HTML"
         )
 
@@ -142,8 +152,7 @@ async def yt_music(m: Message):
 
 @dp.message(F.text.regexp(SPOTIFY_RE))
 async def spotify(m: Message):
-    try: await m.delete()
-    except: pass
+    await m.delete()
 
     start = time.perf_counter()
 
@@ -157,48 +166,53 @@ async def spotify(m: Message):
         mp3 = await asyncio.to_thread(spotify_mp3, title, tmp)
         elapsed = (time.perf_counter()-start)*1000
 
+        caption = (
+            f"> @nagudownloaderbot 💝\n>\n"
+            f"> Requested by {mention(m.from_user)}\n"
+            f"> Response Time : {elapsed:.0f} ms"
+        )
+
         await bot.send_audio(
             m.chat.id,
             FSInputFile(mp3),
-            caption=f"> @nagudownloaderbot 💝\n>\n> Requested by {mention(m.from_user)}\n> Response Time : {elapsed:.0f} ms",
+            caption=caption,
             parse_mode="HTML"
         )
 
-# ───────── VIDEO (NOW FILTERED PROPERLY) ─────────
+# ───────── VIDEO ─────────
 
 @dp.message(F.text.regexp(VIDEO_RE))
 async def video(m: Message):
-
-    text = m.text.lower()
-
-    if "music.youtube.com" in text or "open.spotify.com" in text:
-        return   # 🚫 stop double processing
-
-    try: await m.delete()
-    except: pass
-
     async with queue:
+
+        await m.delete()
         start = time.perf_counter()
 
         with tempfile.TemporaryDirectory() as tmp:
-            try:
-                raw = await asyncio.to_thread(smart_download, m.text, tmp)
-                final = os.path.join(tmp, "final.mp4")
+            raw = os.path.join(tmp, "raw.mp4")
+            final = os.path.join(tmp, "final.mp4")
 
+            try:
+                await asyncio.to_thread(smart_download, m.text, raw)
                 await asyncio.to_thread(compress, raw, final)
 
                 elapsed = (time.perf_counter()-start)*1000
 
+                caption = (
+                    "@nagudownloaderbot 🤍\n\n"
+                    f"Requested by {mention(m.from_user)}\n"
+                    f"Response Time : {elapsed:.0f} ms"
+                )
+
                 await bot.send_video(
                     m.chat.id,
                     FSInputFile(final),
-                    caption=f"@nagudownloaderbot 🤍\n\nRequested by {mention(m.from_user)}\nResponse Time : {elapsed:.0f} ms",
+                    caption=caption,
                     parse_mode="HTML",
                     supports_streaming=True
                 )
-
             except Exception as e:
-                logging.exception(e)
+                logging.error(e)
                 await m.answer("Download failed")
 
 # ───────── RUN ─────────
