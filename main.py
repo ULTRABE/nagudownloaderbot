@@ -11,7 +11,7 @@ dp = Dispatcher()
 
 # ───── FASTER CORE ─────
 MAX_WORKERS = 8          # +33% throughput safely
-FRAGMENTS = 8
+FRAGMENTS = 10
 queue = asyncio.Semaphore(MAX_WORKERS)
 
 LINK_RE = re.compile(r"https?://\S+")
@@ -159,14 +159,18 @@ def smart_output(src, dst):
     run([
         "ffmpeg","-y","-i",src,
         "-vf","scale=720:-2:flags=fast_bilinear",
-        "-c:v","libx264",
-        "-preset","veryfast",
-        "-crf","27",
+        "-c:v","libvpx-vp9",
+        "-b:v","380k",          # sweet spot for reels/shorts
+        "-deadline","realtime",
+        "-cpu-used","24",
+        "-row-mt","1",
         "-pix_fmt","yuv420p",
         "-movflags","+faststart",
-        "-c:a","aac","-b:a","96k",
+        "-c:a","libopus",
+        "-b:a","32k",
         dst
     ])
+
 
 
 
