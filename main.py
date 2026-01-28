@@ -103,7 +103,7 @@ def smart_output(src, dst):
     size_mb = os.path.getsize(src) / (1024 * 1024)
 
     # if already small → remux only (super fast)
-    if size_mb <= 8:
+    if size_mb <= 15:
         run([
             "ffmpeg","-y","-i",src,
             "-c","copy",
