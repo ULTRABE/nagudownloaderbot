@@ -17,8 +17,8 @@ SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET", "")
 
 # Cookie files and folders
 IG_COOKIES = "cookies_instagram.txt"
-YT_COOKIES_FOLDER = "yt_cookies"
-YT_MUSIC_COOKIES_FOLDER = "yt_music_cookies"
+YT_COOKIES_FOLDER = "yt cookies"
+YT_MUSIC_COOKIES_FOLDER = "yt music cookies"
 
 IG_STICKER = "CAACAgIAAxkBAAEadEdpekZa1-2qYm-1a3dX0JmM_Z9uDgAC4wwAAjAT0Euml6TE9QhYWzgE"
 YT_STICKER = "CAACAgIAAxkBAAEaedlpez9LOhwF-tARQsD1V9jzU8iw1gACQjcAAgQyMEixyZ896jTkCDgE"
