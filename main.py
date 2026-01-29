@@ -1,4 +1,4 @@
-import asyncio, os, re, subprocess, tempfile, time, logging, random, zipfile
+import asyncio, os, re, subprocess, tempfile, time, logging, random, glob
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F
@@ -11,12 +11,19 @@ logger = logging.getLogger("NAGU")
 
 BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
 
-YT_COOKIES = "cookies_youtube.txt"
+# Spotify API (from environment variables)
+SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID", "")
+SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET", "")
+
+# Cookie files and folders
 IG_COOKIES = "cookies_instagram.txt"
+YT_COOKIES_FOLDER = "yt_cookies"
+YT_MUSIC_COOKIES_FOLDER = "yt_music_cookies"
 
 IG_STICKER = "CAACAgIAAxkBAAEadEdpekZa1-2qYm-1a3dX0JmM_Z9uDgAC4wwAAjAT0Euml6TE9QhYWzgE"
 YT_STICKER = "CAACAgIAAxkBAAEaedlpez9LOhwF-tARQsD1V9jzU8iw1gACQjcAAgQyMEixyZ896jTkCDgE"
 PIN_STICKER = "CAACAgIAAxkBAAEaegZpe0KJMDIkiCbudZrXhJDwBXYHqgACExIAAq3mUUhZ4G5Cm78l2DgE"
+MUSIC_STICKER = "CAACAgIAAxkBAAEaegZpe0KJMDIkiCbudZrXhJDwBXYHqgACExIAAq3mUUhZ4G5Cm78l2DgE"
 
 PROXIES = [
     "http://203033:JmNd95Z3vcX@196.51.85.7:8800",
@@ -36,6 +43,16 @@ USER_AGENTS = [
 def pick_proxy(): return random.choice(PROXIES)
 def pick_ua(): return random.choice(USER_AGENTS)
 
+# Cookie rotation system
+def get_random_cookie(folder):
+    """Get random cookie file from folder"""
+    if not os.path.exists(folder):
+        return None
+    cookies = glob.glob(f"{folder}/*.txt")
+    if not cookies:
+        return None
+    return random.choice(cookies)
+
 def resolve_pin(url):
     if "pin.it/" in url:
         return subprocess.getoutput(f"curl -Ls -o /dev/null -w '%{{url_effective}}' {url}")
@@ -44,6 +61,7 @@ def resolve_pin(url):
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 semaphore = asyncio.Semaphore(16)
+MUSIC_SEMAPHORE = asyncio.Semaphore(6)
 
 LINK_RE = re.compile(r"https?://\S+")
 
@@ -91,7 +109,7 @@ Just send the link!
 🎧 𝐒𝐏𝐎𝐓𝐈𝐅𝐘 𝐏𝐋𝐀𝐘𝐋𝐈𝐒𝐓
    • Send Spotify playlist URL
    • Downloads all songs
-   • Sends to DM + ZIP to chat
+   • Sends to your DM
 - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 𝐅𝐄𝐀𝐓𝐔𝐑𝐄𝐒:
 ⚡ Ultra Fast (1-7s)
@@ -115,7 +133,7 @@ def run(cmd):
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 # ═══════════════════════════════════════════════════════════
-# INSTAGRAM - ULTRA FAST (OLD PIPELINE RESTORED)
+# INSTAGRAM - ULTRA FAST MP4
 # ═══════════════════════════════════════════════════════════
 
 async def ig_download(url, out, use_cookies=False):
@@ -208,7 +226,7 @@ async def handle_instagram(m, url):
         await m.answer(f"❌ 𝐈𝐧𝐬𝐭𝐚𝐠𝐫𝐚𝐦 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════
-# YOUTUBE - FAST VP9 (EXACT INSTAGRAM SETTINGS)
+# YOUTUBE - FAST VP9 WITH BITRATE
 # ═══════════════════════════════════════════════════════════
 
 async def handle_youtube(m, url):
@@ -222,7 +240,6 @@ async def handle_youtube(m, url):
             raw = t / "yt.mp4"
             final = t / "ytf.mp4"
 
-            # DOWNLOAD BEST 720P
             opts = {
                 "quiet": True,
                 "no_warnings": True,
@@ -240,18 +257,19 @@ async def handle_youtube(m, url):
                 },
             }
             
-            # Try without cookies first
+            # Try without cookies first, then with rotation
             try:
                 await asyncio.to_thread(lambda: YoutubeDL(opts).download([url]))
             except:
-                if os.path.exists(YT_COOKIES):
-                    logger.info("YT: Retrying with cookies")
-                    opts["cookiefile"] = YT_COOKIES
+                cookie_file = get_random_cookie(YT_COOKIES_FOLDER)
+                if cookie_file:
+                    logger.info(f"YT: Using cookie {cookie_file}")
+                    opts["cookiefile"] = cookie_file
                     await asyncio.to_thread(lambda: YoutubeDL(opts).download([url]))
                 else:
                     raise
 
-            # VP9 WITH BITRATE FOR QUALITY (UP TO 12MB)
+            # VP9 with bitrate (up to 12MB)
             await asyncio.to_thread(lambda: run([
                 "ffmpeg", "-y", "-i", str(raw),
                 "-vf", "scale=720:-2",
@@ -352,28 +370,18 @@ async def handle_pinterest(m, url):
         await m.answer(f"❌ 𝐏𝐢𝐧𝐭𝐞𝐫𝐞𝐬𝐭 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════
-# SPOTIFY PLAYLIST DOWNLOADER
+# SPOTIFY PLAYLIST DOWNLOADER (WITH SPOTDL)
 # ═══════════════════════════════════════════════════════════
 
-MUSIC_STICKER = "CAACAgIAAxkBAAEaegZpe0KJMDIkiCbudZrXhJDwBXYHqgACExIAAq3mUUhZ4G5Cm78l2DgE"
-MUSIC_SEMAPHORE = asyncio.Semaphore(6)
-
 async def download_spotify_playlist(m, url):
-    """Download Spotify playlist via YouTube search"""
+    """Download Spotify playlist using spotdl"""
     async with MUSIC_SEMAPHORE:
         logger.info(f"SPOTIFY: {url}")
         
-        # Spotify has DRM - inform user to use YouTube playlist instead
-        await m.answer(
-            "❌ 𝐒𝐩𝐨𝐭𝐢𝐟𝐲 𝐃𝐑𝐌 𝐏𝐫𝐨𝐭𝐞𝐜𝐭𝐞𝐝\n\n"
-            "Spotify uses DRM protection.\n\n"
-            "𝐀𝐥𝐭𝐞𝐫𝐧𝐚𝐭𝐢𝐯𝐞:\n"
-            "• Use YouTube playlist URL instead\n"
-            "• Or use /mp3 for individual songs"
-        )
-        return
+        if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
+            await m.answer("❌ 𝐒𝐩𝐨𝐭𝐢𝐟𝐲 𝐀𝐏𝐈 𝐧𝐨𝐭 𝐜𝐨𝐧𝐟𝐢𝐠𝐮𝐫𝐞𝐝")
+            return
         
-        # OLD CODE (DRM protected):
         s = await bot.send_sticker(m.chat.id, MUSIC_STICKER)
         start = time.perf_counter()
 
@@ -381,29 +389,18 @@ async def download_spotify_playlist(m, url):
             with tempfile.TemporaryDirectory() as tmp:
                 tmp = Path(tmp)
                 
-                opts = {
-                    "quiet": True,
-                    "no_warnings": True,
-                    "format": "bestaudio/best",
-                    "outtmpl": str(tmp / "%(title)s.%(ext)s"),
-                    "proxy": pick_proxy(),
-                    "http_headers": {"User-Agent": pick_ua()},
-                    "postprocessors": [{
-                        "key": "FFmpegExtractAudio",
-                        "preferredcodec": "mp3",
-                        "preferredquality": "320",
-                    }],
-                    "retries": 3,
-                    "fragment_retries": 3,
-                }
+                # Use spotdl to download
+                cmd = [
+                    "spotdl",
+                    "--client-id", SPOTIFY_CLIENT_ID,
+                    "--client-secret", SPOTIFY_CLIENT_SECRET,
+                    "--output", str(tmp),
+                    "--format", "mp3",
+                    "--bitrate", "320k",
+                    url
+                ]
                 
-                if os.path.exists(YT_COOKIES):
-                    opts["cookiefile"] = YT_COOKIES
-                
-                # Download playlist
-                with YoutubeDL(opts) as ydl:
-                    info = await asyncio.to_thread(lambda: ydl.extract_info(url, download=True))
-                    playlist_title = info.get('title', 'Playlist')
+                await asyncio.to_thread(lambda: subprocess.run(cmd, capture_output=True))
                 
                 mp3_files = list(tmp.glob("*.mp3"))
                 
@@ -427,25 +424,14 @@ async def download_spotify_playlist(m, url):
                     except Exception as e:
                         logger.error(f"DM failed: {e}")
                 
-                # Create ZIP
-                zip_path = tmp / f"{playlist_title}.zip"
-                with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                    for mp3 in mp3_files:
-                        zipf.write(mp3, mp3.name)
-                
                 elapsed = time.perf_counter() - start
                 
-                # Send ZIP to group
-                await bot.send_document(
-                    m.chat.id,
-                    FSInputFile(zip_path),
-                    caption=(
-                        f"𝐒𝐏𝐎𝐓𝐈𝐅𝐘 𝐏𝐋𝐀𝐘𝐋𝐈𝐒𝐓 ★\n"
-                        f"- - - - - - - - - - - - - - - - - - - - - - - - - - - -\n"
-                        f"₪ 𝐔𝐬𝐞𝐫: {mention(m.from_user)}\n"
-                        f"₪ 𝐒𝐨𝐧𝐠𝐬: {len(mp3_files)}\n"
-                        f"₪ 𝐓𝐢𝐦𝐞: {elapsed:.2f}s"
-                    ),
+                # Tag user in group chat
+                await m.answer(
+                    f"✅ 𝐏𝐥𝐚𝐲𝐥𝐢𝐬𝐭 𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐞𝐝\n\n"
+                    f"{mention(m.from_user)}\n"
+                    f"₪ 𝐒𝐨𝐧𝐠𝐬: {len(mp3_files)}\n"
+                    f"₪ 𝐒𝐞𝐧𝐭 𝐭𝐨 𝐲𝐨𝐮𝐫 𝐃𝐌",
                     parse_mode="HTML"
                 )
                 
@@ -460,11 +446,11 @@ async def download_spotify_playlist(m, url):
             await m.answer(f"❌ 𝐒𝐩𝐨𝐭𝐢𝐟𝐲 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════
-# MP3 SEARCH COMMAND
+# MP3 SEARCH COMMAND (WITH COOKIE ROTATION)
 # ═══════════════════════════════════════════════════════════
 
 async def search_and_download_song(m, query):
-    """Search and download single song"""
+    """Search and download single song with cookie rotation"""
     async with MUSIC_SEMAPHORE:
         logger.info(f"MP3: {query}")
         s = await bot.send_sticker(m.chat.id, MUSIC_STICKER)
@@ -489,9 +475,11 @@ async def search_and_download_song(m, query):
                     }],
                 }
                 
-                # Add cookies
-                if os.path.exists(YT_COOKIES):
-                    opts["cookiefile"] = YT_COOKIES
+                # Use random cookie from yt_music_cookies folder
+                cookie_file = get_random_cookie(YT_MUSIC_COOKIES_FOLDER)
+                if cookie_file:
+                    opts["cookiefile"] = cookie_file
+                    logger.info(f"MP3: Using cookie {cookie_file}")
                 
                 # Search and download
                 with YoutubeDL(opts) as ydl:
@@ -588,6 +576,16 @@ async def main():
     logger.info("NAGU DOWNLOADER BOT - STARTING")
     logger.info(f"Semaphore: 16 concurrent downloads")
     logger.info(f"Proxies: {len(PROXIES)}")
+    
+    # Check cookie folders
+    if os.path.exists(YT_COOKIES_FOLDER):
+        yt_cookies = len(glob.glob(f"{YT_COOKIES_FOLDER}/*.txt"))
+        logger.info(f"YT cookies: {yt_cookies} files")
+    
+    if os.path.exists(YT_MUSIC_COOKIES_FOLDER):
+        music_cookies = len(glob.glob(f"{YT_MUSIC_COOKIES_FOLDER}/*.txt"))
+        logger.info(f"YT Music cookies: {music_cookies} files")
+    
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
