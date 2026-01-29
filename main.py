@@ -201,8 +201,31 @@ async def handle_instagram(m, url):
         await m.answer(f"❌ 𝐈𝐧𝐬𝐭𝐚𝐠𝐫𝐚𝐦 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════
-# YOUTUBE - OPTIMIZED FOR SPEED
+# YOUTUBE - ULTRA FAST (SAME AS INSTAGRAM)
 # ═══════════════════════════════════════════════════════════
+
+def yt_optimize(src, out):
+    """Same fast pipeline as Instagram"""
+    size_mb = src.stat().st_size / 1024 / 1024
+    logger.info(f"YT: {size_mb:.2f} MB")
+    
+    if size_mb <= 18:
+        # INSTANT REMUX (NO RE-ENCODE)
+        logger.info("YT: Fast copy (<=18MB)")
+        run(["ffmpeg", "-y", "-i", str(src), "-c", "copy", "-movflags", "+faststart", str(out)])
+    else:
+        # FAST HIGH COMPRESSION (SHARP)
+        logger.info("YT: Fast VP9 compression (>18MB)")
+        run([
+            "ffmpeg", "-y", "-i", str(src),
+            "-vf", "scale=720:-2",
+            "-c:v", "libvpx-vp9", "-crf", "26", "-b:v", "0",
+            "-cpu-used", "8", "-row-mt", "1",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "libopus", "-b:a", "64k",
+            "-movflags", "+faststart",
+            str(out)
+        ])
 
 async def handle_youtube(m, url):
     logger.info(f"YT: {url}")
@@ -243,17 +266,8 @@ async def handle_youtube(m, url):
                 else:
                     raise
 
-            # Fast VP9 compression
-            await asyncio.to_thread(lambda: run([
-                "ffmpeg", "-y", "-i", str(raw),
-                "-vf", "scale=720:-2",
-                "-c:v", "libvpx-vp9", "-crf", "30", "-b:v", "0",
-                "-cpu-used", "8", "-row-mt", "1",
-                "-pix_fmt", "yuv420p",
-                "-c:a", "libopus", "-b:a", "64k",
-                "-movflags", "+faststart",
-                str(final)
-            ]))
+            # SAME FAST PIPELINE AS INSTAGRAM
+            await asyncio.to_thread(yt_optimize, raw, final)
 
             elapsed = time.perf_counter() - start
             try:
@@ -350,6 +364,17 @@ async def handle_pinterest(m, url):
 @dp.message(F.text.regexp(LINK_RE))
 async def handle(m: Message):
     url = m.text.strip()
+
+    # Delete user's link after 5 seconds
+    async def delete_link_later():
+        await asyncio.sleep(5)
+        try:
+            await m.delete()
+            logger.info("Deleted user's link after 5s")
+        except:
+            pass
+    
+    asyncio.create_task(delete_link_later())
 
     async with semaphore:
         try:
