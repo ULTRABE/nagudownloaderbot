@@ -73,25 +73,32 @@ async def start(m: Message):
 async def help_command(m: Message):
     await m.reply("""𝐍𝐀𝐆𝐔 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑 - 𝐇𝐄𝐋𝐏 ★
 - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-𝐒𝐔𝐏𝐏𝐎𝐑𝐓𝐄𝐃 𝐏𝐋𝐀𝐓𝐅𝐎𝐑𝐌𝐒:
+𝐕𝐈𝐃𝐄𝐎 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃:
 
-📸 𝐈𝐍𝐒𝐓𝐀𝐆𝐑𝐀𝐌
-   • Posts, Reels, IGTV, Stories
+📸 𝐈𝐍𝐒𝐓𝐀𝐆𝐑𝐀𝐌 - Posts, Reels, Stories
+🎬 𝐘𝐎𝐔𝐓𝐔𝐁𝐄 - Videos, Shorts, Streams
+📌 𝐏𝐈𝐍𝐓𝐄𝐑𝐄𝐒𝐓 - Video Pins
 
-🎬 𝐘𝐎𝐔𝐓𝐔𝐁𝐄
-   • Videos, Shorts, Streams
+Just send the link!
+- - - - - - - - - - - - - - - - - - - - - - - - - - - -
+𝐌𝐔𝐒𝐈𝐂 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃:
 
-📌 𝐏𝐈𝐍𝐓𝐄𝐑𝐄𝐒𝐓
-   • Video Pins, Idea Pins
+🎵 /𝐦𝐩𝟑 song name
+   • Searches & downloads any song
+   • 320kbps MP3 quality
+   • Sends to chat
+
+🎧 𝐒𝐏𝐎𝐓𝐈𝐅𝐘 𝐏𝐋𝐀𝐘𝐋𝐈𝐒𝐓
+   • Send Spotify playlist URL
+   • Downloads all songs
+   • Sends to DM + ZIP to chat
 - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 𝐅𝐄𝐀𝐓𝐔𝐑𝐄𝐒:
-⚡ Ultra Fast (1-5s)
-🎯 720p HD Quality
-💾 Optimized Size
+⚡ Ultra Fast (1-7s)
+🎯 HD Quality (720p)
+💾 Small File Size
 🔒 No Watermarks
-- - - - - - - - - - - - - - - - - - - - - - - - - - - -
-𝐔𝐒𝐀𝐆𝐄:
-Just send any video link!
+🎵 320kbps Audio
 - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 𝐎𝐖𝐍𝐄𝐑 ⇁ @bhosadih""", quote=True)
 
@@ -352,9 +359,21 @@ MUSIC_STICKER = "CAACAgIAAxkBAAEaegZpe0KJMDIkiCbudZrXhJDwBXYHqgACExIAAq3mUUhZ4G5
 MUSIC_SEMAPHORE = asyncio.Semaphore(6)
 
 async def download_spotify_playlist(m, url):
-    """Download entire Spotify playlist"""
+    """Download Spotify playlist via YouTube search"""
     async with MUSIC_SEMAPHORE:
         logger.info(f"SPOTIFY: {url}")
+        
+        # Spotify has DRM - inform user to use YouTube playlist instead
+        await m.answer(
+            "❌ 𝐒𝐩𝐨𝐭𝐢𝐟𝐲 𝐃𝐑𝐌 𝐏𝐫𝐨𝐭𝐞𝐜𝐭𝐞𝐝\n\n"
+            "Spotify uses DRM protection.\n\n"
+            "𝐀𝐥𝐭𝐞𝐫𝐧𝐚𝐭𝐢𝐯𝐞:\n"
+            "• Use YouTube playlist URL instead\n"
+            "• Or use /mp3 for individual songs"
+        )
+        return
+        
+        # OLD CODE (DRM protected):
         s = await bot.send_sticker(m.chat.id, MUSIC_STICKER)
         start = time.perf_counter()
 
@@ -368,6 +387,7 @@ async def download_spotify_playlist(m, url):
                     "format": "bestaudio/best",
                     "outtmpl": str(tmp / "%(title)s.%(ext)s"),
                     "proxy": pick_proxy(),
+                    "http_headers": {"User-Agent": pick_ua()},
                     "postprocessors": [{
                         "key": "FFmpegExtractAudio",
                         "preferredcodec": "mp3",
@@ -377,13 +397,13 @@ async def download_spotify_playlist(m, url):
                     "fragment_retries": 3,
                 }
                 
-                if os.path.exists("cookies_music.txt"):
-                    opts["cookiefile"] = "cookies_music.txt"
+                if os.path.exists(YT_COOKIES):
+                    opts["cookiefile"] = YT_COOKIES
                 
                 # Download playlist
                 with YoutubeDL(opts) as ydl:
                     info = await asyncio.to_thread(lambda: ydl.extract_info(url, download=True))
-                    playlist_title = info.get('title', 'Spotify Playlist')
+                    playlist_title = info.get('title', 'Playlist')
                 
                 mp3_files = list(tmp.glob("*.mp3"))
                 
@@ -460,6 +480,7 @@ async def search_and_download_song(m, query):
                     "format": "bestaudio/best",
                     "outtmpl": str(tmp / "%(title)s.%(ext)s"),
                     "proxy": pick_proxy(),
+                    "http_headers": {"User-Agent": pick_ua()},
                     "default_search": "ytsearch",
                     "postprocessors": [{
                         "key": "FFmpegExtractAudio",
@@ -467,6 +488,10 @@ async def search_and_download_song(m, query):
                         "preferredquality": "320",
                     }],
                 }
+                
+                # Add cookies
+                if os.path.exists(YT_COOKIES):
+                    opts["cookiefile"] = YT_COOKIES
                 
                 # Search and download
                 with YoutubeDL(opts) as ydl:
