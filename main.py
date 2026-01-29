@@ -43,7 +43,7 @@ def resolve_pin(url):
 
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
-semaphore = asyncio.Semaphore(12)
+semaphore = asyncio.Semaphore(16)
 
 LINK_RE = re.compile(r"https?://\S+")
 
@@ -55,7 +55,7 @@ LINK_RE = re.compile(r"https?://\S+")
 async def start(m: Message):
     username = m.from_user.username if m.from_user.username else "NoUsername"
     
-    await m.answer(f"""𝐖𝐞𝐥𝐜𝐨𝐦𝐞 𝐓𝐨 𝐍𝐀𝐆𝐔 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑 ★
+    await m.reply(f"""𝐖𝐞𝐥𝐜𝐨𝐦𝐞 𝐓𝐨 𝐍𝐀𝐆𝐔 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑 ★
 - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 ₪ 𝐈𝐃 : {m.from_user.id}
 ₪ 𝐔𝐒𝐄𝐑 : @{username}
@@ -63,11 +63,11 @@ async def start(m: Message):
 - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 𝐁𝐎𝐓 𝐇𝐄𝐋𝐏 𝐏𝐀𝐆𝐄 ⇁ /𝐇𝐄𝐋𝐏
 - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-𝐎𝐖𝐍𝐄𝐑 ⇁ @bhosadih""")
+𝐎𝐖𝐍𝐄𝐑 ⇁ @bhosadih""", quote=True)
 
 @dp.message(F.text == "/help")
 async def help_command(m: Message):
-    await m.answer("""𝐍𝐀𝐆𝐔 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑 - 𝐇𝐄𝐋𝐏 ★
+    await m.reply("""𝐍𝐀𝐆𝐔 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑 - 𝐇𝐄𝐋𝐏 ★
 - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 𝐒𝐔𝐏𝐏𝐎𝐑𝐓𝐄𝐃 𝐏𝐋𝐀𝐓𝐅𝐎𝐑𝐌𝐒:
 
@@ -81,7 +81,7 @@ async def help_command(m: Message):
    • Video Pins, Idea Pins
 - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 𝐅𝐄𝐀𝐓𝐔𝐑𝐄𝐒:
-⚡ Ultra Fast (1-7s)
+⚡ Ultra Fast (1-5s)
 🎯 720p HD Quality
 💾 Optimized Size
 🔒 No Watermarks
@@ -89,26 +89,22 @@ async def help_command(m: Message):
 𝐔𝐒𝐀𝐆𝐄:
 Just send any video link!
 - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-𝐎𝐖𝐍𝐄𝐑 ⇁ @bhosadih""")
+𝐎𝐖𝐍𝐄𝐑 ⇁ @bhosadih""", quote=True)
 
 def mention(u):
     return f'<a href="tg://user?id={u.id}">{u.first_name}</a>'
 
 def caption(m, elapsed):
     return (
-        f"𝐍𝐀𝐆𝐔 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑 ★\n"
-        f"- - - - - - - - - - - - - - - - - - - - - - - - - - - -\n"
         f"₪ 𝐔𝐬𝐞𝐫: {mention(m.from_user)}\n"
-        f"₪ 𝐓𝐢𝐦𝐞: {elapsed:.2f}s\n"
-        f"- - - - - - - - - - - - - - - - - - - - - - - - - - - -\n"
-        f"@nagudownloaderbot"
+        f"₪ 𝐓𝐢𝐦𝐞: {elapsed:.2f}s"
     )
 
 def run(cmd):
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 # ═══════════════════════════════════════════════════════════
-# INSTAGRAM - ULTRA FAST
+# INSTAGRAM - ULTRA FAST MP4
 # ═══════════════════════════════════════════════════════════
 
 async def ig_download(url, out, use_cookies=False):
@@ -116,12 +112,12 @@ async def ig_download(url, out, use_cookies=False):
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
-        "format": "best[height<=720]/bestvideo[height<=720]+bestaudio/best",
+        "format": "best[height<=720][ext=mp4]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best",
         "merge_output_format": "mp4",
         "outtmpl": str(out),
         "proxy": pick_proxy(),
         "http_headers": {"User-Agent": pick_ua()},
-        "concurrent_fragment_downloads": 16,
+        "concurrent_fragment_downloads": 20,
         "http_chunk_size": 10485760,
     }
     
@@ -140,7 +136,7 @@ async def handle_instagram(m, url):
         with tempfile.TemporaryDirectory() as t:
             t = Path(t)
             raw = t / "ig.mp4"
-            final = t / "igf.webm"
+            final = t / "igf.mp4"
 
             # Try without cookies first
             try:
@@ -149,14 +145,15 @@ async def handle_instagram(m, url):
                 logger.info("IG: Retrying with cookies")
                 await ig_download(url, raw, use_cookies=True)
 
-            # Ultra fast VP9 encoding
+            # Ultra fast VP9 in MP4 container
             await asyncio.to_thread(lambda: run([
                 "ffmpeg", "-y", "-i", str(raw),
                 "-vf", "scale=720:-2",
-                "-c:v", "libvpx-vp9", "-crf", "33", "-b:v", "0",
-                "-cpu-used", "8", "-row-mt", "1", "-threads", "8",
-                "-deadline", "realtime",
-                "-c:a", "libopus", "-b:a", "48k",
+                "-c:v", "libvpx-vp9", "-crf", "27", "-b:v", "0",
+                "-cpu-used", "8", "-row-mt", "1", "-threads", "12",
+                "-deadline", "realtime", "-tile-columns", "2",
+                "-c:a", "libopus", "-b:a", "64k",
+                "-f", "mp4", "-movflags", "+faststart",
                 str(final)
             ]))
 
@@ -167,7 +164,8 @@ async def handle_instagram(m, url):
                 m.chat.id, FSInputFile(final),
                 caption=caption(m, elapsed),
                 parse_mode="HTML",
-                supports_streaming=True
+                supports_streaming=True,
+                reply_to_message_id=m.message_id
             )
 
             if m.chat.type != "private":
@@ -177,10 +175,10 @@ async def handle_instagram(m, url):
     except Exception as e:
         logger.error(f"IG: {e}")
         await bot.delete_message(m.chat.id, s.message_id)
-        await m.answer(f"❌ 𝐈𝐧𝐬𝐭𝐚𝐠𝐫𝐚𝐦 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
+        await m.reply(f"❌ 𝐈𝐧𝐬𝐭𝐚𝐠𝐫𝐚𝐦 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}", quote=True)
 
 # ═══════════════════════════════════════════════════════════
-# YOUTUBE - ULTRA FAST
+# YOUTUBE - ULTRA FAST MP4
 # ═══════════════════════════════════════════════════════════
 
 async def handle_youtube(m, url):
@@ -192,16 +190,17 @@ async def handle_youtube(m, url):
         with tempfile.TemporaryDirectory() as t:
             t = Path(t)
             raw = t / "yt.mp4"
-            final = t / "ytf.webm"
+            final = t / "ytf.mp4"
 
             opts = {
                 "quiet": True,
                 "no_warnings": True,
-                "format": "best[height<=720]/bestvideo[height<=720]+bestaudio/best",
+                "format": "best[height<=720][ext=mp4]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best",
                 "merge_output_format": "mp4",
                 "outtmpl": str(raw),
                 "proxy": pick_proxy(),
                 "http_headers": {"User-Agent": pick_ua()},
+                "concurrent_fragment_downloads": 20,
                 "extractor_args": {
                     "youtube": {
                         "player_client": ["android", "web"],
@@ -221,14 +220,15 @@ async def handle_youtube(m, url):
                 else:
                     raise
 
-            # Ultra fast VP9 encoding
+            # Ultra fast VP9 in MP4 container
             await asyncio.to_thread(lambda: run([
                 "ffmpeg", "-y", "-i", str(raw),
                 "-vf", "scale=720:-2",
-                "-c:v", "libvpx-vp9", "-crf", "33", "-b:v", "0",
-                "-cpu-used", "8", "-row-mt", "1", "-threads", "8",
-                "-deadline", "realtime",
-                "-c:a", "libopus", "-b:a", "64k",
+                "-c:v", "libvpx-vp9", "-crf", "28", "-b:v", "0",
+                "-cpu-used", "8", "-row-mt", "1", "-threads", "12",
+                "-deadline", "realtime", "-tile-columns", "2",
+                "-c:a", "libopus", "-b:a", "96k",
+                "-f", "mp4", "-movflags", "+faststart",
                 str(final)
             ]))
 
@@ -239,7 +239,8 @@ async def handle_youtube(m, url):
                 m.chat.id, FSInputFile(final),
                 caption=caption(m, elapsed),
                 parse_mode="HTML",
-                supports_streaming=True
+                supports_streaming=True,
+                reply_to_message_id=m.message_id
             )
 
             if m.chat.type != "private":
@@ -249,10 +250,10 @@ async def handle_youtube(m, url):
     except Exception as e:
         logger.error(f"YT: {e}")
         await bot.delete_message(m.chat.id, s.message_id)
-        await m.answer(f"❌ 𝐘𝐨𝐮𝐓𝐮𝐛𝐞 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
+        await m.reply(f"❌ 𝐘𝐨𝐮𝐓𝐮𝐛𝐞 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}", quote=True)
 
 # ═══════════════════════════════════════════════════════════
-# PINTEREST - ULTRA FAST
+# PINTEREST - ULTRA FAST MP4
 # ═══════════════════════════════════════════════════════════
 
 async def handle_pinterest(m, url):
@@ -271,17 +272,23 @@ async def handle_pinterest(m, url):
             opts = {
                 "quiet": True,
                 "no_warnings": True,
-                "format": "best",
+                "format": "best/bestvideo+bestaudio",
+                "merge_output_format": "mp4",
                 "outtmpl": str(raw),
                 "proxy": pick_proxy(),
                 "http_headers": {"User-Agent": pick_ua()},
-                "concurrent_fragment_downloads": 16,
+                "concurrent_fragment_downloads": 20,
             }
 
             await asyncio.to_thread(lambda: YoutubeDL(opts).download([url]))
 
-            # Fast copy
-            await asyncio.to_thread(lambda: run(["ffmpeg", "-y", "-i", str(raw), "-c", "copy", str(final)]))
+            # Fast copy with MP4 optimization
+            await asyncio.to_thread(lambda: run([
+                "ffmpeg", "-y", "-i", str(raw),
+                "-c:v", "copy", "-c:a", "copy",
+                "-f", "mp4", "-movflags", "+faststart",
+                str(final)
+            ]))
 
             elapsed = time.perf_counter() - start
             await bot.delete_message(m.chat.id, s.message_id)
@@ -290,7 +297,8 @@ async def handle_pinterest(m, url):
                 m.chat.id, FSInputFile(final),
                 caption=caption(m, elapsed),
                 parse_mode="HTML",
-                supports_streaming=True
+                supports_streaming=True,
+                reply_to_message_id=m.message_id
             )
 
             if m.chat.type != "private":
@@ -300,7 +308,7 @@ async def handle_pinterest(m, url):
     except Exception as e:
         logger.error(f"PIN: {e}")
         await bot.delete_message(m.chat.id, s.message_id)
-        await m.answer(f"❌ 𝐏𝐢𝐧𝐭𝐞𝐫𝐞𝐬𝐭 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
+        await m.reply(f"❌ 𝐏𝐢𝐧𝐭𝐞𝐫𝐞𝐬𝐭 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}", quote=True)
 
 # ═══════════════════════════════════════════════════════════
 # ROUTER
@@ -324,10 +332,10 @@ async def handle(m: Message):
             elif "pinterest.com" in url.lower() or "pin.it" in url.lower():
                 await handle_pinterest(m, url)
             else:
-                await m.answer("❌ 𝐔𝐧𝐬𝐮𝐩𝐩𝐨𝐫𝐭𝐞𝐝 𝐏𝐥𝐚𝐭𝐟𝐨𝐫𝐦")
+                await m.reply("❌ 𝐔𝐧𝐬𝐮𝐩𝐩𝐨𝐫𝐭𝐞𝐝 𝐏𝐥𝐚𝐭𝐟𝐨𝐫𝐦", quote=True)
         except Exception as e:
             logger.error(f"Error: {e}")
-            await m.answer(f"❌ 𝐄𝐫𝐫𝐨𝐫\n{str(e)[:100]}")
+            await m.reply(f"❌ 𝐄𝐫𝐫𝐨𝐫\n{str(e)[:100]}", quote=True)
 
 # ═══════════════════════════════════════════════════════════
 # MAIN
@@ -335,7 +343,7 @@ async def handle(m: Message):
 
 async def main():
     logger.info("NAGU DOWNLOADER BOT - STARTING")
-    logger.info(f"Semaphore: 12 concurrent downloads")
+    logger.info(f"Semaphore: 16 concurrent downloads")
     logger.info(f"Proxies: {len(PROXIES)}")
     await dp.start_polling(bot)
 
