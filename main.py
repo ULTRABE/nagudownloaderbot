@@ -6,6 +6,8 @@ from aiogram.filters import CommandStart
 from aiogram.types import Message, FSInputFile
 from yt_dlp import YoutubeDL
 
+from audiohandler import handle_audio   # 🔊 external audio logic
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("downloader")
 
@@ -27,6 +29,20 @@ PROXIES = [
 
 def pick_proxy():
     return random.choice(PROXIES)
+
+# ✅ USER AGENTS ADDED
+
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; rv:121.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13.5; rv:120.0) Gecko/20100101 Firefox/120.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/121.0.0.0 Safari/537.36",
+]
+
+def pick_ua():
+    return random.choice(USER_AGENTS)
 
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
@@ -55,7 +71,9 @@ BASE_YDL = {
     ),
 
     "merge_output_format": "mp4",
-    "http_headers": {"User-Agent": "Mozilla/5.0"},
+
+    # ✅ UA ROTATION USED HERE
+    "http_headers": {"User-Agent": pick_ua()},
 }
 
 # ---------------- helpers ----------------
@@ -76,13 +94,16 @@ def fix_pinterest(url):
         return subprocess.getoutput(f"curl -Ls -o /dev/null -w '%{{url_effective}}' {url}")
     return url
 
+def is_music(url: str):
+    u = url.lower()
+    return "music.youtube.com" in u or ("youtube.com/watch" in u and "list=" not in u and "music" in u)
+
 # ---------------- download engine ----------------
 
 async def attempt(url, raw, proxy=None, cookies=None):
     opts = BASE_YDL.copy()
     opts["outtmpl"] = str(raw.with_suffix(".%(ext)s"))
 
-    # 🧠 Pinterest must NOT use chunk mode
     if "pinterest.com" in url:
         opts["concurrent_fragment_downloads"] = 1
         opts["http_chunk_size"] = 0
@@ -127,7 +148,6 @@ async def smart_download(url, raw):
 def optimize(src: Path, out: Path):
     size_mb = src.stat().st_size / 1024 / 1024
 
-    # If already small enough — don't touch it
     if size_mb <= 18:
         run([
             "ffmpeg","-y","-i",src,
@@ -137,29 +157,18 @@ def optimize(src: Path, out: Path):
         ])
         return
 
-    # Smart high-quality compression
     run([
         "ffmpeg","-y","-i",src,
-
-        # best scaler (no blur)
         "-vf","scale=720:-2:flags=lanczos",
-
-        # VP9 high quality mode
         "-c:v","libvpx-vp9",
-        "-crf","26",          # sweet spot (24=huge, 30=lower)
+        "-crf","26",
         "-b:v","0",
-
-        # speed vs quality balance
         "-deadline","realtime",
-        "-cpu-used","4",
+        "-cpu-used","8",
         "-row-mt","1",
-
         "-pix_fmt","yuv420p",
-
-        # light but clean audio
         "-c:a","libopus",
         "-b:a","48k",
-
         "-movflags","+faststart",
         out
     ])
@@ -184,7 +193,6 @@ async def handle(m: Message):
         pass
 
     processing = await bot.send_sticker(m.chat.id, PROCESS_STICKER)
-
     start = time.perf_counter()
 
     async with semaphore:
@@ -194,7 +202,14 @@ async def handle(m: Message):
             final = tmp / "final.mp4"
 
             try:
-                raw_file = await smart_download(m.text, raw)
+                url = m.text.strip()
+
+                if is_music(url):
+                    await bot.delete_message(m.chat.id, processing.message_id)
+                    await handle_audio(bot, m, url)
+                    return
+
+                raw_file = await smart_download(url, raw)
                 await asyncio.to_thread(optimize, raw_file, final)
 
                 elapsed = (time.perf_counter() - start) * 1000
@@ -203,17 +218,23 @@ async def handle(m: Message):
 
                 caption = (
                     "@nagudownloaderbot 🤍\n\n"
-                    f"𝐑𝐞𝐪𝐮𝐞𝐬𝐭𝐞𝐝 𝐛𝐲 {mention(m.from_user)}\n"
+                    f"{mention(m.from_user)}\n"
                     f"𝐑𝐞𝐬𝐩𝐨𝐧𝐬𝐞 𝐓𝐢𝐦𝐞 : {elapsed:.0f} ms"
                 )
 
-                await bot.send_video(
+                sent = await bot.send_video(
                     m.chat.id,
                     FSInputFile(final),
                     caption=caption,
                     parse_mode="HTML",
                     supports_streaming=True
                 )
+
+                if m.chat.type != "private":
+                    try:
+                        await bot.pin_chat_message(m.chat.id, sent.message_id)
+                    except:
+                        pass
 
             except Exception:
                 await bot.delete_message(m.chat.id, processing.message_id)
