@@ -14,6 +14,15 @@ BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
 YT_COOKIES = "cookies_youtube.txt"
 IG_COOKIES = "cookies_instagram.txt"
 
+# DIAGNOSTIC: Check if cookie files exist
+logger.info("=" * 50)
+logger.info("DIAGNOSTIC CHECK - Cookie Files")
+logger.info("=" * 50)
+for cookie_file in [YT_COOKIES, IG_COOKIES, "cookies_music.txt"]:
+    exists = os.path.exists(cookie_file)
+    logger.info(f"Cookie file '{cookie_file}': {'EXISTS' if exists else 'MISSING'}")
+logger.info("=" * 50)
+
 IG_STICKER = "CAACAgIAAxkBAAEadEdpekZa1-2qYm-1a3dX0JmM_Z9uDgAC4wwAAjAT0Euml6TE9QhYWzgE"
 YT_STICKER = "CAACAgIAAxkBAAEaedlpez9LOhwF-tARQsD1V9jzU8iw1gACQjcAAgQyMEixyZ896jTkCDgE"
 PIN_STICKER = "CAACAgIAAxkBAAEaegZpe0KJMDIkiCbudZrXhJDwBXYHqgACExIAAq3mUUhZ4G5Cm78l2DgE"
@@ -73,6 +82,33 @@ HELP ➝ /help
 OWNER ➝ @bhosadih
 """)
 
+@dp.message(F.text == "/help")
+async def help_command(m: Message):
+    await m.answer("""
+◇—◈ HOW TO USE ◈—◇
+
+Simply send me a link from:
+• Instagram (posts, reels, stories)
+• YouTube (videos, shorts)
+• Pinterest (videos, pins)
+
+I'll download and send you the video!
+
+━━━━━━━━━━━━━━━━━━━━━━━
+📌 Supported Platforms:
+✓ Instagram.com
+✓ YouTube.com / Youtu.be
+✓ Pinterest.com / Pin.it
+
+⚡ Features:
+• High quality downloads
+• Fast processing
+• Optimized file sizes
+• No watermarks
+
+OWNER ➝ @bhosadih
+""")
+
 # ---------------- COMMON ----------------
 
 def mention(u):
@@ -105,7 +141,11 @@ async def ig_download(url, out):
     opts = BASE_IG.copy()
     opts["outtmpl"] = str(out)
     opts["proxy"] = pick_proxy()
-    opts["cookiefile"] = IG_COOKIES
+    if os.path.exists(IG_COOKIES):
+        opts["cookiefile"] = IG_COOKIES
+        logger.info(f"Using Instagram cookies from {IG_COOKIES}")
+    else:
+        logger.warning(f"Instagram cookies file not found: {IG_COOKIES}")
     opts["http_headers"] = {"User-Agent": pick_ua()}
     await asyncio.to_thread(lambda: YoutubeDL(opts).download([url]))
 
@@ -124,84 +164,103 @@ def ig_optimize(src, out):
         ])
 
 async def handle_instagram(m, url):
+    logger.info(f"Processing Instagram URL: {url}")
     s = await bot.send_sticker(m.chat.id, IG_STICKER)
     start = time.perf_counter()
 
-    with tempfile.TemporaryDirectory() as t:
-        t = Path(t)
-        raw = t / "ig.mp4"
-        final = t / "igf.mp4"
+    try:
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t)
+            raw = t / "ig.mp4"
+            final = t / "igf.mp4"
 
-        await ig_download(url, raw)
-        await asyncio.to_thread(ig_optimize, raw, final)
+            await ig_download(url, raw)
+            await asyncio.to_thread(ig_optimize, raw, final)
 
-        elapsed = (time.perf_counter() - start) * 1000
+            elapsed = (time.perf_counter() - start) * 1000
+            await bot.delete_message(m.chat.id, s.message_id)
+
+            sent = await bot.send_video(
+                m.chat.id, FSInputFile(final),
+                caption=caption(m, elapsed),
+                parse_mode="HTML",
+                supports_streaming=True
+            )
+
+            if m.chat.type != "private":
+                await bot.pin_chat_message(m.chat.id, sent.message_id)
+            logger.info(f"Instagram download completed in {elapsed:.0f}ms")
+    except Exception as e:
+        logger.error(f"Instagram download failed: {e}", exc_info=True)
         await bot.delete_message(m.chat.id, s.message_id)
-
-        sent = await bot.send_video(
-            m.chat.id, FSInputFile(final),
-            caption=caption(m, elapsed),
-            parse_mode="HTML",
-            supports_streaming=True
-        )
-
-        if m.chat.type != "private":
-            await bot.pin_chat_message(m.chat.id, sent.message_id)
+        await m.answer(f"❌ Instagram download failed: {str(e)}")
 
 # ==================================================
 # ================= YOUTUBE FIXED ==================
 # ==================================================
 
 async def handle_youtube(m, url):
+    logger.info(f"Processing YouTube URL: {url}")
     s = await bot.send_sticker(m.chat.id, YT_STICKER)
     start = time.perf_counter()
 
-    with tempfile.TemporaryDirectory() as t:
-        t = Path(t)
-        raw = t / "yt.mp4"
-        final = t / "ytf.mp4"
+    try:
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t)
+            raw = t / "yt.mp4"
+            final = t / "ytf.mp4"
 
-        opts = {
-            "quiet": True,
-            "format": "bv*[height<=720]+ba/best",
-            "merge_output_format": "mp4",
-            "prefer_ffmpeg": True,
-            "outtmpl": str(raw),
-            "proxy": pick_proxy(),
-            "cookiefile": YT_COOKIES,
-            "http_headers": {"User-Agent": pick_ua()},
-            "force_ipv4": True,
-            "extractor_args": {
-                "youtube": {
-                    "player_client": ["android", "web"],
-                    "player_skip": ["configs"],
-                }
-            },
-        }
+            opts = {
+                "quiet": True,
+                "format": "bv*[height<=720]+ba/best",
+                "merge_output_format": "mp4",
+                "prefer_ffmpeg": True,
+                "outtmpl": str(raw),
+                "proxy": pick_proxy(),
+                "http_headers": {"User-Agent": pick_ua()},
+                "force_ipv4": True,
+                "extractor_args": {
+                    "youtube": {
+                        "player_client": ["android", "web"],
+                        "player_skip": ["configs"],
+                    }
+                },
+            }
+            
+            if os.path.exists(YT_COOKIES):
+                opts["cookiefile"] = YT_COOKIES
+                logger.info(f"Using YouTube cookies from {YT_COOKIES}")
+            else:
+                logger.warning(f"YouTube cookies file not found: {YT_COOKIES}")
 
-        await asyncio.to_thread(lambda: YoutubeDL(opts).download([url]))
+            await asyncio.to_thread(lambda: YoutubeDL(opts).download([url]))
 
-        run([
-            "ffmpeg","-y","-i",raw,
-            "-vf","scale=1280:-2",
-            "-c:v","libvpx-vp9","-crf","28","-b:v","0",
-            "-cpu-used","8","-row-mt","1",
-            "-c:a","libopus","-b:a","48k",
-            final
-        ])
+            run([
+                "ffmpeg","-y","-i",raw,
+                "-vf","scale=1280:-2",
+                "-c:v","libvpx-vp9","-crf","28","-b:v","0",
+                "-cpu-used","8","-row-mt","1",
+                "-c:a","libopus","-b:a","48k",
+                final
+            ])
 
-        elapsed = (time.perf_counter() - start) * 1000
+            elapsed = (time.perf_counter() - start) * 1000
+            await bot.delete_message(m.chat.id, s.message_id)
+
+            sent = await bot.send_video(
+                m.chat.id, FSInputFile(final),
+                caption=caption(m, elapsed),
+                parse_mode="HTML",
+                supports_streaming=True
+            )
+
+            if m.chat.type != "private":
+                await bot.pin_chat_message(m.chat.id, sent.message_id)
+            logger.info(f"YouTube download completed in {elapsed:.0f}ms")
+    except Exception as e:
+        logger.error(f"YouTube download failed: {e}", exc_info=True)
         await bot.delete_message(m.chat.id, s.message_id)
-
-        sent = await bot.send_video(
-            m.chat.id, FSInputFile(final),
-            caption=caption(m, elapsed),
-            parse_mode="HTML",
-            supports_streaming=True
-        )
-
-        if m.chat.type != "private":
-            await bot.pin_chat_message(m.chat.id, sent.message_id)
+        await m.answer(f"❌ YouTube download failed: {str(e)}")
 
 # ==================================================
 # ================= PINTEREST FIXED =================
@@ -209,42 +268,49 @@ async def handle_youtube(m, url):
 
 async def handle_pinterest(m, url):
     url = resolve_pin(url)
+    logger.info(f"Processing Pinterest URL: {url}")
 
     s = await bot.send_sticker(m.chat.id, PIN_STICKER)
     start = time.perf_counter()
 
-    with tempfile.TemporaryDirectory() as t:
-        t = Path(t)
-        raw = t / "pin.mp4"
-        final = t / "pinf.mp4"
+    try:
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t)
+            raw = t / "pin.mp4"
+            final = t / "pinf.mp4"
 
-        opts = {
-            "quiet": True,
-            "format": "best",
-            "merge_output_format": "mp4",
-            "outtmpl": str(raw),
-            "concurrent_fragment_downloads": 1,
-            "http_chunk_size": 0,
-            "proxy": pick_proxy(),
-            "http_headers": {"User-Agent": pick_ua()},
-        }
+            opts = {
+                "quiet": True,
+                "format": "best",
+                "merge_output_format": "mp4",
+                "outtmpl": str(raw),
+                "concurrent_fragment_downloads": 1,
+                "http_chunk_size": 0,
+                "proxy": pick_proxy(),
+                "http_headers": {"User-Agent": pick_ua()},
+            }
 
-        await asyncio.to_thread(lambda: YoutubeDL(opts).download([url]))
+            await asyncio.to_thread(lambda: YoutubeDL(opts).download([url]))
 
-        run(["ffmpeg","-y","-i",raw,"-c","copy",final])
+            run(["ffmpeg","-y","-i",raw,"-c","copy",final])
 
-        elapsed = (time.perf_counter() - start) * 1000
+            elapsed = (time.perf_counter() - start) * 1000
+            await bot.delete_message(m.chat.id, s.message_id)
+
+            sent = await bot.send_video(
+                m.chat.id, FSInputFile(final),
+                caption=caption(m, elapsed),
+                parse_mode="HTML",
+                supports_streaming=True
+            )
+
+            if m.chat.type != "private":
+                await bot.pin_chat_message(m.chat.id, sent.message_id)
+            logger.info(f"Pinterest download completed in {elapsed:.0f}ms")
+    except Exception as e:
+        logger.error(f"Pinterest download failed: {e}", exc_info=True)
         await bot.delete_message(m.chat.id, s.message_id)
-
-        sent = await bot.send_video(
-            m.chat.id, FSInputFile(final),
-            caption=caption(m, elapsed),
-            parse_mode="HTML",
-            supports_streaming=True
-        )
-
-        if m.chat.type != "private":
-            await bot.pin_chat_message(m.chat.id, sent.message_id)
+        await m.answer(f"❌ Pinterest download failed: {str(e)}")
 
 # ==================================================
 # ================= ROUTER =========================
@@ -252,35 +318,46 @@ async def handle_pinterest(m, url):
 
 @dp.message(F.text.regexp(LINK_RE))
 async def handle(m: Message):
+    logger.info(f"Received URL from user {m.from_user.id}: {m.text}")
 
     try:
         await m.delete()
-    except:
-        pass
+    except Exception as e:
+        logger.warning(f"Could not delete message: {e}")
 
     url = m.text.lower()
 
     async with semaphore:
+        try:
+            if "instagram.com" in url:
+                await handle_instagram(m, url)
+                return
 
-        if "instagram.com" in url:
-            await handle_instagram(m, url)
-            return
+            if "youtube.com" in url or "youtu.be" in url:
+                await handle_youtube(m, url)
+                return
 
-        if "youtube.com" in url or "youtu.be" in url:
-            await handle_youtube(m, url)
-            return
+            if "pinterest.com" in url or "pin.it" in url:
+                await handle_pinterest(m, url)
+                return
 
-        if "pinterest.com" in url or "pin.it" in url:
-            await handle_pinterest(m, url)
-            return
-
-        await m.answer("❌ Unsupported link")
+            await m.answer("❌ Unsupported link")
+        except Exception as e:
+            logger.error(f"Unhandled error in message handler: {e}", exc_info=True)
+            await m.answer(f"❌ An error occurred: {str(e)}")
 
 # ---------------- RUN ----------------
 
 async def main():
-    logger.info("BOT STARTED")
-    await dp.start_polling(bot)
+    logger.info("=" * 50)
+    logger.info("BOT STARTING")
+    logger.info(f"Bot Token: {BOT_TOKEN[:20]}...")
+    logger.info("=" * 50)
+    try:
+        await dp.start_polling(bot)
+    except Exception as e:
+        logger.error(f"Bot failed to start: {e}", exc_info=True)
+        raise
 
 if __name__ == "__main__":
     asyncio.run(main())
