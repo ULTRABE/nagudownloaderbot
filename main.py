@@ -164,8 +164,7 @@ async def handle_instagram(m, url):
                 m.chat.id, FSInputFile(final),
                 caption=caption(m, elapsed),
                 parse_mode="HTML",
-                supports_streaming=True,
-                reply_to_message_id=m.message_id
+                supports_streaming=True
             )
 
             if m.chat.type != "private":
@@ -174,8 +173,11 @@ async def handle_instagram(m, url):
             logger.info(f"IG: Done in {elapsed:.2f}s")
     except Exception as e:
         logger.error(f"IG: {e}")
-        await bot.delete_message(m.chat.id, s.message_id)
-        await m.reply(f"❌ 𝐈𝐧𝐬𝐭𝐚𝐠𝐫𝐚𝐦 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}", quote=True)
+        try:
+            await bot.delete_message(m.chat.id, s.message_id)
+        except:
+            pass
+        await m.answer(f"❌ 𝐈𝐧𝐬𝐭𝐚𝐠𝐫𝐚𝐦 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════
 # YOUTUBE - ULTRA FAST MP4
@@ -239,8 +241,7 @@ async def handle_youtube(m, url):
                 m.chat.id, FSInputFile(final),
                 caption=caption(m, elapsed),
                 parse_mode="HTML",
-                supports_streaming=True,
-                reply_to_message_id=m.message_id
+                supports_streaming=True
             )
 
             if m.chat.type != "private":
@@ -249,8 +250,11 @@ async def handle_youtube(m, url):
             logger.info(f"YT: Done in {elapsed:.2f}s")
     except Exception as e:
         logger.error(f"YT: {e}")
-        await bot.delete_message(m.chat.id, s.message_id)
-        await m.reply(f"❌ 𝐘𝐨𝐮𝐓𝐮𝐛𝐞 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}", quote=True)
+        try:
+            await bot.delete_message(m.chat.id, s.message_id)
+        except:
+            pass
+        await m.answer(f"❌ 𝐘𝐨𝐮𝐓𝐮𝐛𝐞 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════
 # PINTEREST - ULTRA FAST MP4
@@ -297,8 +301,7 @@ async def handle_pinterest(m, url):
                 m.chat.id, FSInputFile(final),
                 caption=caption(m, elapsed),
                 parse_mode="HTML",
-                supports_streaming=True,
-                reply_to_message_id=m.message_id
+                supports_streaming=True
             )
 
             if m.chat.type != "private":
@@ -307,8 +310,11 @@ async def handle_pinterest(m, url):
             logger.info(f"PIN: Done in {elapsed:.2f}s")
     except Exception as e:
         logger.error(f"PIN: {e}")
-        await bot.delete_message(m.chat.id, s.message_id)
-        await m.reply(f"❌ 𝐏𝐢𝐧𝐭𝐞𝐫𝐞𝐬𝐭 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}", quote=True)
+        try:
+            await bot.delete_message(m.chat.id, s.message_id)
+        except:
+            pass
+        await m.answer(f"❌ 𝐏𝐢𝐧𝐭𝐞𝐫𝐞𝐬𝐭 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════
 # ROUTER
@@ -316,11 +322,6 @@ async def handle_pinterest(m, url):
 
 @dp.message(F.text.regexp(LINK_RE))
 async def handle(m: Message):
-    try:
-        await m.delete()
-    except:
-        pass
-
     url = m.text.strip()
 
     async with semaphore:
@@ -332,10 +333,10 @@ async def handle(m: Message):
             elif "pinterest.com" in url.lower() or "pin.it" in url.lower():
                 await handle_pinterest(m, url)
             else:
-                await m.reply("❌ 𝐔𝐧𝐬𝐮𝐩𝐩𝐨𝐫𝐭𝐞𝐝 𝐏𝐥𝐚𝐭𝐟𝐨𝐫𝐦", quote=True)
+                await m.answer("❌ 𝐔𝐧𝐬𝐮𝐩𝐩𝐨𝐫𝐭𝐞𝐝 𝐏𝐥𝐚𝐭𝐟𝐨𝐫𝐦")
         except Exception as e:
             logger.error(f"Error: {e}")
-            await m.reply(f"❌ 𝐄𝐫𝐫𝐨𝐫\n{str(e)[:100]}", quote=True)
+            await m.answer(f"❌ 𝐄𝐫𝐫𝐨𝐫\n{str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════
 # MAIN
