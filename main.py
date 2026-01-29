@@ -28,16 +28,21 @@ PROXIES = [
 ]
 
 USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/537.36 Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; rv:121.0) Gecko/20100101 Firefox/121.0",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 13.5; rv:120.0) Gecko/20100101 Firefox/120.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Edge/121.0.0.0 Safari/537.36",
 ]
 
 def pick_proxy(): return random.choice(PROXIES)
 def pick_ua(): return random.choice(USER_AGENTS)
+
+def resolve_pin(url):
+    if "pin.it/" in url:
+        return subprocess.getoutput(f"curl -Ls -o /dev/null -w '%{{url_effective}}' {url}")
+    return url
 
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
@@ -45,15 +50,17 @@ semaphore = asyncio.Semaphore(8)
 
 LINK_RE = re.compile(r"https?://\S+")
 
-# ---------------- START MESSAGE ----------------
+# ---------------- START ----------------
 
 @dp.message(CommandStart())
 async def start(m: Message):
+    username = f"@{m.from_user.username}" if m.from_user.username else "—"
+
     await m.answer(f"""
 ◇—◈ NAGU ULTRA DOWNLOADER ◈—◇
 
 ID ➝ {m.from_user.id}
-USER ➝ @{m.from_user.username or "NoUsername"}
+USER ➝ {username}
 NAME ➝ {m.from_user.first_name}
 
 ━━━━━━━━━━━━━━━━━━━━━━━
@@ -65,6 +72,7 @@ NAME ➝ {m.from_user.first_name}
 HELP ➝ /help
 OWNER ➝ @bhosadih
 """)
+
 # ---------------- COMMON ----------------
 
 def mention(u):
@@ -80,9 +88,9 @@ def caption(m, elapsed):
 def run(cmd):
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-# ==========================================================
-# ================== INSTAGRAM (UNCHANGED) =================
-# ==========================================================
+# ==================================================
+# ================= INSTAGRAM ======================
+# ==================================================
 
 BASE_IG = {
     "quiet": True,
@@ -140,9 +148,9 @@ async def handle_instagram(m, url):
         if m.chat.type != "private":
             await bot.pin_chat_message(m.chat.id, sent.message_id)
 
-# ==========================================================
-# ======================= YOUTUBE ==========================
-# ==========================================================
+# ==================================================
+# ================= YOUTUBE FIXED ==================
+# ==================================================
 
 async def handle_youtube(m, url):
     s = await bot.send_sticker(m.chat.id, YT_STICKER)
@@ -155,12 +163,20 @@ async def handle_youtube(m, url):
 
         opts = {
             "quiet": True,
-            "format": "bestvideo[height<=1080]+bestaudio/best",
+            "format": "bv*[height<=720]+ba/best",
             "merge_output_format": "mp4",
+            "prefer_ffmpeg": True,
             "outtmpl": str(raw),
             "proxy": pick_proxy(),
             "cookiefile": YT_COOKIES,
             "http_headers": {"User-Agent": pick_ua()},
+            "force_ipv4": True,
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android", "web"],
+                    "player_skip": ["configs"],
+                }
+            },
         }
 
         await asyncio.to_thread(lambda: YoutubeDL(opts).download([url]))
@@ -187,11 +203,13 @@ async def handle_youtube(m, url):
         if m.chat.type != "private":
             await bot.pin_chat_message(m.chat.id, sent.message_id)
 
-# ==========================================================
-# ====================== PINTEREST =========================
-# ==========================================================
+# ==================================================
+# ================= PINTEREST FIXED =================
+# ==================================================
 
 async def handle_pinterest(m, url):
+    url = resolve_pin(url)
+
     s = await bot.send_sticker(m.chat.id, PIN_STICKER)
     start = time.perf_counter()
 
@@ -203,6 +221,7 @@ async def handle_pinterest(m, url):
         opts = {
             "quiet": True,
             "format": "best",
+            "merge_output_format": "mp4",
             "outtmpl": str(raw),
             "concurrent_fragment_downloads": 1,
             "http_chunk_size": 0,
@@ -227,9 +246,9 @@ async def handle_pinterest(m, url):
         if m.chat.type != "private":
             await bot.pin_chat_message(m.chat.id, sent.message_id)
 
-# ==========================================================
-# ======================== ROUTER ==========================
-# ==========================================================
+# ==================================================
+# ================= ROUTER =========================
+# ==================================================
 
 @dp.message(F.text.regexp(LINK_RE))
 async def handle(m: Message):
