@@ -53,15 +53,19 @@ LINK_RE = re.compile(r"https?://\S+")
 
 @dp.message(CommandStart())
 async def start(m: Message):
-    username = m.from_user.username if m.from_user.username else "NoUsername"
+    # Fix username formatting
+    if m.from_user.username:
+        username = f"@{m.from_user.username}"
+    else:
+        username = "No Username"
     
     await m.reply(f"""𝐖𝐞𝐥𝐜𝐨𝐦𝐞 𝐓𝐨 𝐍𝐀𝐆𝐔 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑 ★
 - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 ₪ 𝐈𝐃 : {m.from_user.id}
-₪ 𝐔𝐒𝐄𝐑 : @{username}
+₪ 𝐔𝐒𝐄𝐑 : {username}
 ₪ 𝐍𝐀𝐌𝐄 : {m.from_user.first_name}
 - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-𝐁𝐎𝐓 𝐇𝐄𝐋𝐏 𝐏𝐀𝐆𝐄 ⇁ /𝐇𝐄𝐋𝐏
+𝐁𝐎𝐓 𝐇𝐄𝐋𝐏 𝐏𝐀𝐆𝐄 ⇁ /help
 - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 𝐎𝐖𝐍𝐄𝐑 ⇁ @bhosadih""", quote=True)
 
@@ -104,7 +108,7 @@ def run(cmd):
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 # ═══════════════════════════════════════════════════════════
-# INSTAGRAM - ULTRA FAST MP4
+# INSTAGRAM - ULTRA FAST (OLD PIPELINE RESTORED)
 # ═══════════════════════════════════════════════════════════
 
 async def ig_download(url, out, use_cookies=False):
@@ -127,6 +131,29 @@ async def ig_download(url, out, use_cookies=False):
     
     await asyncio.to_thread(lambda: YoutubeDL(opts).download([url]))
 
+def ig_optimize(src, out):
+    """OLD FAST PIPELINE - instant remux if small, fast VP9 if large"""
+    size_mb = src.stat().st_size / 1024 / 1024
+    logger.info(f"IG: {size_mb:.2f} MB")
+    
+    if size_mb <= 18:
+        # PATH 1: INSTANT REMUX (NO RE-ENCODE)
+        logger.info("IG: Fast copy (<=18MB)")
+        run(["ffmpeg", "-y", "-i", str(src), "-c", "copy", str(out)])
+    else:
+        # PATH 2: FAST HIGH COMPRESSION
+        logger.info("IG: Fast VP9 compression (>18MB)")
+        run([
+            "ffmpeg", "-y", "-i", str(src),
+            "-vf", "scale=720:-2",
+            "-c:v", "libvpx-vp9", "-crf", "26", "-b:v", "0",
+            "-cpu-used", "8", "-row-mt", "1",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "libopus", "-b:a", "48k",
+            "-movflags", "+faststart",
+            str(out)
+        ])
+
 async def handle_instagram(m, url):
     logger.info(f"IG: {url}")
     s = await bot.send_sticker(m.chat.id, IG_STICKER)
@@ -145,20 +172,14 @@ async def handle_instagram(m, url):
                 logger.info("IG: Retrying with cookies")
                 await ig_download(url, raw, use_cookies=True)
 
-            # Ultra fast VP9 in MP4 container
-            await asyncio.to_thread(lambda: run([
-                "ffmpeg", "-y", "-i", str(raw),
-                "-vf", "scale=720:-2",
-                "-c:v", "libvpx-vp9", "-crf", "27", "-b:v", "0",
-                "-cpu-used", "8", "-row-mt", "1", "-threads", "12",
-                "-deadline", "realtime", "-tile-columns", "2",
-                "-c:a", "libopus", "-b:a", "64k",
-                "-f", "mp4", "-movflags", "+faststart",
-                str(final)
-            ]))
+            # OLD FAST PIPELINE
+            await asyncio.to_thread(ig_optimize, raw, final)
 
             elapsed = time.perf_counter() - start
-            await bot.delete_message(m.chat.id, s.message_id)
+            try:
+                await bot.delete_message(m.chat.id, s.message_id)
+            except:
+                pass
 
             sent = await bot.send_video(
                 m.chat.id, FSInputFile(final),
@@ -180,7 +201,7 @@ async def handle_instagram(m, url):
         await m.answer(f"❌ 𝐈𝐧𝐬𝐭𝐚𝐠𝐫𝐚𝐦 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════
-# YOUTUBE - ULTRA FAST MP4
+# YOUTUBE - OPTIMIZED FOR SPEED
 # ═══════════════════════════════════════════════════════════
 
 async def handle_youtube(m, url):
@@ -222,20 +243,23 @@ async def handle_youtube(m, url):
                 else:
                     raise
 
-            # Ultra fast VP9 in MP4 container
+            # Fast VP9 compression
             await asyncio.to_thread(lambda: run([
                 "ffmpeg", "-y", "-i", str(raw),
                 "-vf", "scale=720:-2",
-                "-c:v", "libvpx-vp9", "-crf", "28", "-b:v", "0",
-                "-cpu-used", "8", "-row-mt", "1", "-threads", "12",
-                "-deadline", "realtime", "-tile-columns", "2",
-                "-c:a", "libopus", "-b:a", "96k",
-                "-f", "mp4", "-movflags", "+faststart",
+                "-c:v", "libvpx-vp9", "-crf", "30", "-b:v", "0",
+                "-cpu-used", "8", "-row-mt", "1",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "libopus", "-b:a", "64k",
+                "-movflags", "+faststart",
                 str(final)
             ]))
 
             elapsed = time.perf_counter() - start
-            await bot.delete_message(m.chat.id, s.message_id)
+            try:
+                await bot.delete_message(m.chat.id, s.message_id)
+            except:
+                pass
 
             sent = await bot.send_video(
                 m.chat.id, FSInputFile(final),
@@ -257,7 +281,7 @@ async def handle_youtube(m, url):
         await m.answer(f"❌ 𝐘𝐨𝐮𝐓𝐮𝐛𝐞 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════
-# PINTEREST - ULTRA FAST MP4
+# PINTEREST - PERFECT (UNCHANGED)
 # ═══════════════════════════════════════════════════════════
 
 async def handle_pinterest(m, url):
@@ -290,12 +314,15 @@ async def handle_pinterest(m, url):
             await asyncio.to_thread(lambda: run([
                 "ffmpeg", "-y", "-i", str(raw),
                 "-c:v", "copy", "-c:a", "copy",
-                "-f", "mp4", "-movflags", "+faststart",
+                "-movflags", "+faststart",
                 str(final)
             ]))
 
             elapsed = time.perf_counter() - start
-            await bot.delete_message(m.chat.id, s.message_id)
+            try:
+                await bot.delete_message(m.chat.id, s.message_id)
+            except:
+                pass
 
             sent = await bot.send_video(
                 m.chat.id, FSInputFile(final),
