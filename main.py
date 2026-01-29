@@ -56,16 +56,16 @@ ID ➝ {m.from_user.id}
 USER ➝ @{m.from_user.username or "NoUsername"}
 NAME ➝ {m.from_user.first_name}
 
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━
 🚀 FAST VIDEO DOWNLOADER
 📥 INSTA • YT • PINTEREST
 🎯 HQ QUALITY • LOW SIZE
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━
 
 HELP ➝ /HELP
 OWNER ➝ @bhosadih
 """)
-
+---------------- END ----------------
 # ---------------- COMMON ----------------
 
 def mention(u):
