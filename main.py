@@ -62,7 +62,7 @@ NAME ➝ {m.from_user.first_name}
 🎯 HQ QUALITY • LOW SIZE
 ━━━━━━━━━━━━━━━━━━━━━━━
 
-HELP ➝ /HELP
+HELP ➝ /help
 OWNER ➝ @bhosadih
 """)
 # ---------------- COMMON ----------------
