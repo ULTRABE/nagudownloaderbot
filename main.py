@@ -65,7 +65,6 @@ NAME ➝ {m.from_user.first_name}
 HELP ➝ /HELP
 OWNER ➝ @bhosadih
 """)
----------------- END ----------------
 # ---------------- COMMON ----------------
 
 def mention(u):
