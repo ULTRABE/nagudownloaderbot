@@ -205,23 +205,24 @@ async def handle_instagram(m, url):
 # ═══════════════════════════════════════════════════════════
 
 def yt_optimize(src, out):
-    """Ultra sharp quality with AV1"""
+    """EXACT SAME AS INSTAGRAM - PROVEN FAST"""
     size_mb = src.stat().st_size / 1024 / 1024
     logger.info(f"YT: {size_mb:.2f} MB")
     
     if size_mb <= 18:
         # INSTANT REMUX (NO RE-ENCODE)
         logger.info("YT: Fast copy (<=18MB)")
-        run(["ffmpeg", "-y", "-i", str(src), "-c", "copy", "-movflags", "+faststart", str(out)])
+        run(["ffmpeg", "-y", "-i", str(src), "-c", "copy", str(out)])
     else:
-        # ULTRA SHARP AV1 - 4K-like quality
-        logger.info("YT: Ultra sharp AV1 compression (>18MB)")
+        # EXACT SAME AS INSTAGRAM
+        logger.info("YT: Fast VP9 compression (>18MB)")
         run([
             "ffmpeg", "-y", "-i", str(src),
-            "-vf", "scale=720:-2:flags=lanczos",
-            "-c:v", "libaom-av1", "-crf", "28", "-b:v", "0",
-            "-cpu-used", "8", "-row-mt", "1", "-tiles", "2x2",
-            "-c:a", "libopus", "-b:a", "128k",
+            "-vf", "scale=720:-2",
+            "-c:v", "libvpx-vp9", "-crf", "26", "-b:v", "0",
+            "-cpu-used", "8", "-row-mt", "1",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "libopus", "-b:a", "48k",
             "-movflags", "+faststart",
             str(out)
         ])
@@ -240,7 +241,7 @@ async def handle_youtube(m, url):
             opts = {
                 "quiet": True,
                 "no_warnings": True,
-                "format": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]/best",
+                "format": "best[height<=720][ext=mp4]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best",
                 "merge_output_format": "mp4",
                 "outtmpl": str(raw),
                 "proxy": pick_proxy(),
