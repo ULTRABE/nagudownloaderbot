@@ -1,8 +1,8 @@
-import asyncio, os, re, subprocess, tempfile, time, logging, random
+import asyncio, os, re, subprocess, tempfile, time, logging, random, zipfile
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, FSInputFile
 from yt_dlp import YoutubeDL
 
@@ -201,30 +201,8 @@ async def handle_instagram(m, url):
         await m.answer(f"❌ 𝐈𝐧𝐬𝐭𝐚𝐠𝐫𝐚𝐦 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════
-# YOUTUBE - ULTRA FAST WITH SHARP QUALITY
+# YOUTUBE - FAST VP9 (EXACT INSTAGRAM SETTINGS)
 # ═══════════════════════════════════════════════════════════
-
-def yt_optimize(src, out):
-    """Ultra sharp quality with AV1"""
-    size_mb = src.stat().st_size / 1024 / 1024
-    logger.info(f"YT: {size_mb:.2f} MB")
-    
-    if size_mb <= 18:
-        # INSTANT REMUX (NO RE-ENCODE)
-        logger.info("YT: Fast copy (<=18MB)")
-        run(["ffmpeg", "-y", "-i", str(src), "-c", "copy", "-movflags", "+faststart", str(out)])
-    else:
-        # ULTRA SHARP AV1 - 4K-like quality
-        logger.info("YT: Ultra sharp AV1 compression (>18MB)")
-        run([
-            "ffmpeg", "-y", "-i", str(src),
-            "-vf", "scale=720:-2:flags=lanczos",
-            "-c:v", "libaom-av1", "-crf", "28", "-b:v", "0",
-            "-cpu-used", "8", "-row-mt", "1", "-tiles", "2x2",
-            "-c:a", "libopus", "-b:a", "128k",
-            "-movflags", "+faststart",
-            str(out)
-        ])
 
 async def handle_youtube(m, url):
     logger.info(f"YT: {url}")
@@ -237,10 +215,11 @@ async def handle_youtube(m, url):
             raw = t / "yt.mp4"
             final = t / "ytf.mp4"
 
+            # DOWNLOAD BEST 720P
             opts = {
                 "quiet": True,
                 "no_warnings": True,
-                "format": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]/best",
+                "format": "best[height<=720][ext=mp4]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best",
                 "merge_output_format": "mp4",
                 "outtmpl": str(raw),
                 "proxy": pick_proxy(),
@@ -265,8 +244,17 @@ async def handle_youtube(m, url):
                 else:
                     raise
 
-            # SAME FAST PIPELINE AS INSTAGRAM
-            await asyncio.to_thread(yt_optimize, raw, final)
+            # VP9 WITH BITRATE FOR QUALITY (UP TO 12MB)
+            await asyncio.to_thread(lambda: run([
+                "ffmpeg", "-y", "-i", str(raw),
+                "-vf", "scale=720:-2",
+                "-c:v", "libvpx-vp9", "-b:v", "1200k", "-maxrate", "1500k", "-bufsize", "2400k",
+                "-cpu-used", "4", "-row-mt", "1",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "libopus", "-b:a", "128k",
+                "-movflags", "+faststart",
+                str(final)
+            ]))
 
             elapsed = time.perf_counter() - start
             try:
@@ -357,6 +345,182 @@ async def handle_pinterest(m, url):
         await m.answer(f"❌ 𝐏𝐢𝐧𝐭𝐞𝐫𝐞𝐬𝐭 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════
+# SPOTIFY PLAYLIST DOWNLOADER
+# ═══════════════════════════════════════════════════════════
+
+MUSIC_STICKER = "CAACAgIAAxkBAAEaegZpe0KJMDIkiCbudZrXhJDwBXYHqgACExIAAq3mUUhZ4G5Cm78l2DgE"
+MUSIC_SEMAPHORE = asyncio.Semaphore(6)
+
+async def download_spotify_playlist(m, url):
+    """Download entire Spotify playlist"""
+    async with MUSIC_SEMAPHORE:
+        logger.info(f"SPOTIFY: {url}")
+        s = await bot.send_sticker(m.chat.id, MUSIC_STICKER)
+        start = time.perf_counter()
+
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp = Path(tmp)
+                
+                opts = {
+                    "quiet": True,
+                    "no_warnings": True,
+                    "format": "bestaudio/best",
+                    "outtmpl": str(tmp / "%(title)s.%(ext)s"),
+                    "proxy": pick_proxy(),
+                    "postprocessors": [{
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": "mp3",
+                        "preferredquality": "320",
+                    }],
+                    "retries": 3,
+                    "fragment_retries": 3,
+                }
+                
+                if os.path.exists("cookies_music.txt"):
+                    opts["cookiefile"] = "cookies_music.txt"
+                
+                # Download playlist
+                with YoutubeDL(opts) as ydl:
+                    info = await asyncio.to_thread(lambda: ydl.extract_info(url, download=True))
+                    playlist_title = info.get('title', 'Spotify Playlist')
+                
+                mp3_files = list(tmp.glob("*.mp3"))
+                
+                if not mp3_files:
+                    await bot.delete_message(m.chat.id, s.message_id)
+                    await m.answer("❌ 𝐍𝐨 𝐬𝐨𝐧𝐠𝐬 𝐝𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐞𝐝")
+                    return
+                
+                await bot.delete_message(m.chat.id, s.message_id)
+                
+                # Send each song to DM
+                for mp3 in mp3_files:
+                    try:
+                        await bot.send_audio(
+                            m.from_user.id,
+                            FSInputFile(mp3),
+                            title=mp3.stem,
+                            performer="NAGU DOWNLOADER"
+                        )
+                        logger.info(f"DM: {mp3.name}")
+                    except Exception as e:
+                        logger.error(f"DM failed: {e}")
+                
+                # Create ZIP
+                zip_path = tmp / f"{playlist_title}.zip"
+                with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                    for mp3 in mp3_files:
+                        zipf.write(mp3, mp3.name)
+                
+                elapsed = time.perf_counter() - start
+                
+                # Send ZIP to group
+                await bot.send_document(
+                    m.chat.id,
+                    FSInputFile(zip_path),
+                    caption=(
+                        f"𝐒𝐏𝐎𝐓𝐈𝐅𝐘 𝐏𝐋𝐀𝐘𝐋𝐈𝐒𝐓 ★\n"
+                        f"- - - - - - - - - - - - - - - - - - - - - - - - - - - -\n"
+                        f"₪ 𝐔𝐬𝐞𝐫: {mention(m.from_user)}\n"
+                        f"₪ 𝐒𝐨𝐧𝐠𝐬: {len(mp3_files)}\n"
+                        f"₪ 𝐓𝐢𝐦𝐞: {elapsed:.2f}s"
+                    ),
+                    parse_mode="HTML"
+                )
+                
+                logger.info(f"SPOTIFY: {len(mp3_files)} songs in {elapsed:.2f}s")
+                
+        except Exception as e:
+            logger.error(f"SPOTIFY: {e}")
+            try:
+                await bot.delete_message(m.chat.id, s.message_id)
+            except:
+                pass
+            await m.answer(f"❌ 𝐒𝐩𝐨𝐭𝐢𝐟𝐲 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
+
+# ═══════════════════════════════════════════════════════════
+# MP3 SEARCH COMMAND
+# ═══════════════════════════════════════════════════════════
+
+async def search_and_download_song(m, query):
+    """Search and download single song"""
+    async with MUSIC_SEMAPHORE:
+        logger.info(f"MP3: {query}")
+        s = await bot.send_sticker(m.chat.id, MUSIC_STICKER)
+        start = time.perf_counter()
+
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp = Path(tmp)
+                
+                opts = {
+                    "quiet": True,
+                    "no_warnings": True,
+                    "format": "bestaudio/best",
+                    "outtmpl": str(tmp / "%(title)s.%(ext)s"),
+                    "proxy": pick_proxy(),
+                    "default_search": "ytsearch",
+                    "postprocessors": [{
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": "mp3",
+                        "preferredquality": "320",
+                    }],
+                }
+                
+                # Search and download
+                with YoutubeDL(opts) as ydl:
+                    await asyncio.to_thread(lambda: ydl.download([f"ytsearch1:{query}"]))
+                
+                # Find MP3
+                mp3 = None
+                for f in tmp.iterdir():
+                    if f.suffix == ".mp3":
+                        mp3 = f
+                        break
+                
+                if not mp3:
+                    await bot.delete_message(m.chat.id, s.message_id)
+                    await m.answer("❌ 𝐒𝐨𝐧𝐠 𝐧𝐨𝐭 𝐟𝐨𝐮𝐧𝐝")
+                    return
+                
+                elapsed = time.perf_counter() - start
+                await bot.delete_message(m.chat.id, s.message_id)
+                
+                # Send to chat
+                await bot.send_audio(
+                    m.chat.id,
+                    FSInputFile(mp3),
+                    caption=(
+                        f"𝐌𝐏𝟑 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 ★\n"
+                        f"- - - - - - - - - - - - - - - - - - - - - - - - - - - -\n"
+                        f"₪ 𝐔𝐬𝐞𝐫: {mention(m.from_user)}\n"
+                        f"₪ 𝐓𝐢𝐦𝐞: {elapsed:.2f}s"
+                    ),
+                    parse_mode="HTML",
+                    title=mp3.stem,
+                    performer="NAGU DOWNLOADER"
+                )
+                
+                logger.info(f"MP3: {mp3.name} in {elapsed:.2f}s")
+                
+        except Exception as e:
+            logger.error(f"MP3: {e}")
+            try:
+                await bot.delete_message(m.chat.id, s.message_id)
+            except:
+                pass
+            await m.answer(f"❌ 𝐌𝐏𝟑 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
+
+@dp.message(Command("mp3"))
+async def mp3_command(m: Message):
+    query = m.text.replace("/mp3", "").strip()
+    if not query:
+        await m.answer("𝐔𝐬𝐚𝐠𝐞: /mp3 song name")
+        return
+    await search_and_download_song(m, query)
+
+# ═══════════════════════════════════════════════════════════
 # ROUTER
 # ═══════════════════════════════════════════════════════════
 
@@ -383,6 +547,8 @@ async def handle(m: Message):
                 await handle_youtube(m, url)
             elif "pinterest.com" in url.lower() or "pin.it" in url.lower():
                 await handle_pinterest(m, url)
+            elif "spotify.com" in url.lower():
+                await download_spotify_playlist(m, url)
             else:
                 await m.answer("❌ 𝐔𝐧𝐬𝐮𝐩𝐩𝐨𝐫𝐭𝐞𝐝 𝐏𝐥𝐚𝐭𝐟𝐨𝐫𝐦")
         except Exception as e:
