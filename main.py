@@ -9,12 +9,14 @@ from yt_dlp import YoutubeDL
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("downloader")
 
-BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
+BOT_TOKEN = "YOUR_TOKEN_HERE"
 
 YT_COOKIES = "cookies_youtube.txt"
 IG_COOKIES = "cookies_instagram.txt"
 
-PROCESS_STICKER = "CAACAgIAAxkBAAEadEdpekZa1-2qYm-1a3dX0JmM_Z9uDgAC4wwAAjAT0Euml6TE9QhYWzgE"
+IG_STICKER = "CAACAgIAAxkBAAEadEdpekZa1-2qYm-1a3dX0JmM_Z9uDgAC4wwAAjAT0Euml6TE9QhYWzgE"
+YT_STICKER = "AAMCAgADGQEAARp522l7P1Wp_U-CiCU7THebf6IkN6I1AAIjNgACYSe4S1bC7rHUeRQIAQAHbQADOAQ"
+PIN_STICKER = "AAMCAgADGQEAARp512l7Px_cOFGuSWcBXOHw0AtPhie2AAL8EgAC6-HxSDg7yavyVWq2AQAHbQADOAQ"
 
 PROXIES = [
     "http://203033:JmNd95Z3vcX@196.51.85.7:8800",
@@ -25,11 +27,6 @@ PROXIES = [
     "http://203033:JmNd95Z3vcX@196.51.85.207:8800",
 ]
 
-def pick_proxy():
-    return random.choice(PROXIES)
-
-# -------- USER AGENT ROTATION --------
-
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
@@ -39,10 +36,8 @@ USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/121.0.0.0 Safari/537.36",
 ]
 
-def pick_ua():
-    return random.choice(USER_AGENTS)
-
-# ------------------------------------
+def pick_proxy(): return random.choice(PROXIES)
+def pick_ua(): return random.choice(USER_AGENTS)
 
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
@@ -50,148 +45,192 @@ semaphore = asyncio.Semaphore(8)
 
 LINK_RE = re.compile(r"https?://\S+")
 
-BASE_YDL = {
-    "quiet": True,
-    "no_warnings": True,
-    "noplaylist": True,
+# ---------------- START MESSAGE ----------------
 
-    "concurrent_fragment_downloads": 8,
-    "http_chunk_size": 6 * 1024 * 1024,
+@dp.message(CommandStart())
+async def start(m: Message):
+    await m.answer(f"""
+◇—◈ NAGU ULTRA DOWNLOADER ◈—◇
 
-    "retries": 1,
-    "fragment_retries": 1,
+ID ➝ {m.from_user.id}
+USER ➝ @{m.from_user.username or "NoUsername"}
+NAME ➝ {m.from_user.first_name}
 
-    "nopart": True,
-    "nooverwrites": True,
+━━━━━━━━━━━━━━━
+🚀 FAST VIDEO DOWNLOADER
+📥 INSTA • YT • PINTEREST
+🎯 HQ QUALITY • LOW SIZE
+━━━━━━━━━━━━━━━
 
-    "format": (
-        "bestvideo[height<=720][vcodec=vp9]+bestaudio/best/"
-        "bestvideo[height<=720][vcodec^=avc]+bestaudio/best/"
-        "best[height<=720][ext=mp4]/best"
-    ),
+HELP ➝ /HELP
+OWNER ➝ @bhosadih
+""")
 
-    "merge_output_format": "mp4",
-    "http_headers": {"User-Agent": pick_ua()},
-}
-
-# ---------------- helpers ----------------
-
-def cookies_for(url):
-    u = url.lower()
-    if "youtube.com" in u or "youtu.be" in u:
-        return YT_COOKIES if os.path.exists(YT_COOKIES) else None
-    if "instagram.com" in u:
-        return IG_COOKIES if os.path.exists(IG_COOKIES) else None
-    return None
-
-def run(cmd):
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-def fix_pinterest(url):
-    if "pin.it/" in url:
-        return subprocess.getoutput(f"curl -Ls -o /dev/null -w '%{{url_effective}}' {url}")
-    return url
-
-# ---------------- download engine ----------------
-
-async def attempt(url, raw, proxy=None, cookies=None):
-    opts = BASE_YDL.copy()
-    opts["outtmpl"] = str(raw.with_suffix(".%(ext)s"))
-
-    if "pinterest.com" in url:
-        opts["concurrent_fragment_downloads"] = 1
-        opts["http_chunk_size"] = 0
-
-    if proxy:
-        opts["proxy"] = proxy
-    if cookies:
-        opts["cookiefile"] = cookies
-
-    loop = asyncio.get_running_loop()
-
-    with YoutubeDL(opts) as ydl:
-        await loop.run_in_executor(None, ydl.download, [url])
-
-    for ext in (".mp4", ".webm", ".mkv"):
-        f = raw.with_suffix(ext)
-        if f.exists():
-            return f
-    return None
-
-async def smart_download(url, raw):
-    url = fix_pinterest(url)
-    cookies = cookies_for(url)
-
-    for _ in range(3):
-        f = await attempt(url, raw, proxy=pick_proxy(), cookies=cookies)
-        if f:
-            return f
-
-    f = await attempt(url, raw, cookies=cookies)
-    if f:
-        return f
-
-    f = await attempt(url, raw)
-    if f:
-        return f
-
-    raise RuntimeError("download failed")
-
-# ---------------- compression ----------------
-
-def optimize(src: Path, out: Path):
-    size_mb = src.stat().st_size / 1024 / 1024
-
-    if size_mb <= 18:
-        run([
-            "ffmpeg","-y","-i",src,
-            "-c","copy",
-            "-movflags","+faststart",
-            out
-        ])
-        return
-
-    run([
-        "ffmpeg","-y","-i",src,
-        "-vf","scale=720:-2:flags=lanczos",
-        "-c:v","libvpx-vp9",
-        "-crf","26",
-        "-b:v","0",
-        "-deadline","realtime",
-        "-cpu-used","8",
-        "-row-mt","1",
-        "-pix_fmt","yuv420p",
-        "-c:a","libopus",
-        "-b:a","48k",
-        "-movflags","+faststart",
-        out
-    ])
-
-# ---------------- UI ----------------
+# ---------------- COMMON ----------------
 
 def mention(u):
     return f'<a href="tg://user?id={u.id}">{u.first_name}</a>'
 
-@dp.message(CommandStart())
-async def start(m: Message):
-    await m.answer("""⟣—◈𝗡𝗔𝗚𝗨 𝗨𝗟𝗧𝗥𝗔 𝗗𝗢𝗪𝗡𝗟𝗢𝗔𝗗𝗘𝗥◈—⟢
+def caption(m, elapsed):
+    return (
+        "@nagudownloaderbot 🤍\n\n"
+        f"{mention(m.from_user)}\n"
+        f"𝐑𝐞𝐬𝐩𝐨𝐧𝐬𝐞 𝐓𝐢𝐦𝐞 : {elapsed:.0f} ms"
+    )
 
-━━━━━━━━━━━━━━━━━━
-ID ➞ {user_id}  
-USER ➞ @{username}  
-NAME ➞ {first_name}
-━━━━━━━━━━━━━━━━━━
+def run(cmd):
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-🚀 FASTEST VIDEO DOWNLOADER  
-📥 INSTA • YT SHORTS • PINTEREST  
-🎯 HQ QUALITY • LOW SIZE
+# ==========================================================
+# ================== INSTAGRAM (UNCHANGED) =================
+# ==========================================================
 
-━━━━━━━━━━━━━━━━━━
-HELP ➞ /HELP
-OWNER ➞ @bhosadih
-━━━━━━━━━━━━━━━━━━""")
+BASE_IG = {
+    "quiet": True,
+    "noplaylist": True,
+    "concurrent_fragment_downloads": 8,
+    "http_chunk_size": 6 * 1024 * 1024,
+    "format": "bestvideo[height<=720]+bestaudio/best",
+    "merge_output_format": "mp4",
+}
 
-# ---------------- main handler ----------------
+async def ig_download(url, out):
+    opts = BASE_IG.copy()
+    opts["outtmpl"] = str(out)
+    opts["proxy"] = pick_proxy()
+    opts["cookiefile"] = IG_COOKIES
+    opts["http_headers"] = {"User-Agent": pick_ua()}
+    await asyncio.to_thread(lambda: YoutubeDL(opts).download([url]))
+
+def ig_optimize(src, out):
+    size = src.stat().st_size / 1024 / 1024
+    if size <= 18:
+        run(["ffmpeg","-y","-i",src,"-c","copy",out])
+    else:
+        run([
+            "ffmpeg","-y","-i",src,
+            "-vf","scale=720:-2",
+            "-c:v","libvpx-vp9","-crf","26","-b:v","0",
+            "-cpu-used","8","-row-mt","1",
+            "-c:a","libopus","-b:a","48k",
+            out
+        ])
+
+async def handle_instagram(m, url):
+    s = await bot.send_sticker(m.chat.id, IG_STICKER)
+    start = time.perf_counter()
+
+    with tempfile.TemporaryDirectory() as t:
+        t = Path(t)
+        raw = t / "ig.mp4"
+        final = t / "igf.mp4"
+
+        await ig_download(url, raw)
+        await asyncio.to_thread(ig_optimize, raw, final)
+
+        elapsed = (time.perf_counter() - start) * 1000
+        await bot.delete_message(m.chat.id, s.message_id)
+
+        sent = await bot.send_video(
+            m.chat.id, FSInputFile(final),
+            caption=caption(m, elapsed),
+            parse_mode="HTML",
+            supports_streaming=True
+        )
+
+        if m.chat.type != "private":
+            await bot.pin_chat_message(m.chat.id, sent.message_id)
+
+# ==========================================================
+# ======================= YOUTUBE ==========================
+# ==========================================================
+
+async def handle_youtube(m, url):
+    s = await bot.send_sticker(m.chat.id, YT_STICKER)
+    start = time.perf_counter()
+
+    with tempfile.TemporaryDirectory() as t:
+        t = Path(t)
+        raw = t / "yt.mp4"
+        final = t / "ytf.mp4"
+
+        opts = {
+            "quiet": True,
+            "format": "bestvideo[height<=1080]+bestaudio/best",
+            "merge_output_format": "mp4",
+            "outtmpl": str(raw),
+            "proxy": pick_proxy(),
+            "cookiefile": YT_COOKIES,
+            "http_headers": {"User-Agent": pick_ua()},
+        }
+
+        await asyncio.to_thread(lambda: YoutubeDL(opts).download([url]))
+
+        run([
+            "ffmpeg","-y","-i",raw,
+            "-vf","scale=1280:-2",
+            "-c:v","libvpx-vp9","-crf","28","-b:v","0",
+            "-cpu-used","8","-row-mt","1",
+            "-c:a","libopus","-b:a","48k",
+            final
+        ])
+
+        elapsed = (time.perf_counter() - start) * 1000
+        await bot.delete_message(m.chat.id, s.message_id)
+
+        sent = await bot.send_video(
+            m.chat.id, FSInputFile(final),
+            caption=caption(m, elapsed),
+            parse_mode="HTML",
+            supports_streaming=True
+        )
+
+        if m.chat.type != "private":
+            await bot.pin_chat_message(m.chat.id, sent.message_id)
+
+# ==========================================================
+# ====================== PINTEREST =========================
+# ==========================================================
+
+async def handle_pinterest(m, url):
+    s = await bot.send_sticker(m.chat.id, PIN_STICKER)
+    start = time.perf_counter()
+
+    with tempfile.TemporaryDirectory() as t:
+        t = Path(t)
+        raw = t / "pin.mp4"
+        final = t / "pinf.mp4"
+
+        opts = {
+            "quiet": True,
+            "format": "best",
+            "outtmpl": str(raw),
+            "concurrent_fragment_downloads": 1,
+            "http_chunk_size": 0,
+            "proxy": pick_proxy(),
+            "http_headers": {"User-Agent": pick_ua()},
+        }
+
+        await asyncio.to_thread(lambda: YoutubeDL(opts).download([url]))
+
+        run(["ffmpeg","-y","-i",raw,"-c","copy",final])
+
+        elapsed = (time.perf_counter() - start) * 1000
+        await bot.delete_message(m.chat.id, s.message_id)
+
+        sent = await bot.send_video(
+            m.chat.id, FSInputFile(final),
+            caption=caption(m, elapsed),
+            parse_mode="HTML",
+            supports_streaming=True
+        )
+
+        if m.chat.type != "private":
+            await bot.pin_chat_message(m.chat.id, sent.message_id)
+
+# ==========================================================
+# ======================== ROUTER ==========================
+# ==========================================================
 
 @dp.message(F.text.regexp(LINK_RE))
 async def handle(m: Message):
@@ -201,51 +240,25 @@ async def handle(m: Message):
     except:
         pass
 
-    processing = await bot.send_sticker(m.chat.id, PROCESS_STICKER)
-    start = time.perf_counter()
+    url = m.text.lower()
 
     async with semaphore:
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp = Path(tmp)
-            raw = tmp / "raw"
-            final = tmp / "final.mp4"
 
-            try:
-                url = m.text.strip()
+        if "instagram.com" in url:
+            await handle_instagram(m, url)
+            return
 
-                raw_file = await smart_download(url, raw)
-                await asyncio.to_thread(optimize, raw_file, final)
+        if "youtube.com" in url or "youtu.be" in url:
+            await handle_youtube(m, url)
+            return
 
-                elapsed = (time.perf_counter() - start) * 1000
+        if "pinterest.com" in url or "pin.it" in url:
+            await handle_pinterest(m, url)
+            return
 
-                await bot.delete_message(m.chat.id, processing.message_id)
+        await m.answer("❌ Unsupported link")
 
-                caption = (
-                    "@nagudownloaderbot 🤍\n\n"
-                    f"{mention(m.from_user)}\n"
-                    f"𝐑𝐞𝐬𝐩𝐨𝐧𝐬𝐞 𝐓𝐢𝐦𝐞 : {elapsed:.0f} ms"
-                )
-
-                sent = await bot.send_video(
-                    m.chat.id,
-                    FSInputFile(final),
-                    caption=caption,
-                    parse_mode="HTML",
-                    supports_streaming=True
-                )
-
-                # 📌 AUTO PIN
-                if m.chat.type != "private":
-                    try:
-                        await bot.pin_chat_message(m.chat.id, sent.message_id)
-                    except:
-                        pass
-
-            except Exception:
-                await bot.delete_message(m.chat.id, processing.message_id)
-                await m.answer("❌ Download failed")
-
-# ---------------- run ----------------
+# ---------------- RUN ----------------
 
 async def main():
     logger.info("BOT STARTED")
