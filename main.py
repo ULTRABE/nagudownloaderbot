@@ -1,14 +1,20 @@
-import asyncio, os, tempfile, time, random
+import asyncio, os, re, subprocess, tempfile, time, logging, random
 from pathlib import Path
 
+from aiogram import Bot, Dispatcher, F
+from aiogram.filters import CommandStart
+from aiogram.types import Message, FSInputFile
 from yt_dlp import YoutubeDL
-from aiogram.types import FSInputFile
 
-# ---------------- CONFIG ----------------
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("downloader")
 
-AUDIO_SEMAPHORE = asyncio.Semaphore(6)
+BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
 
-COOKIE_FILE = "cookies_music.txt"
+YT_COOKIES = "cookies_youtube.txt"
+IG_COOKIES = "cookies_instagram.txt"
+
+PROCESS_STICKER = "CAACAgIAAxkBAAEadEdpekZa1-2qYm-1a3dX0JmM_Z9uDgAC4wwAAjAT0Euml6TE9QhYWzgE"
 
 PROXIES = [
     "http://203033:JmNd95Z3vcX@196.51.85.7:8800",
@@ -19,6 +25,11 @@ PROXIES = [
     "http://203033:JmNd95Z3vcX@196.51.85.207:8800",
 ]
 
+def pick_proxy():
+    return random.choice(PROXIES)
+
+# -------- USER AGENT ROTATION --------
+
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
@@ -28,83 +39,217 @@ USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/121.0.0.0 Safari/537.36",
 ]
 
-def pick_proxy():
-    return random.choice(PROXIES)
-
 def pick_ua():
     return random.choice(USER_AGENTS)
 
-# ---------------- YT-DLP AUDIO OPTS ----------------
+# ------------------------------------
 
-def base_audio_opts():
-    return {
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
+bot = Bot(BOT_TOKEN)
+dp = Dispatcher()
+semaphore = asyncio.Semaphore(8)
 
-        "format": "bestaudio",
+LINK_RE = re.compile(r"https?://\S+")
 
-        "retries": 3,
-        "fragment_retries": 3,
+BASE_YDL = {
+    "quiet": True,
+    "no_warnings": True,
+    "noplaylist": True,
 
-        "http_headers": {
-            "User-Agent": pick_ua()
-        },
+    "concurrent_fragment_downloads": 8,
+    "http_chunk_size": 6 * 1024 * 1024,
 
-        "cookiefile": COOKIE_FILE if os.path.exists(COOKIE_FILE) else None,
+    "retries": 1,
+    "fragment_retries": 1,
 
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "192",
-        }],
-    }
+    "nopart": True,
+    "nooverwrites": True,
+
+    "format": (
+        "bestvideo[height<=720][vcodec=vp9]+bestaudio/best/"
+        "bestvideo[height<=720][vcodec^=avc]+bestaudio/best/"
+        "best[height<=720][ext=mp4]/best"
+    ),
+
+    "merge_output_format": "mp4",
+    "http_headers": {"User-Agent": pick_ua()},
+}
+
+# ---------------- helpers ----------------
+
+def cookies_for(url):
+    u = url.lower()
+    if "youtube.com" in u or "youtu.be" in u:
+        return YT_COOKIES if os.path.exists(YT_COOKIES) else None
+    if "instagram.com" in u:
+        return IG_COOKIES if os.path.exists(IG_COOKIES) else None
+    return None
+
+def run(cmd):
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def fix_pinterest(url):
+    if "pin.it/" in url:
+        return subprocess.getoutput(f"curl -Ls -o /dev/null -w '%{{url_effective}}' {url}")
+    return url
+
+# ---------------- download engine ----------------
+
+async def attempt(url, raw, proxy=None, cookies=None):
+    opts = BASE_YDL.copy()
+    opts["outtmpl"] = str(raw.with_suffix(".%(ext)s"))
+
+    if "pinterest.com" in url:
+        opts["concurrent_fragment_downloads"] = 1
+        opts["http_chunk_size"] = 0
+
+    if proxy:
+        opts["proxy"] = proxy
+    if cookies:
+        opts["cookiefile"] = cookies
+
+    loop = asyncio.get_running_loop()
+
+    with YoutubeDL(opts) as ydl:
+        await loop.run_in_executor(None, ydl.download, [url])
+
+    for ext in (".mp4", ".webm", ".mkv"):
+        f = raw.with_suffix(ext)
+        if f.exists():
+            return f
+    return None
+
+async def smart_download(url, raw):
+    url = fix_pinterest(url)
+    cookies = cookies_for(url)
+
+    for _ in range(3):
+        f = await attempt(url, raw, proxy=pick_proxy(), cookies=cookies)
+        if f:
+            return f
+
+    f = await attempt(url, raw, cookies=cookies)
+    if f:
+        return f
+
+    f = await attempt(url, raw)
+    if f:
+        return f
+
+    raise RuntimeError("download failed")
+
+# ---------------- compression ----------------
+
+def optimize(src: Path, out: Path):
+    size_mb = src.stat().st_size / 1024 / 1024
+
+    if size_mb <= 18:
+        run([
+            "ffmpeg","-y","-i",src,
+            "-c","copy",
+            "-movflags","+faststart",
+            out
+        ])
+        return
+
+    run([
+        "ffmpeg","-y","-i",src,
+        "-vf","scale=720:-2:flags=lanczos",
+        "-c:v","libvpx-vp9",
+        "-crf","26",
+        "-b:v","0",
+        "-deadline","realtime",
+        "-cpu-used","8",
+        "-row-mt","1",
+        "-pix_fmt","yuv420p",
+        "-c:a","libopus",
+        "-b:a","48k",
+        "-movflags","+faststart",
+        out
+    ])
 
 # ---------------- UI ----------------
 
 def mention(u):
     return f'<a href="tg://user?id={u.id}">{u.first_name}</a>'
 
-# ---------------- HANDLER ----------------
+@dp.message(CommandStart())
+async def start(m: Message):
+    await m.answer("⟣—◈𝗡𝗔𝗚𝗨 𝗨𝗟𝗧𝗥𝗔 𝗗𝗢𝗪𝗡𝗟𝗢𝗔𝗗𝗘𝗥◈—⟢
 
-async def handle_audio(bot, m, url):
-    async with AUDIO_SEMAPHORE:
+━━━━━━━━━━━━━━━━━━
+ID ➞ {user_id}  
+USER ➞ @{username}  
+NAME ➞ {first_name}
+━━━━━━━━━━━━━━━━━━
 
-        start = time.perf_counter()
+🚀 FASTEST VIDEO DOWNLOADER  
+📥 INSTA • YT SHORTS • PINTEREST  
+🎯 HQ QUALITY • LOW SIZE
 
+━━━━━━━━━━━━━━━━━━
+HELP ➞ /HELP
+OWNER ➞ @bhosadih
+━━━━━━━━━━━━━━━━━━")
+
+# ---------------- main handler ----------------
+
+@dp.message(F.text.regexp(LINK_RE))
+async def handle(m: Message):
+
+    try:
+        await m.delete()
+    except:
+        pass
+
+    processing = await bot.send_sticker(m.chat.id, PROCESS_STICKER)
+    start = time.perf_counter()
+
+    async with semaphore:
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
+            raw = tmp / "raw"
+            final = tmp / "final.mp4"
 
-            opts = base_audio_opts()
-            opts["outtmpl"] = str(tmp / "%(title)s.%(ext)s")
-            opts["proxy"] = pick_proxy()
+            try:
+                url = m.text.strip()
 
-            loop = asyncio.get_running_loop()
+                raw_file = await smart_download(url, raw)
+                await asyncio.to_thread(optimize, raw_file, final)
 
-            with YoutubeDL(opts) as ydl:
-                await loop.run_in_executor(None, ydl.download, [url])
+                elapsed = (time.perf_counter() - start) * 1000
 
-            mp3 = None
-            for f in tmp.iterdir():
-                if f.suffix == ".mp3":
-                    mp3 = f
-                    break
+                await bot.delete_message(m.chat.id, processing.message_id)
 
-            if not mp3:
-                await m.answer("❌ Audio download failed")
-                return
+                caption = (
+                    "@nagudownloaderbot 🤍\n\n"
+                    f"{mention(m.from_user)}\n"
+                    f"𝐑𝐞𝐬𝐩𝐨𝐧𝐬𝐞 𝐓𝐢𝐦𝐞 : {elapsed:.0f} ms"
+                )
 
-            elapsed = (time.perf_counter() - start) * 1000
+                sent = await bot.send_video(
+                    m.chat.id,
+                    FSInputFile(final),
+                    caption=caption,
+                    parse_mode="HTML",
+                    supports_streaming=True
+                )
 
-            caption = (
-                "@nagudownloaderbot 🤍\n\n"
-                f"{mention(m.from_user)}\n"
-                f"𝐑𝐞𝐬𝐩𝐨𝐧𝐬𝐞 𝐓𝐢𝐦𝐞 : {elapsed:.0f} ms"
-            )
+                # 📌 AUTO PIN
+                if m.chat.type != "private":
+                    try:
+                        await bot.pin_chat_message(m.chat.id, sent.message_id)
+                    except:
+                        pass
 
-            await bot.send_audio(
-                m.chat.id,
-                FSInputFile(mp3),
-                caption=caption,
-                parse_mode="HTML"
-            )
+            except Exception:
+                await bot.delete_message(m.chat.id, processing.message_id)
+                await m.answer("❌ Download failed")
+
+# ---------------- run ----------------
+
+async def main():
+    logger.info("BOT STARTED")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
