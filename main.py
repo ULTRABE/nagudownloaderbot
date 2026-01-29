@@ -201,13 +201,8 @@ async def handle_instagram(m, url):
         await m.answer(f"❌ 𝐈𝐧𝐬𝐭𝐚𝐠𝐫𝐚𝐦 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════
-# YOUTUBE - ULTRA FAST WITH SHARP QUALITY
+# YOUTUBE - ULTRA HIGH QUALITY VP9 (NEW FROM SCRATCH)
 # ═══════════════════════════════════════════════════════════
-
-def yt_optimize(src, out):
-    """NO RE-ENCODING - KEEP ORIGINAL QUALITY"""
-    logger.info("YT: Fast copy - keeping original quality")
-    run(["ffmpeg", "-y", "-i", str(src), "-c", "copy", "-movflags", "+faststart", str(out)])
 
 async def handle_youtube(m, url):
     logger.info(f"YT: {url}")
@@ -220,10 +215,11 @@ async def handle_youtube(m, url):
             raw = t / "yt.mp4"
             final = t / "ytf.mp4"
 
+            # DOWNLOAD BEST QUALITY AVAILABLE
             opts = {
                 "quiet": True,
                 "no_warnings": True,
-                "format": "best[height<=720][ext=mp4]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best",
+                "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best",
                 "merge_output_format": "mp4",
                 "outtmpl": str(raw),
                 "proxy": pick_proxy(),
@@ -248,8 +244,24 @@ async def handle_youtube(m, url):
                 else:
                     raise
 
-            # SAME FAST PIPELINE AS INSTAGRAM
-            await asyncio.to_thread(yt_optimize, raw, final)
+            # ULTRA HIGH QUALITY VP9 - FAST & SHARP
+            await asyncio.to_thread(lambda: run([
+                "ffmpeg", "-y", "-i", str(raw),
+                "-vf", "scale='min(1280,iw)':'min(720,ih)':force_original_aspect_ratio=decrease:flags=lanczos",
+                "-c:v", "libvpx-vp9",
+                "-crf", "18",
+                "-b:v", "0",
+                "-quality", "good",
+                "-speed", "1",
+                "-row-mt", "1",
+                "-threads", "8",
+                "-tile-columns", "2",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "libopus",
+                "-b:a", "128k",
+                "-movflags", "+faststart",
+                str(final)
+            ]))
 
             elapsed = time.perf_counter() - start
             try:
