@@ -205,27 +205,9 @@ async def handle_instagram(m, url):
 # ═══════════════════════════════════════════════════════════
 
 def yt_optimize(src, out):
-    """EXACT SAME AS INSTAGRAM - PROVEN FAST"""
-    size_mb = src.stat().st_size / 1024 / 1024
-    logger.info(f"YT: {size_mb:.2f} MB")
-    
-    if size_mb <= 18:
-        # INSTANT REMUX (NO RE-ENCODE)
-        logger.info("YT: Fast copy (<=18MB)")
-        run(["ffmpeg", "-y", "-i", str(src), "-c", "copy", str(out)])
-    else:
-        # EXACT SAME AS INSTAGRAM
-        logger.info("YT: Fast VP9 compression (>18MB)")
-        run([
-            "ffmpeg", "-y", "-i", str(src),
-            "-vf", "scale=720:-2",
-            "-c:v", "libvpx-vp9", "-crf", "26", "-b:v", "0",
-            "-cpu-used", "8", "-row-mt", "1",
-            "-pix_fmt", "yuv420p",
-            "-c:a", "libopus", "-b:a", "48k",
-            "-movflags", "+faststart",
-            str(out)
-        ])
+    """NO RE-ENCODING - KEEP ORIGINAL QUALITY"""
+    logger.info("YT: Fast copy - keeping original quality")
+    run(["ffmpeg", "-y", "-i", str(src), "-c", "copy", "-movflags", "+faststart", str(out)])
 
 async def handle_youtube(m, url):
     logger.info(f"YT: {url}")
