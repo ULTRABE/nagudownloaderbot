@@ -2,9 +2,11 @@ import asyncio, os, re, subprocess, tempfile, time, logging, random
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, FSInputFile
 from yt_dlp import YoutubeDL
+
+from spotify_handler import download_spotify_playlist, search_and_download_song
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
 logger = logging.getLogger("NAGU")
@@ -244,14 +246,14 @@ async def handle_youtube(m, url):
                 else:
                     raise
 
-            # EXACT INSTAGRAM ENCODING (PROVEN FAST & SHARP)
+            # VP9 WITH BITRATE FOR QUALITY (UP TO 12MB)
             await asyncio.to_thread(lambda: run([
                 "ffmpeg", "-y", "-i", str(raw),
                 "-vf", "scale=720:-2",
-                "-c:v", "libvpx-vp9", "-crf", "24", "-b:v", "0",
-                "-cpu-used", "8", "-row-mt", "1",
+                "-c:v", "libvpx-vp9", "-b:v", "1200k", "-maxrate", "1500k", "-bufsize", "2400k",
+                "-cpu-used", "4", "-row-mt", "1",
                 "-pix_fmt", "yuv420p",
-                "-c:a", "libopus", "-b:a", "64k",
+                "-c:a", "libopus", "-b:a", "128k",
                 "-movflags", "+faststart",
                 str(final)
             ]))
@@ -345,6 +347,18 @@ async def handle_pinterest(m, url):
         await m.answer(f"❌ 𝐏𝐢𝐧𝐭𝐞𝐫𝐞𝐬𝐭 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════
+# SPOTIFY & MP3 COMMANDS
+# ═══════════════════════════════════════════════════════════
+
+@dp.message(Command("mp3"))
+async def mp3_command(m: Message):
+    query = m.text.replace("/mp3", "").strip()
+    if not query:
+        await m.answer("𝐔𝐬𝐚𝐠𝐞: /mp3 song name")
+        return
+    await search_and_download_song(bot, m, query)
+
+# ═══════════════════════════════════════════════════════════
 # ROUTER
 # ═══════════════════════════════════════════════════════════
 
@@ -371,6 +385,8 @@ async def handle(m: Message):
                 await handle_youtube(m, url)
             elif "pinterest.com" in url.lower() or "pin.it" in url.lower():
                 await handle_pinterest(m, url)
+            elif "spotify.com" in url.lower():
+                await download_spotify_playlist(bot, m, url)
             else:
                 await m.answer("❌ 𝐔𝐧𝐬𝐮𝐩𝐩𝐨𝐫𝐭𝐞𝐝 𝐏𝐥𝐚𝐭𝐟𝐨𝐫𝐦")
         except Exception as e:
