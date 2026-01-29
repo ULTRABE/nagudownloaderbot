@@ -9,7 +9,7 @@ from yt_dlp import YoutubeDL
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("downloader")
 
-BOT_TOKEN = "YOUR_TOKEN_HERE"
+BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
 
 YT_COOKIES = "cookies_youtube.txt"
 IG_COOKIES = "cookies_instagram.txt"
