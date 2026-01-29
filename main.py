@@ -201,11 +201,11 @@ async def handle_instagram(m, url):
         await m.answer(f"❌ 𝐈𝐧𝐬𝐭𝐚𝐠𝐫𝐚𝐦 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════
-# YOUTUBE - ULTRA FAST (SAME AS INSTAGRAM)
+# YOUTUBE - ULTRA FAST WITH SHARP QUALITY
 # ═══════════════════════════════════════════════════════════
 
 def yt_optimize(src, out):
-    """Same fast pipeline as Instagram"""
+    """Fast pipeline with sharp quality"""
     size_mb = src.stat().st_size / 1024 / 1024
     logger.info(f"YT: {size_mb:.2f} MB")
     
@@ -214,15 +214,13 @@ def yt_optimize(src, out):
         logger.info("YT: Fast copy (<=18MB)")
         run(["ffmpeg", "-y", "-i", str(src), "-c", "copy", "-movflags", "+faststart", str(out)])
     else:
-        # FAST HIGH COMPRESSION (SHARP)
-        logger.info("YT: Fast VP9 compression (>18MB)")
+        # SHARP COMPRESSION - Better quality
+        logger.info("YT: Sharp compression (>18MB)")
         run([
             "ffmpeg", "-y", "-i", str(src),
-            "-vf", "scale=720:-2",
-            "-c:v", "libvpx-vp9", "-crf", "26", "-b:v", "0",
-            "-cpu-used", "8", "-row-mt", "1",
-            "-pix_fmt", "yuv420p",
-            "-c:a", "libopus", "-b:a", "64k",
+            "-vf", "scale=720:-2:flags=lanczos",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+            "-c:a", "aac", "-b:a", "128k",
             "-movflags", "+faststart",
             str(out)
         ])
@@ -241,7 +239,7 @@ async def handle_youtube(m, url):
             opts = {
                 "quiet": True,
                 "no_warnings": True,
-                "format": "best[height<=720][ext=mp4]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best",
+                "format": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]/best",
                 "merge_output_format": "mp4",
                 "outtmpl": str(raw),
                 "proxy": pick_proxy(),
