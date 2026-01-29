@@ -205,7 +205,7 @@ async def handle_instagram(m, url):
 # ═══════════════════════════════════════════════════════════
 
 def yt_optimize(src, out):
-    """Fast pipeline with sharp quality"""
+    """Ultra sharp quality with AV1"""
     size_mb = src.stat().st_size / 1024 / 1024
     logger.info(f"YT: {size_mb:.2f} MB")
     
@@ -214,13 +214,14 @@ def yt_optimize(src, out):
         logger.info("YT: Fast copy (<=18MB)")
         run(["ffmpeg", "-y", "-i", str(src), "-c", "copy", "-movflags", "+faststart", str(out)])
     else:
-        # SHARP COMPRESSION - Better quality
-        logger.info("YT: Sharp compression (>18MB)")
+        # ULTRA SHARP AV1 - 4K-like quality
+        logger.info("YT: Ultra sharp AV1 compression (>18MB)")
         run([
             "ffmpeg", "-y", "-i", str(src),
             "-vf", "scale=720:-2:flags=lanczos",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-            "-c:a", "aac", "-b:a", "128k",
+            "-c:v", "libaom-av1", "-crf", "28", "-b:v", "0",
+            "-cpu-used", "8", "-row-mt", "1", "-tiles", "2x2",
+            "-c:a", "libopus", "-b:a", "128k",
             "-movflags", "+faststart",
             str(out)
         ])
