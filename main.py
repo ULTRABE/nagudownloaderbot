@@ -1167,19 +1167,11 @@ async def download_spotify_playlist(m, url):
     
     # Check if Spotify credentials are set
     if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
-        await m.answer("[ X ] Spotify API not configured")
+        await m.answer("❌ Spotify API not configured")
         return
     
     # Phase 1: Processing
-    status_msg = await m.answer("""
-╔══════════════════════════╗
-║   SPOTIFY PLAYLIST       ║
-╚══════════════════════════╝
-
-PHASE 1/3: Processing
-[░░░░░░░░░░] 0%
-
-Status: Initializing...""")
+    status_msg = await m.answer("🎵 Processing Spotify playlist...\n⏳ Please wait...")
     start = time.perf_counter()
     
     try:
@@ -1187,15 +1179,7 @@ Status: Initializing...""")
             tmp = Path(tmp)
             
             # Phase 2: Downloading
-            await status_msg.edit_text("""
-╔══════════════════════════╗
-║   SPOTIFY PLAYLIST       ║
-╚══════════════════════════╝
-
-PHASE 2/3: Downloading
-[███░░░░░░░] 33%
-
-Status: Downloading songs...""")
+            await status_msg.edit_text("📥 Downloading songs from Spotify...\n[░░░░░░░░░░] 0%")
             
             # Use spotdl to download entire playlist
             cmd = [
@@ -1218,31 +1202,24 @@ Status: Downloading songs...""")
             
             if result.returncode != 0:
                 logger.error(f"spotdl failed: {result.stderr}")
-                await status_msg.edit_text(f"[ X ] Spotify Failed\n{result.stderr[:100]}")
+                await status_msg.edit_text(f"❌ Spotify Failed\n{result.stderr[:100]}")
                 return
             
             # Find all downloaded MP3 files
             mp3_files = list(tmp.glob("*.mp3"))
             
             if not mp3_files:
-                await status_msg.edit_text("[ X ] No songs downloaded")
+                await status_msg.edit_text("❌ No songs downloaded")
                 return
             
             total = len(mp3_files)
             
-            # Phase 3: Sending to DM
-            await status_msg.edit_text(f"""
-╔══════════════════════════╗
-║   SPOTIFY PLAYLIST       ║
-╚══════════════════════════╝
-
-PHASE 3/3: Sending to DM
-[██████░░░░] 66%
-
-Status: Sending {total} songs...""")
+            # Show download complete
+            await status_msg.edit_text(f"✅ Downloaded {total} songs!\n📤 Uploading to your DM...")
             
             sent = 0
             failed = 0
+            song_list = []
             
             # Send each song to DM (without caption)
             for i, mp3 in enumerate(mp3_files, 1):
@@ -1265,21 +1242,22 @@ Status: Sending {total} songs...""")
                         performer=artist
                     )
                     sent += 1
+                    song_list.append(f"✅ {title}")
                     logger.info(f"DM: {title} by {artist} ({file_size:.1f}MB)")
                     
-                    # Update progress every 5 songs
-                    if i % 5 == 0 or i == total:
+                    # Update progress every 3 songs with real progress bar
+                    if i % 3 == 0 or i == total:
                         progress_bar = create_progress_bar(sent, total)
+                        # Show last 5 songs
+                        recent_songs = "\n".join(song_list[-5:])
                         try:
-                            await status_msg.edit_text(f"""
-╔══════════════════════════╗
-║   SPOTIFY PLAYLIST       ║
-╚══════════════════════════╝
+                            await status_msg.edit_text(f"""📤 Uploading to DM...
 
-PHASE 3/3: Sending to DM
 {progress_bar}
+{sent}/{total} songs sent
 
-Status: Sent {sent}/{total} songs""")
+Recent:
+{recent_songs}""")
                         except:
                             pass
                     
@@ -1289,24 +1267,28 @@ Status: Sent {sent}/{total} songs""")
                 except Exception as e:
                     logger.error(f"Failed to send {mp3.name}: {e}")
                     failed += 1
+                    song_list.append(f"❌ {filename}")
         
             elapsed = time.perf_counter() - start
             
-            # Final status in group
-            await status_msg.edit_text(f"""
-╔══════════════════════════╗
-║   PLAYLIST COMPLETED     ║
-╚══════════════════════════╝
+            # Delete progress message
+            try:
+                await status_msg.delete()
+            except:
+                pass
+            
+            # Send final summary
+            await m.answer(f"""✅ Spotify Playlist Complete!
 
 {mention(m.from_user)}
 
-SUMMARY
-├─ Total Songs: {total}
-├─ Sent to DM: {sent}
-├─ Failed: {failed}
-└─ Time: {elapsed:.1f}s
+📊 Summary:
+• Total: {total} songs
+• Sent: {sent} ✅
+• Failed: {failed} ❌
+• Time: {elapsed:.1f}s
 
-All songs sent to your DM!""", parse_mode="HTML")
+All songs sent to your DM! 💌""", parse_mode="HTML")
             
             logger.info(f"SPOTIFY: {sent} songs in {elapsed:.2f}s")
         
