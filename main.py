@@ -437,33 +437,80 @@ async def download_single_track(track_info, tmp_dir, cookie_file):
         return None
 
 async def get_spotify_tracks(url):
-    """Extract track list from Spotify playlist/album"""
+    """Extract track list from Spotify playlist/album using Spotify API"""
     try:
-        # Use yt-dlp to extract Spotify playlist info
-        opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "extract_flat": True,
-            "proxy": pick_proxy(),
-        }
+        import requests
+        import base64
         
-        with YoutubeDL(opts) as ydl:
-            info = await asyncio.to_thread(lambda: ydl.extract_info(url, download=False))
-            
-            tracks = []
-            if 'entries' in info:
-                for entry in info['entries']:
-                    tracks.append({
-                        'title': entry.get('title', 'Unknown'),
-                        'artist': entry.get('artist', 'Unknown Artist')
-                    })
-            else:
+        # Get Spotify access token
+        auth_str = f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}"
+        auth_b64 = base64.b64encode(auth_str.encode()).decode()
+        
+        token_response = await asyncio.to_thread(
+            lambda: requests.post(
+                "https://api.spotify.com/v1/token",
+                headers={"Authorization": f"Basic {auth_b64}"},
+                data={"grant_type": "client_credentials"}
+            )
+        )
+        
+        if token_response.status_code != 200:
+            logger.error(f"Failed to get Spotify token: {token_response.text}")
+            return []
+        
+        access_token = token_response.json()["access_token"]
+        headers = {"Authorization": f"Bearer {access_token}"}
+        
+        # Extract playlist/album ID from URL
+        if "playlist" in url:
+            playlist_id = url.split("playlist/")[1].split("?")[0]
+            api_url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
+        elif "album" in url:
+            album_id = url.split("album/")[1].split("?")[0]
+            api_url = f"https://api.spotify.com/v1/albums/{album_id}/tracks"
+        elif "track" in url:
+            track_id = url.split("track/")[1].split("?")[0]
+            api_url = f"https://api.spotify.com/v1/tracks/{track_id}"
+        else:
+            logger.error("Invalid Spotify URL")
+            return []
+        
+        tracks = []
+        
+        # Handle single track
+        if "track" in url:
+            response = await asyncio.to_thread(lambda: requests.get(api_url, headers=headers))
+            if response.status_code == 200:
+                data = response.json()
                 tracks.append({
-                    'title': info.get('title', 'Unknown'),
-                    'artist': info.get('artist', 'Unknown Artist')
+                    'title': data['name'],
+                    'artist': ', '.join([artist['name'] for artist in data['artists']])
                 })
-            
             return tracks
+        
+        # Handle playlist/album with pagination
+        while api_url:
+            response = await asyncio.to_thread(lambda: requests.get(api_url, headers=headers))
+            
+            if response.status_code != 200:
+                logger.error(f"Failed to fetch tracks: {response.text}")
+                break
+            
+            data = response.json()
+            
+            for item in data.get('items', []):
+                track = item.get('track') if 'track' in item else item
+                if track and track.get('name'):
+                    tracks.append({
+                        'title': track['name'],
+                        'artist': ', '.join([artist['name'] for artist in track.get('artists', [])])
+                    })
+            
+            # Get next page
+            api_url = data.get('next')
+        
+        return tracks
+        
     except Exception as e:
         logger.error(f"Failed to extract Spotify tracks: {e}")
         return []
@@ -471,6 +518,11 @@ async def get_spotify_tracks(url):
 async def download_spotify_playlist(m, url):
     """Download Spotify playlist using yt-dlp with proper metadata"""
     logger.info(f"SPOTIFY: {url}")
+    
+    # Check if Spotify credentials are set
+    if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
+        await m.answer("❌ 𝐒𝐩𝐨𝐭𝐢𝐟𝐲 𝐀𝐏𝐈 𝐧𝐨𝐭 𝐜𝐨𝐧𝐟𝐢𝐠𝐮𝐫𝐞𝐝\n\nPlease set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET environment variables.")
+        return
     
     # Send initial message
     status_msg = await m.answer("🎵 𝐏𝐫𝐨𝐜𝐞𝐬𝐬𝐢𝐧𝐠 𝐒𝐩𝐨𝐭𝐢𝐟𝐲 𝐏𝐥𝐚𝐲𝐥𝐢𝐬𝐭...")
