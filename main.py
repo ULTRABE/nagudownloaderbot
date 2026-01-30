@@ -1,38 +1,40 @@
-import asyncio, os, re, subprocess, tempfile, time, logging, random, glob
+import asyncio, os, re, subprocess, tempfile, time, logging, random, glob, json
 from pathlib import Path
+from datetime import datetime, timedelta
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
-from aiogram.types import Message, FSInputFile
+from aiogram.types import Message, FSInputFile, ChatPermissions
 from yt_dlp import YoutubeDL
+from upstash_redis import Redis
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
 logger = logging.getLogger("NAGU")
 
-BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
+# ═══════════════════════════════════════════════════════════
+# ENVIRONMENT VARIABLES - ALL SECRETS FROM ENV
+# ═══════════════════════════════════════════════════════════
 
-# Spotify API (from environment variables)
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID", "")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET", "")
+REDIS_URL = os.getenv("REDIS_URL", "")
+REDIS_TOKEN = os.getenv("REDIS_TOKEN", "")
+
+# Proxies from environment (comma-separated)
+PROXIES_STR = os.getenv("PROXIES", "")
+PROXIES = [p.strip() for p in PROXIES_STR.split(",") if p.strip()] if PROXIES_STR else []
 
 # Cookie files and folders
 IG_COOKIES = "cookies_instagram.txt"
 YT_COOKIES_FOLDER = "yt cookies"
 YT_MUSIC_COOKIES_FOLDER = "yt music cookies"
 
-IG_STICKER = "CAACAgIAAxkBAAEadEdpekZa1-2qYm-1a3dX0JmM_Z9uDgAC4wwAAjAT0Euml6TE9QhYWzgE"
-YT_STICKER = "CAACAgIAAxkBAAEaedlpez9LOhwF-tARQsD1V9jzU8iw1gACQjcAAgQyMEixyZ896jTkCDgE"
-PIN_STICKER = "CAACAgIAAxkBAAEaegZpe0KJMDIkiCbudZrXhJDwBXYHqgACExIAAq3mUUhZ4G5Cm78l2DgE"
-MUSIC_STICKER = "CAACAgIAAxkBAAEaegZpe0KJMDIkiCbudZrXhJDwBXYHqgACExIAAq3mUUhZ4G5Cm78l2DgE"
-
-PROXIES = [
-    "http://203033:JmNd95Z3vcX@196.51.85.7:8800",
-    "http://203033:JmNd95Z3vcX@196.51.218.227:8800",
-    "http://203033:JmNd95Z3vcX@196.51.106.149:8800",
-    "http://203033:JmNd95Z3vcX@170.130.62.211:8800",
-    "http://203033:JmNd95Z3vcX@196.51.106.30:8800",
-    "http://203033:JmNd95Z3vcX@196.51.85.207:8800",
-]
+# Stickers
+IG_STICKER = os.getenv("IG_STICKER", "CAACAgIAAxkBAAEadEdpekZa1-2qYm-1a3dX0JmM_Z9uDgAC4wwAAjAT0Euml6TE9QhYWzgE")
+YT_STICKER = os.getenv("YT_STICKER", "CAACAgIAAxkBAAEaedlpez9LOhwF-tARQsD1V9jzU8iw1gACQjcAAgQyMEixyZ896jTkCDgE")
+PIN_STICKER = os.getenv("PIN_STICKER", "CAACAgIAAxkBAAEaegZpe0KJMDIkiCbudZrXhJDwBXYHqgACExIAAq3mUUhZ4G5Cm78l2DgE")
+MUSIC_STICKER = os.getenv("MUSIC_STICKER", "CAACAgIAAxkBAAEaegZpe0KJMDIkiCbudZrXhJDwBXYHqgACExIAAq3mUUhZ4G5Cm78l2DgE")
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
@@ -40,8 +42,19 @@ USER_AGENTS = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
 ]
 
-def pick_proxy(): return random.choice(PROXIES)
+def pick_proxy(): return random.choice(PROXIES) if PROXIES else None
 def pick_ua(): return random.choice(USER_AGENTS)
+
+# ═══════════════════════════════════════════════════════════
+# REDIS DATABASE CONNECTION
+# ═══════════════════════════════════════════════════════════
+
+try:
+    redis = Redis(url=REDIS_URL, token=REDIS_TOKEN)
+    logger.info("Redis connected successfully")
+except Exception as e:
+    logger.error(f"Redis connection failed: {e}")
+    redis = None
 
 # Cookie rotation system
 def get_random_cookie(folder):
@@ -61,9 +74,120 @@ def resolve_pin(url):
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 semaphore = asyncio.Semaphore(16)
-MUSIC_SEMAPHORE = asyncio.Semaphore(2)  # Reduced from 6 to 2 to protect cookies
+MUSIC_SEMAPHORE = asyncio.Semaphore(2)
 
 LINK_RE = re.compile(r"https?://\S+")
+
+# ═══════════════════════════════════════════════════════════
+# REDIS HELPER FUNCTIONS
+# ═══════════════════════════════════════════════════════════
+
+def get_admin_key(chat_id): return f"admins:{chat_id}"
+def get_mute_key(chat_id, user_id): return f"mute:{chat_id}:{user_id}"
+def get_filter_key(chat_id): return f"filters:{chat_id}"
+def get_blocklist_key(chat_id): return f"blocklist:{chat_id}"
+
+async def is_admin(chat_id, user_id):
+    """Check if user is admin"""
+    if not redis: return False
+    try:
+        admins = redis.smembers(get_admin_key(chat_id))
+        return str(user_id) in [str(a) for a in admins]
+    except:
+        return False
+
+async def add_admin(chat_id, user_id):
+    """Add user as admin"""
+    if redis:
+        redis.sadd(get_admin_key(chat_id), str(user_id))
+
+async def remove_admin(chat_id, user_id):
+    """Remove user from admins"""
+    if redis:
+        redis.srem(get_admin_key(chat_id), str(user_id))
+
+async def is_muted(chat_id, user_id):
+    """Check if user is muted"""
+    if not redis: return False
+    try:
+        mute_until = redis.get(get_mute_key(chat_id, user_id))
+        if not mute_until: return False
+        if datetime.now().timestamp() > float(mute_until):
+            redis.delete(get_mute_key(chat_id, user_id))
+            return False
+        return True
+    except:
+        return False
+
+async def mute_user(chat_id, user_id, duration_minutes=0):
+    """Mute user for duration (0 = permanent)"""
+    if not redis: return
+    if duration_minutes == 0:
+        redis.set(get_mute_key(chat_id, user_id), "permanent")
+    else:
+        until = (datetime.now() + timedelta(minutes=duration_minutes)).timestamp()
+        redis.set(get_mute_key(chat_id, user_id), str(until))
+
+async def unmute_user(chat_id, user_id):
+    """Unmute user"""
+    if redis:
+        redis.delete(get_mute_key(chat_id, user_id))
+
+async def add_filter(chat_id, word):
+    """Add word to filter list"""
+    if redis:
+        redis.sadd(get_filter_key(chat_id), word.lower())
+
+async def remove_filter(chat_id, word):
+    """Remove word from filter list"""
+    if redis:
+        redis.srem(get_filter_key(chat_id), word.lower())
+
+async def get_filters(chat_id):
+    """Get all filtered words"""
+    if not redis: return []
+    try:
+        return list(redis.smembers(get_filter_key(chat_id)))
+    except:
+        return []
+
+async def add_to_blocklist(chat_id, word):
+    """Add exact word to blocklist"""
+    if redis:
+        redis.sadd(get_blocklist_key(chat_id), word.lower())
+
+async def remove_from_blocklist(chat_id, word):
+    """Remove word from blocklist"""
+    if redis:
+        redis.srem(get_blocklist_key(chat_id), word.lower())
+
+async def get_blocklist(chat_id):
+    """Get all blocked words"""
+    if not redis: return []
+    try:
+        return list(redis.smembers(get_blocklist_key(chat_id)))
+    except:
+        return []
+
+async def check_message_filters(chat_id, text):
+    """Check if message contains filtered/blocked words"""
+    if not text: return False, None
+    text_lower = text.lower()
+    
+    # Check blocklist (exact word match)
+    blocklist = await get_blocklist(chat_id)
+    words = text_lower.split()
+    for blocked in blocklist:
+        if blocked in words:
+            return True, f"Blocked word: {blocked}"
+    
+    # Check filters (substring match)
+    filters = await get_filters(chat_id)
+    for filtered in filters:
+        if filtered in text_lower:
+            return True, f"Filtered word: {filtered}"
+    
+    return False, None
 
 # ═══════════════════════════════════════════════════════════
 # MINIMALIST PREMIUM UI
