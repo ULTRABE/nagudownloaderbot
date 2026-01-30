@@ -263,19 +263,16 @@ async def help_command(m: Message):
 │ 💬 𝘖𝘵𝘩𝘦𝘳 𝘊𝘰𝘮𝘮𝘢𝘯𝘥𝘴
 │ ▸ /whisper <𝘮𝘴𝘨> ⟶ 𝘗𝘳𝘪𝘷𝘢𝘵𝘦 𝘮𝘦𝘴𝘴𝘢𝘨𝘦
 │
-╰─ 💎 𝘖𝘸𝘯𝘦𝘳: @bhosadih"""
-    
-    # Try to send with picture
-    picture_path = Path("assets/picture.png")
-    if picture_path.exists():
-        try:
-            await m.reply_photo(FSInputFile(picture_path), caption=caption)
-            return
-        except:
-            pass
-    
-    # Fallback to text only
-    await m.reply(caption, quote=True)
+╰─ 💎 𝘖𝘸𝘯𝘦𝘳: @bhosadih""")
+
+def mention(u):
+    return f'<a href="tg://user?id={u.id}">{u.first_name}</a>'
+
+def caption(m, elapsed):
+    return (
+        f"₪ 𝐔𝐬𝐞𝐫: {mention(m.from_user)}\n"
+        f"₪ 𝐓𝐢𝐦𝐞: {elapsed:.2f}s"
+    )
 
 # ═══════════════════════════════════════════════════════════
 # MANAGEMENT COMMANDS
