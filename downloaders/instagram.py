@@ -1,4 +1,4 @@
-"""Instagram downloader - fully async"""
+"""Instagram downloader - Fully async with proper error handling"""
 import asyncio
 import time
 import tempfile
@@ -9,115 +9,79 @@ from aiogram.types import Message, FSInputFile
 from core.bot import bot
 from core.config import config
 from workers.task_queue import download_semaphore
-from ui.formatting import format_caption
+from ui.formatting import format_download_complete
+from utils.helpers import get_random_cookie
 from utils.logger import logger
 
-async def ig_download(url: str, output_path: Path, use_cookies: bool = False):
-    """Download Instagram video asynchronously"""
-    opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "format": "best[height<=720][ext=mp4]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best",
-        "merge_output_format": "mp4",
-        "outtmpl": str(output_path),
-        "proxy": config.pick_proxy(),
-        "http_headers": {"User-Agent": config.pick_user_agent()},
-        "concurrent_fragment_downloads": 20,
-        "http_chunk_size": 10485760,
-    }
-    
-    if use_cookies and Path(config.IG_COOKIES).exists():
-        opts["cookiefile"] = config.IG_COOKIES
-        logger.info("Using Instagram cookies (fallback)")
-    
-    # Run yt-dlp in thread pool to avoid blocking
-    await asyncio.to_thread(lambda: YoutubeDL(opts).download([url]))
-
-async def ig_optimize(src: Path, out: Path):
-    """Optimize Instagram video asynchronously"""
-    size_mb = src.stat().st_size / 1024 / 1024
-    logger.info(f"IG: {size_mb:.2f} MB")
-    
-    if size_mb <= 18:
-        # Fast copy (no re-encode)
-        logger.info("IG: Fast copy (<=18MB)")
-        proc = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-y", "-i", str(src), "-c", "copy", str(out),
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL
-        )
-        await proc.wait()
-    else:
-        # Fast VP9 compression
-        logger.info("IG: Fast VP9 compression (>18MB)")
-        proc = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-y", "-i", str(src),
-            "-vf", "scale=720:-2",
-            "-c:v", "libvpx-vp9", "-crf", "26", "-b:v", "0",
-            "-cpu-used", "8", "-row-mt", "1",
-            "-pix_fmt", "yuv420p",
-            "-c:a", "libopus", "-b:a", "48k",
-            "-movflags", "+faststart",
-            str(out),
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL
-        )
-        await proc.wait()
-
 async def handle_instagram(m: Message, url: str):
-    """Handle Instagram download request"""
+    """
+    Download Instagram posts, reels, stories
+    Fully async implementation
+    """
     async with download_semaphore:
-        logger.info(f"IG: {url}")
+        logger.info(f"INSTAGRAM: {url}")
+        
+        # Send sticker as progress indicator
         sticker = await bot.send_sticker(m.chat.id, config.IG_STICKER)
-        start = time.perf_counter()
-
+        start_time = time.perf_counter()
+        
         try:
             with tempfile.TemporaryDirectory() as tmp_dir:
                 tmp = Path(tmp_dir)
-                raw = tmp / "ig.mp4"
-                final = tmp / "igf.mp4"
-
-                # Try without cookies first
-                try:
-                    await ig_download(url, raw, use_cookies=False)
-                except:
-                    logger.info("IG: Retrying with cookies")
-                    await ig_download(url, raw, use_cookies=True)
-
-                # Optimize video
-                await ig_optimize(raw, final)
-
-                elapsed = time.perf_counter() - start
+                
+                # yt-dlp options for Instagram
+                opts = {
+                    "quiet": True,
+                    "no_warnings": True,
+                    "outtmpl": str(tmp / "%(title)s.%(ext)s"),
+                    "proxy": config.pick_proxy(),
+                    "http_headers": {
+                        "User-Agent": config.pick_user_agent()
+                    },
+                    "socket_timeout": 30,
+                    "retries": 3
+                }
+                
+                # Use Instagram cookies if available
+                cookie_file = get_random_cookie(".")  # Look for cookies_instagram.txt
+                if cookie_file and "instagram" in cookie_file.lower():
+                    opts["cookiefile"] = cookie_file
+                    logger.info(f"INSTAGRAM: Using cookie file")
+                
+                # Download asynchronously
+                with YoutubeDL(opts) as ydl:
+                    await asyncio.to_thread(
+                        lambda: ydl.download([url])
+                    )
+                
+                # Find downloaded files
+                video_files = list(tmp.glob("*.mp4")) + list(tmp.glob("*.webm"))
+                
+                if not video_files:
+                    await bot.delete_message(m.chat.id, sticker.message_id)
+                    await m.answer("No video found")
+                    return
+                
+                elapsed = time.perf_counter() - start_time
                 
                 # Delete sticker
-                try:
-                    await bot.delete_message(m.chat.id, sticker.message_id)
-                except:
-                    pass
-
-                # Send video
-                sent = await bot.send_video(
-                    m.chat.id,
-                    FSInputFile(final),
-                    caption=format_caption(m.from_user, elapsed),
-                    parse_mode="HTML",
-                    supports_streaming=True
-                )
-
-                # Pin in groups
-                if m.chat.type != "private":
-                    try:
-                        await bot.pin_chat_message(m.chat.id, sent.message_id)
-                    except:
-                        pass
+                await bot.delete_message(m.chat.id, sticker.message_id)
                 
-                logger.info(f"IG: Done in {elapsed:.2f}s")
+                # Send video(s)
+                for video_file in video_files:
+                    await bot.send_video(
+                        m.chat.id,
+                        FSInputFile(video_file),
+                        caption=format_download_complete(m.from_user, elapsed, "Instagram"),
+                        parse_mode="HTML"
+                    )
                 
+                logger.info(f"INSTAGRAM: Sent {len(video_files)} file(s) in {elapsed:.2f}s")
+        
         except Exception as e:
-            logger.error(f"IG: {e}")
+            logger.error(f"INSTAGRAM ERROR: {e}")
             try:
                 await bot.delete_message(m.chat.id, sticker.message_id)
             except:
                 pass
-            await m.answer(f"❌ 𝐈𝐧𝐬𝐭𝐚𝐠𝐫𝐚𝐦 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
+            await m.answer(f"Instagram download failed\n{str(e)[:100]}")
