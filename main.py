@@ -61,7 +61,7 @@ def resolve_pin(url):
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 semaphore = asyncio.Semaphore(16)
-MUSIC_SEMAPHORE = asyncio.Semaphore(6)
+MUSIC_SEMAPHORE = asyncio.Semaphore(2)  # Reduced from 6 to 2 to protect cookies
 
 LINK_RE = re.compile(r"https?://\S+")
 
@@ -247,7 +247,14 @@ async def handle_youtube(m, url):
                 "merge_output_format": "mp4",
                 "outtmpl": str(raw),
                 "proxy": pick_proxy(),
-                "http_headers": {"User-Agent": pick_ua()},
+                "http_headers": {
+                    "User-Agent": pick_ua(),
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "DNT": "1",
+                },
+                "socket_timeout": 30,
+                "retries": 3,
                 "concurrent_fragment_downloads": 20,
                 "extractor_args": {
                     "youtube": {
@@ -373,11 +380,14 @@ async def handle_pinterest(m, url):
 # SPOTIFY PLAYLIST DOWNLOADER (IMPROVED WITH YT-DLP)
 # ═══════════════════════════════════════════════════════════
 
-async def download_single_track(track_info, tmp_dir, cookie_file):
+async def download_single_track(track_info, tmp_dir, cookie_file, retry_count=0):
     """Download a single track with proper metadata and thumbnail"""
     try:
         query = f"{track_info['artist']} {track_info['title']}"
         logger.info(f"Downloading: {query}")
+        
+        # Add delay before download to avoid rate limiting (3-5 seconds)
+        await asyncio.sleep(random.uniform(3.0, 5.0))
         
         opts = {
             "quiet": True,
@@ -385,14 +395,25 @@ async def download_single_track(track_info, tmp_dir, cookie_file):
             "format": "bestaudio/best",
             "outtmpl": str(tmp_dir / "%(title)s.%(ext)s"),
             "proxy": pick_proxy(),
-            "http_headers": {"User-Agent": pick_ua()},
+            "http_headers": {
+                "User-Agent": pick_ua(),
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Encoding": "gzip, deflate",
+                "DNT": "1",
+                "Connection": "keep-alive",
+                "Upgrade-Insecure-Requests": "1"
+            },
             "default_search": "ytsearch1",
             "writethumbnail": True,
+            "socket_timeout": 30,
+            "retries": 3,
+            "fragment_retries": 3,
             "postprocessors": [
                 {
                     "key": "FFmpegExtractAudio",
                     "preferredcodec": "mp3",
-                    "preferredquality": "192",  # Reduced from 320 to 192 for smaller size
+                    "preferredquality": "192",
                 },
                 {
                     "key": "EmbedThumbnail",
@@ -404,9 +425,9 @@ async def download_single_track(track_info, tmp_dir, cookie_file):
                 }
             ],
             "postprocessor_args": [
-                "-ar", "44100",  # Reduced sample rate from 48000
+                "-ar", "44100",
                 "-ac", "2",
-                "-b:a", "192k",  # Target bitrate for smaller files
+                "-b:a", "192k",
             ],
         }
         
@@ -419,10 +440,6 @@ async def download_single_track(track_info, tmp_dir, cookie_file):
             # Find the downloaded MP3
             for f in tmp_dir.iterdir():
                 if f.suffix == ".mp3" and f.stat().st_size > 0:
-                    # Get actual metadata from downloaded file
-                    actual_title = info['entries'][0]['title'] if 'entries' in info else info.get('title', track_info['title'])
-                    actual_artist = info['entries'][0].get('artist') or info['entries'][0].get('uploader', track_info['artist']) if 'entries' in info else info.get('artist', track_info['artist'])
-                    
                     return {
                         'file': f,
                         'title': track_info['title'],
@@ -434,6 +451,14 @@ async def download_single_track(track_info, tmp_dir, cookie_file):
         
     except Exception as e:
         logger.error(f"Failed to download {track_info['title']}: {e}")
+        
+        # Retry with different cookie if first attempt fails
+        if retry_count < 1:
+            logger.info(f"Retrying {track_info['title']} with different cookie...")
+            await asyncio.sleep(5)  # Wait before retry
+            new_cookie = get_random_cookie(YT_MUSIC_COOKIES_FOLDER)
+            return await download_single_track(track_info, tmp_dir, new_cookie, retry_count + 1)
+        
         return None
 
 async def get_spotify_tracks(url):
@@ -537,57 +562,70 @@ async def download_spotify_playlist(m, url):
             return
         
         total_tracks = len(tracks)
-        await status_msg.edit_text(f"📥 𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐢𝐧𝐠 {total_tracks} 𝐭𝐫𝐚𝐜𝐤𝐬...\n⏳ 𝐓𝐡𝐢𝐬 𝐦𝐚𝐲 𝐭𝐚𝐤𝐞 𝐚 𝐰𝐡𝐢𝐥𝐞...")
+        await status_msg.edit_text(
+            f"📥 𝐅𝐨𝐮𝐧𝐝 {total_tracks} 𝐭𝐫𝐚𝐜𝐤𝐬\n"
+            f"⏳ 𝐒𝐭𝐚𝐫𝐭𝐢𝐧𝐠 𝐝𝐨𝐰𝐧𝐥𝐨𝐚𝐝 𝐢𝐧 𝟓 𝐬𝐞𝐜𝐨𝐧𝐝𝐬...\n"
+            f"⚠️ 𝐋𝐚𝐫𝐠𝐞 𝐩𝐥𝐚𝐲𝐥𝐢𝐬𝐭 - 𝐭𝐡𝐢𝐬 𝐰𝐢𝐥𝐥 𝐭𝐚𝐤𝐞 𝐚 𝐰𝐡𝐢𝐥𝐞"
+        )
         
-        cookie_file = get_random_cookie(YT_MUSIC_COOKIES_FOLDER)
+        # 5 second cooldown before starting
+        await asyncio.sleep(5)
         
         downloaded = 0
         failed = 0
+        last_update = 0
         
-        # Process tracks in batches of 5
-        for i in range(0, total_tracks, 5):
-            batch = tracks[i:i+5]
+        # Process tracks ONE AT A TIME to protect cookies
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
             
-            # Update progress
-            if i > 0:
-                await status_msg.edit_text(
-                    f"📥 𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐢𝐧𝐠...\n"
-                    f"✅ {downloaded}/{total_tracks} 𝐜𝐨𝐦𝐩𝐥𝐞𝐭𝐞𝐝\n"
-                    f"❌ {failed} 𝐟𝐚𝐢𝐥𝐞𝐝"
-                )
-            
-            # Download batch
-            tasks = []
-            with tempfile.TemporaryDirectory() as tmp:
-                tmp = Path(tmp)
+            for i, track in enumerate(tracks, 1):
+                # Update progress every 10 tracks or at start
+                if i == 1 or i % 10 == 0 or i == total_tracks:
+                    try:
+                        await status_msg.edit_text(
+                            f"📥 𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐢𝐧𝐠...\n"
+                            f"🎵 𝐓𝐫𝐚𝐜𝐤 {i}/{total_tracks}\n"
+                            f"✅ 𝐒𝐮𝐜𝐜𝐞𝐬𝐬: {downloaded}\n"
+                            f"❌ 𝐅𝐚𝐢𝐥𝐞𝐝: {failed}\n"
+                            f"⏱️ 𝐄𝐬𝐭. 𝐭𝐢𝐦𝐞: {(total_tracks - i) * 5 // 60} 𝐦𝐢𝐧"
+                        )
+                    except:
+                        pass  # Ignore update errors
                 
-                for track in batch:
-                    task = download_single_track(track, tmp, cookie_file)
-                    tasks.append(task)
+                # Rotate cookie every 20 tracks to avoid flagging
+                if i % 20 == 0:
+                    cookie_file = get_random_cookie(YT_MUSIC_COOKIES_FOLDER)
+                    logger.info(f"Rotated to new cookie at track {i}")
+                else:
+                    cookie_file = get_random_cookie(YT_MUSIC_COOKIES_FOLDER)
                 
-                results = await asyncio.gather(*tasks, return_exceptions=True)
+                # Download single track
+                result = await download_single_track(track, tmp, cookie_file)
                 
-                # Send downloaded tracks to DM
-                for result in results:
-                    if result and not isinstance(result, Exception) and result.get('file'):
+                # Send to DM if successful
+                if result and result.get('file'):
+                    try:
+                        await bot.send_audio(
+                            m.from_user.id,
+                            FSInputFile(result['file']),
+                            title=result['title'],
+                            performer=result['artist'],
+                            caption=f"🎵 {result['title']}\n🎤 {result['artist']}\n💾 {result['size_mb']:.1f}MB"
+                        )
+                        downloaded += 1
+                        logger.info(f"DM: {result['title']} by {result['artist']} ({result['size_mb']:.1f}MB)")
+                        
+                        # Clean up the file after sending
                         try:
-                            await bot.send_audio(
-                                m.from_user.id,
-                                FSInputFile(result['file']),
-                                title=result['title'],
-                                performer=result['artist'],
-                                caption=f"🎵 {result['title']}\n🎤 {result['artist']}\n💾 {result['size_mb']:.1f}MB"
-                            )
-                            downloaded += 1
-                            logger.info(f"DM: {result['title']} by {result['artist']} ({result['size_mb']:.1f}MB)")
-                        except Exception as e:
-                            logger.error(f"Failed to send {result['title']}: {e}")
-                            failed += 1
-                    else:
+                            result['file'].unlink()
+                        except:
+                            pass
+                    except Exception as e:
+                        logger.error(f"Failed to send {result['title']}: {e}")
                         failed += 1
-                
-                # Small delay between batches
-                await asyncio.sleep(2)
+                else:
+                    failed += 1
         
         elapsed = time.perf_counter() - start
         
@@ -634,14 +672,21 @@ async def search_and_download_song(m, query):
                     "format": "bestaudio/best",
                     "outtmpl": str(tmp / "%(title)s.%(ext)s"),
                     "proxy": pick_proxy(),
-                    "http_headers": {"User-Agent": pick_ua()},
+                    "http_headers": {
+                        "User-Agent": pick_ua(),
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        "DNT": "1",
+                    },
                     "default_search": "ytsearch1",
                     "writethumbnail": True,
+                    "socket_timeout": 30,
+                    "retries": 3,
                     "postprocessors": [
                         {
                             "key": "FFmpegExtractAudio",
                             "preferredcodec": "mp3",
-                            "preferredquality": "192",  # Reduced from 320 to 192
+                            "preferredquality": "192",
                         },
                         {
                             "key": "EmbedThumbnail",
@@ -653,9 +698,9 @@ async def search_and_download_song(m, query):
                         }
                     ],
                     "postprocessor_args": [
-                        "-ar", "44100",  # Reduced sample rate
+                        "-ar", "44100",
                         "-ac", "2",
-                        "-b:a", "192k",  # Target bitrate
+                        "-b:a", "192k",
                     ],
                 }
                 
