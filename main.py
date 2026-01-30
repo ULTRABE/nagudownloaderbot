@@ -471,12 +471,15 @@ async def download_spotify_playlist(m, url):
         return
     
     # Send initial message
-    status_msg = await m.answer("🎵 𝐏𝐫𝐨𝐜𝐞𝐬𝐬𝐢𝐧𝐠 𝐒𝐩𝐨𝐭𝐢𝐟𝐲 𝐏𝐥𝐚𝐲𝐥𝐢𝐬𝐭...\n⏳ 𝐓𝐡𝐢𝐬 𝐦𝐚𝐲 𝐭𝐚𝐤𝐞 𝐚 𝐰𝐡𝐢𝐥𝐞...")
+    status_msg = await m.answer("🎵 𝐏𝐫𝐨𝐜𝐞𝐬𝐬𝐢𝐧𝐠 𝐒𝐩𝐨𝐭𝐢𝐟𝐲 𝐏𝐥𝐚𝐲𝐥𝐢𝐬𝐭...")
     start = time.perf_counter()
     
     try:
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
+            
+            # Update: Downloading
+            await status_msg.edit_text("📥 𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐢𝐧𝐠 𝐬𝐨𝐧𝐠𝐬...\n⏳ 𝐏𝐥𝐞𝐚𝐬𝐞 𝐰𝐚𝐢𝐭...")
             
             # Use spotdl to download entire playlist
             cmd = [
@@ -488,7 +491,7 @@ async def download_spotify_playlist(m, url):
                 "--output", str(tmp),
                 "--format", "mp3",
                 "--bitrate", "192k",
-                "--threads", "1",  # Single thread to avoid rate limiting
+                "--threads", "1",
                 "--print-errors",
             ]
             
@@ -510,15 +513,20 @@ async def download_spotify_playlist(m, url):
                 return
             
             total = len(mp3_files)
-            await status_msg.edit_text(f"📤 𝐒𝐞𝐧𝐝𝐢𝐧𝐠 {total} 𝐬𝐨𝐧𝐠𝐬 𝐭𝐨 𝐃𝐌...")
+            
+            # Update: Sending to DM
+            await status_msg.edit_text(
+                f"✅ 𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝 𝐂𝐨𝐦𝐩𝐥𝐞𝐭𝐞\n"
+                f"📤 𝐒𝐞𝐧𝐝𝐢𝐧𝐠 {total} 𝐬𝐨𝐧𝐠𝐬 𝐭𝐨 𝐲𝐨𝐮𝐫 𝐃𝐌..."
+            )
             
             sent = 0
             failed = 0
             
-            # Send each song to DM
-            for mp3 in mp3_files:
+            # Send each song to DM (without caption)
+            for i, mp3 in enumerate(mp3_files, 1):
                 try:
-                    # Extract artist and title from filename (spotdl format: "Artist - Title.mp3")
+                    # Extract artist and title from filename
                     filename = mp3.stem
                     if ' - ' in filename:
                         artist, title = filename.split(' - ', 1)
@@ -528,15 +536,25 @@ async def download_spotify_playlist(m, url):
                     
                     file_size = mp3.stat().st_size / 1024 / 1024
                     
+                    # Send without caption
                     await bot.send_audio(
                         m.from_user.id,
                         FSInputFile(mp3),
                         title=title,
-                        performer=artist,
-                        caption=f"🎵 {title}\n🎤 {artist}\n💾 {file_size:.1f}MB"
+                        performer=artist
                     )
                     sent += 1
                     logger.info(f"DM: {title} by {artist} ({file_size:.1f}MB)")
+                    
+                    # Update progress every 5 songs
+                    if i % 5 == 0 or i == total:
+                        try:
+                            await status_msg.edit_text(
+                                f"✅ 𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝 𝐂𝐨𝐦𝐩𝐥𝐞𝐭𝐞\n"
+                                f"📤 𝐒𝐞𝐧𝐝𝐢𝐧𝐠 𝐭𝐨 𝐃𝐌: {sent}/{total}"
+                            )
+                        except:
+                            pass
                     
                     # Small delay between sends
                     await asyncio.sleep(0.5)
@@ -547,15 +565,14 @@ async def download_spotify_playlist(m, url):
         
             elapsed = time.perf_counter() - start
             
-            # Final status
+            # Final status in group
             await status_msg.edit_text(
                 f"✅ 𝐏𝐥𝐚𝐲𝐥𝐢𝐬𝐭 𝐂𝐨𝐦𝐩𝐥𝐞𝐭𝐞𝐝\n\n"
                 f"{mention(m.from_user)}\n"
-                f"₪ 𝐓𝐨𝐭𝐚𝐥: {total}\n"
-                f"₪ 𝐒𝐞𝐧𝐭: {sent}\n"
+                f"₪ 𝐓𝐨𝐭𝐚𝐥 𝐒𝐨𝐧𝐠𝐬: {total}\n"
+                f"₪ 𝐒𝐞𝐧𝐭 𝐭𝐨 𝐃𝐌: {sent}\n"
                 f"₪ 𝐅𝐚𝐢𝐥𝐞𝐝: {failed}\n"
-                f"₪ 𝐓𝐢𝐦𝐞: {elapsed:.1f}s\n"
-                f"₪ 𝐒𝐞𝐧𝐭 𝐭𝐨 𝐲𝐨𝐮𝐫 𝐃𝐌",
+                f"₪ 𝐓𝐢𝐦𝐞: {elapsed:.1f}s",
                 parse_mode="HTML"
             )
             
