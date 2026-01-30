@@ -218,11 +218,14 @@ async def start(m: Message):
         try:
             await m.reply_photo(FSInputFile(picture_path), caption=caption)
             return
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Failed to send picture: {e}")
     
     # Fallback to text only
-    await m.reply(caption, quote=True)
+    try:
+        await m.reply(caption)
+    except:
+        await m.answer(caption)
 
 @dp.message(F.text == "/help")
 async def help_command(m: Message):
