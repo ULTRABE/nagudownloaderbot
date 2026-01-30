@@ -61,7 +61,7 @@ def resolve_pin(url):
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 semaphore = asyncio.Semaphore(16)
-MUSIC_SEMAPHORE = asyncio.Semaphore(6)
+MUSIC_SEMAPHORE = asyncio.Semaphore(2)  # Reduced from 6 to 2 to protect cookies
 
 LINK_RE = re.compile(r"https?://\S+")
 
@@ -247,7 +247,14 @@ async def handle_youtube(m, url):
                 "merge_output_format": "mp4",
                 "outtmpl": str(raw),
                 "proxy": pick_proxy(),
-                "http_headers": {"User-Agent": pick_ua()},
+                "http_headers": {
+                    "User-Agent": pick_ua(),
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "DNT": "1",
+                },
+                "socket_timeout": 30,
+                "retries": 3,
                 "concurrent_fragment_downloads": 20,
                 "extractor_args": {
                     "youtube": {
@@ -370,79 +377,284 @@ async def handle_pinterest(m, url):
         await m.answer(f"❌ 𝐏𝐢𝐧𝐭𝐞𝐫𝐞𝐬𝐭 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════
-# SPOTIFY PLAYLIST DOWNLOADER (WITH SPOTDL)
+# SPOTIFY PLAYLIST DOWNLOADER (IMPROVED WITH YT-DLP)
 # ═══════════════════════════════════════════════════════════
 
-async def download_spotify_playlist(m, url):
-    """Download Spotify playlist using spotdl"""
-    async with MUSIC_SEMAPHORE:
-        logger.info(f"SPOTIFY: {url}")
+async def download_single_track(track_info, tmp_dir, cookie_file, retry_count=0):
+    """Download a single track with proper metadata and thumbnail"""
+    try:
+        query = f"{track_info['artist']} {track_info['title']}"
+        logger.info(f"Downloading: {query}")
         
-        if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
-            await m.answer("❌ 𝐒𝐩𝐨𝐭𝐢𝐟𝐲 𝐀𝐏𝐈 𝐧𝐨𝐭 𝐜𝐨𝐧𝐟𝐢𝐠𝐮𝐫𝐞𝐝")
+        # Add delay before download to avoid rate limiting (3-5 seconds)
+        await asyncio.sleep(random.uniform(3.0, 5.0))
+        
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "format": "bestaudio/best",
+            "outtmpl": str(tmp_dir / "%(title)s.%(ext)s"),
+            "proxy": pick_proxy(),
+            "http_headers": {
+                "User-Agent": pick_ua(),
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Encoding": "gzip, deflate",
+                "DNT": "1",
+                "Connection": "keep-alive",
+                "Upgrade-Insecure-Requests": "1"
+            },
+            "default_search": "ytsearch1",
+            "writethumbnail": True,
+            "socket_timeout": 30,
+            "retries": 3,
+            "fragment_retries": 3,
+            "postprocessors": [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192",
+                },
+                {
+                    "key": "EmbedThumbnail",
+                    "already_have_thumbnail": False,
+                },
+                {
+                    "key": "FFmpegMetadata",
+                    "add_metadata": True,
+                }
+            ],
+            "postprocessor_args": [
+                "-ar", "44100",
+                "-ac", "2",
+                "-b:a", "192k",
+            ],
+        }
+        
+        if cookie_file:
+            opts["cookiefile"] = cookie_file
+        
+        with YoutubeDL(opts) as ydl:
+            info = await asyncio.to_thread(lambda: ydl.extract_info(f"ytsearch1:{query}", download=True))
+            
+            # Find the downloaded MP3
+            for f in tmp_dir.iterdir():
+                if f.suffix == ".mp3" and f.stat().st_size > 0:
+                    return {
+                        'file': f,
+                        'title': track_info['title'],
+                        'artist': track_info['artist'],
+                        'size_mb': f.stat().st_size / 1024 / 1024
+                    }
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"Failed to download {track_info['title']}: {e}")
+        
+        # Retry with different cookie if first attempt fails
+        if retry_count < 1:
+            logger.info(f"Retrying {track_info['title']} with different cookie...")
+            await asyncio.sleep(5)  # Wait before retry
+            new_cookie = get_random_cookie(YT_MUSIC_COOKIES_FOLDER)
+            return await download_single_track(track_info, tmp_dir, new_cookie, retry_count + 1)
+        
+        return None
+
+async def get_spotify_tracks(url):
+    """Extract track list from Spotify playlist/album using Spotify API"""
+    try:
+        import requests
+        import base64
+        
+        # Get Spotify access token
+        auth_str = f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}"
+        auth_b64 = base64.b64encode(auth_str.encode()).decode()
+        
+        logger.info(f"Authenticating with Spotify API...")
+        
+        token_response = await asyncio.to_thread(
+            lambda: requests.post(
+                "https://accounts.spotify.com/api/token",
+                headers={
+                    "Authorization": f"Basic {auth_b64}",
+                    "Content-Type": "application/x-www-form-urlencoded"
+                },
+                data={"grant_type": "client_credentials"}
+            )
+        )
+        
+        if token_response.status_code != 200:
+            logger.error(f"Failed to get Spotify token (status {token_response.status_code}): {token_response.text}")
+            logger.error(f"CLIENT_ID length: {len(SPOTIFY_CLIENT_ID)}, CLIENT_SECRET length: {len(SPOTIFY_CLIENT_SECRET)}")
+            return []
+        
+        access_token = token_response.json()["access_token"]
+        headers = {"Authorization": f"Bearer {access_token}"}
+        
+        # Extract playlist/album ID from URL
+        if "playlist" in url:
+            playlist_id = url.split("playlist/")[1].split("?")[0]
+            api_url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
+        elif "album" in url:
+            album_id = url.split("album/")[1].split("?")[0]
+            api_url = f"https://api.spotify.com/v1/albums/{album_id}/tracks"
+        elif "track" in url:
+            track_id = url.split("track/")[1].split("?")[0]
+            api_url = f"https://api.spotify.com/v1/tracks/{track_id}"
+        else:
+            logger.error("Invalid Spotify URL")
+            return []
+        
+        tracks = []
+        
+        # Handle single track
+        if "track" in url:
+            response = await asyncio.to_thread(lambda: requests.get(api_url, headers=headers))
+            if response.status_code == 200:
+                data = response.json()
+                tracks.append({
+                    'title': data['name'],
+                    'artist': ', '.join([artist['name'] for artist in data['artists']])
+                })
+            return tracks
+        
+        # Handle playlist/album with pagination
+        while api_url:
+            response = await asyncio.to_thread(lambda: requests.get(api_url, headers=headers))
+            
+            if response.status_code != 200:
+                logger.error(f"Failed to fetch tracks: {response.text}")
+                break
+            
+            data = response.json()
+            
+            for item in data.get('items', []):
+                track = item.get('track') if 'track' in item else item
+                if track and track.get('name'):
+                    tracks.append({
+                        'title': track['name'],
+                        'artist': ', '.join([artist['name'] for artist in track.get('artists', [])])
+                    })
+            
+            # Get next page
+            api_url = data.get('next')
+        
+        return tracks
+        
+    except Exception as e:
+        logger.error(f"Failed to extract Spotify tracks: {e}")
+        return []
+
+async def download_spotify_playlist(m, url):
+    """Download Spotify playlist using yt-dlp with proper metadata"""
+    logger.info(f"SPOTIFY: {url}")
+    
+    # Check if Spotify credentials are set
+    if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
+        await m.answer("❌ 𝐒𝐩𝐨𝐭𝐢𝐟𝐲 𝐀𝐏𝐈 𝐧𝐨𝐭 𝐜𝐨𝐧𝐟𝐢𝐠𝐮𝐫𝐞𝐝\n\nPlease set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET environment variables.")
+        return
+    
+    # Send initial message
+    status_msg = await m.answer("🎵 𝐏𝐫𝐨𝐜𝐞𝐬𝐬𝐢𝐧𝐠 𝐒𝐩𝐨𝐭𝐢𝐟𝐲 𝐏𝐥𝐚𝐲𝐥𝐢𝐬𝐭...")
+    start = time.perf_counter()
+    
+    try:
+        # Extract track list
+        tracks = await get_spotify_tracks(url)
+        
+        if not tracks:
+            await status_msg.edit_text("❌ 𝐍𝐨 𝐭𝐫𝐚𝐜𝐤𝐬 𝐟𝐨𝐮𝐧𝐝")
             return
         
-        s = await bot.send_sticker(m.chat.id, MUSIC_STICKER)
-        start = time.perf_counter()
-
-        try:
-            with tempfile.TemporaryDirectory() as tmp:
-                tmp = Path(tmp)
+        total_tracks = len(tracks)
+        await status_msg.edit_text(
+            f"📥 𝐅𝐨𝐮𝐧𝐝 {total_tracks} 𝐭𝐫𝐚𝐜𝐤𝐬\n"
+            f"⏳ 𝐒𝐭𝐚𝐫𝐭𝐢𝐧𝐠 𝐝𝐨𝐰𝐧𝐥𝐨𝐚𝐝 𝐢𝐧 𝟓 𝐬𝐞𝐜𝐨𝐧𝐝𝐬...\n"
+            f"⚠️ 𝐋𝐚𝐫𝐠𝐞 𝐩𝐥𝐚𝐲𝐥𝐢𝐬𝐭 - 𝐭𝐡𝐢𝐬 𝐰𝐢𝐥𝐥 𝐭𝐚𝐤𝐞 𝐚 𝐰𝐡𝐢𝐥𝐞"
+        )
+        
+        # 5 second cooldown before starting
+        await asyncio.sleep(5)
+        
+        downloaded = 0
+        failed = 0
+        last_update = 0
+        
+        # Process tracks ONE AT A TIME to protect cookies
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            
+            for i, track in enumerate(tracks, 1):
+                # Update progress every 10 tracks or at start
+                if i == 1 or i % 10 == 0 or i == total_tracks:
+                    try:
+                        await status_msg.edit_text(
+                            f"📥 𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐢𝐧𝐠...\n"
+                            f"🎵 𝐓𝐫𝐚𝐜𝐤 {i}/{total_tracks}\n"
+                            f"✅ 𝐒𝐮𝐜𝐜𝐞𝐬𝐬: {downloaded}\n"
+                            f"❌ 𝐅𝐚𝐢𝐥𝐞𝐝: {failed}\n"
+                            f"⏱️ 𝐄𝐬𝐭. 𝐭𝐢𝐦𝐞: {(total_tracks - i) * 5 // 60} 𝐦𝐢𝐧"
+                        )
+                    except:
+                        pass  # Ignore update errors
                 
-                # Use spotdl to download
-                cmd = [
-                    "spotdl",
-                    "--client-id", SPOTIFY_CLIENT_ID,
-                    "--client-secret", SPOTIFY_CLIENT_SECRET,
-                    "--output", str(tmp),
-                    "--format", "mp3",
-                    "--bitrate", "320k",
-                    url
-                ]
+                # Rotate cookie every 20 tracks to avoid flagging
+                if i % 20 == 0:
+                    cookie_file = get_random_cookie(YT_MUSIC_COOKIES_FOLDER)
+                    logger.info(f"Rotated to new cookie at track {i}")
+                else:
+                    cookie_file = get_random_cookie(YT_MUSIC_COOKIES_FOLDER)
                 
-                await asyncio.to_thread(lambda: subprocess.run(cmd, capture_output=True))
+                # Download single track
+                result = await download_single_track(track, tmp, cookie_file)
                 
-                mp3_files = list(tmp.glob("*.mp3"))
-                
-                if not mp3_files:
-                    await bot.delete_message(m.chat.id, s.message_id)
-                    await m.answer("❌ 𝐍𝐨 𝐬𝐨𝐧𝐠𝐬 𝐝𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐞𝐝")
-                    return
-                
-                await bot.delete_message(m.chat.id, s.message_id)
-                
-                # Send each song to DM
-                for mp3 in mp3_files:
+                # Send to DM if successful
+                if result and result.get('file'):
                     try:
                         await bot.send_audio(
                             m.from_user.id,
-                            FSInputFile(mp3),
-                            title=mp3.stem,
-                            performer="NAGU DOWNLOADER"
+                            FSInputFile(result['file']),
+                            title=result['title'],
+                            performer=result['artist'],
+                            caption=f"🎵 {result['title']}\n🎤 {result['artist']}\n💾 {result['size_mb']:.1f}MB"
                         )
-                        logger.info(f"DM: {mp3.name}")
+                        downloaded += 1
+                        logger.info(f"DM: {result['title']} by {result['artist']} ({result['size_mb']:.1f}MB)")
+                        
+                        # Clean up the file after sending
+                        try:
+                            result['file'].unlink()
+                        except:
+                            pass
                     except Exception as e:
-                        logger.error(f"DM failed: {e}")
-                
-                elapsed = time.perf_counter() - start
-                
-                # Tag user in group chat
-                await m.answer(
-                    f"✅ 𝐏𝐥𝐚𝐲𝐥𝐢𝐬𝐭 𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐞𝐝\n\n"
-                    f"{mention(m.from_user)}\n"
-                    f"₪ 𝐒𝐨𝐧𝐠𝐬: {len(mp3_files)}\n"
-                    f"₪ 𝐒𝐞𝐧𝐭 𝐭𝐨 𝐲𝐨𝐮𝐫 𝐃𝐌",
-                    parse_mode="HTML"
-                )
-                
-                logger.info(f"SPOTIFY: {len(mp3_files)} songs in {elapsed:.2f}s")
-                
-        except Exception as e:
-            logger.error(f"SPOTIFY: {e}")
-            try:
-                await bot.delete_message(m.chat.id, s.message_id)
-            except:
-                pass
+                        logger.error(f"Failed to send {result['title']}: {e}")
+                        failed += 1
+                else:
+                    failed += 1
+        
+        elapsed = time.perf_counter() - start
+        
+        # Final status
+        await status_msg.edit_text(
+            f"✅ 𝐏𝐥𝐚𝐲𝐥𝐢𝐬𝐭 𝐂𝐨𝐦𝐩𝐥𝐞𝐭𝐞𝐝\n\n"
+            f"{mention(m.from_user)}\n"
+            f"₪ 𝐓𝐨𝐭𝐚𝐥: {total_tracks}\n"
+            f"₪ 𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐞𝐝: {downloaded}\n"
+            f"₪ 𝐅𝐚𝐢𝐥𝐞𝐝: {failed}\n"
+            f"₪ 𝐓𝐢𝐦𝐞: {elapsed:.1f}s\n"
+            f"₪ 𝐒𝐞𝐧𝐭 𝐭𝐨 𝐲𝐨𝐮𝐫 𝐃𝐌",
+            parse_mode="HTML"
+        )
+        
+        logger.info(f"SPOTIFY: {url}")
+        logger.info(f"SPOTIFY: {downloaded} songs in {elapsed:.2f}s")
+        
+    except Exception as e:
+        logger.error(f"SPOTIFY: {e}")
+        try:
+            await status_msg.edit_text(f"❌ 𝐒𝐩𝐨𝐭𝐢𝐟𝐲 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
+        except:
             await m.answer(f"❌ 𝐒𝐩𝐨𝐭𝐢𝐟𝐲 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════
@@ -450,7 +662,7 @@ async def download_spotify_playlist(m, url):
 # ═══════════════════════════════════════════════════════════
 
 async def search_and_download_song(m, query):
-    """Search and download single song with cookie rotation"""
+    """Search and download single song with proper metadata and thumbnail"""
     async with MUSIC_SEMAPHORE:
         logger.info(f"MP3: {query}")
         s = await bot.send_sticker(m.chat.id, MUSIC_STICKER)
@@ -466,13 +678,36 @@ async def search_and_download_song(m, query):
                     "format": "bestaudio/best",
                     "outtmpl": str(tmp / "%(title)s.%(ext)s"),
                     "proxy": pick_proxy(),
-                    "http_headers": {"User-Agent": pick_ua()},
-                    "default_search": "ytsearch",
-                    "postprocessors": [{
-                        "key": "FFmpegExtractAudio",
-                        "preferredcodec": "mp3",
-                        "preferredquality": "320",
-                    }],
+                    "http_headers": {
+                        "User-Agent": pick_ua(),
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        "DNT": "1",
+                    },
+                    "default_search": "ytsearch1",
+                    "writethumbnail": True,
+                    "socket_timeout": 30,
+                    "retries": 3,
+                    "postprocessors": [
+                        {
+                            "key": "FFmpegExtractAudio",
+                            "preferredcodec": "mp3",
+                            "preferredquality": "192",
+                        },
+                        {
+                            "key": "EmbedThumbnail",
+                            "already_have_thumbnail": False,
+                        },
+                        {
+                            "key": "FFmpegMetadata",
+                            "add_metadata": True,
+                        }
+                    ],
+                    "postprocessor_args": [
+                        "-ar", "44100",
+                        "-ac", "2",
+                        "-b:a", "192k",
+                    ],
                 }
                 
                 # Use random cookie from yt_music_cookies folder
@@ -483,7 +718,7 @@ async def search_and_download_song(m, query):
                 
                 # Search and download
                 with YoutubeDL(opts) as ydl:
-                    await asyncio.to_thread(lambda: ydl.download([f"ytsearch1:{query}"]))
+                    info = await asyncio.to_thread(lambda: ydl.extract_info(f"ytsearch1:{query}", download=True))
                 
                 # Find MP3
                 mp3 = None
@@ -497,6 +732,12 @@ async def search_and_download_song(m, query):
                     await m.answer("❌ 𝐒𝐨𝐧𝐠 𝐧𝐨𝐭 𝐟𝐨𝐮𝐧𝐝")
                     return
                 
+                # Extract metadata
+                entry = info['entries'][0] if 'entries' in info else info
+                title = entry.get('title', mp3.stem)
+                artist = entry.get('artist') or entry.get('uploader', 'Unknown Artist')
+                file_size = mp3.stat().st_size / 1024 / 1024
+                
                 elapsed = time.perf_counter() - start
                 await bot.delete_message(m.chat.id, s.message_id)
                 
@@ -507,15 +748,18 @@ async def search_and_download_song(m, query):
                     caption=(
                         f"𝐌𝐏𝟑 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 ★\n"
                         f"- - - - - - - - - - - - - - - - - - - - - - - - - - - -\n"
+                        f"🎵 {title}\n"
+                        f"🎤 {artist}\n"
+                        f"💾 {file_size:.1f}MB\n"
                         f"₪ 𝐔𝐬𝐞𝐫: {mention(m.from_user)}\n"
                         f"₪ 𝐓𝐢𝐦𝐞: {elapsed:.2f}s"
                     ),
                     parse_mode="HTML",
-                    title=mp3.stem,
-                    performer="NAGU DOWNLOADER"
+                    title=title,
+                    performer=artist
                 )
                 
-                logger.info(f"MP3: {mp3.name} in {elapsed:.2f}s")
+                logger.info(f"MP3: {title} by {artist} ({file_size:.1f}MB) in {elapsed:.2f}s")
                 
         except Exception as e:
             logger.error(f"MP3: {e}")
