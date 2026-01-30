@@ -1,38 +1,40 @@
-import asyncio, os, re, subprocess, tempfile, time, logging, random, glob
+import asyncio, os, re, subprocess, tempfile, time, logging, random, glob, json
 from pathlib import Path
+from datetime import datetime, timedelta
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
-from aiogram.types import Message, FSInputFile
+from aiogram.types import Message, FSInputFile, ChatPermissions
 from yt_dlp import YoutubeDL
+from upstash_redis import Redis
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
 logger = logging.getLogger("NAGU")
 
-BOT_TOKEN = "8585605391:AAF6FWxlLSNvDLHqt0Al5-iy7BH7Iu7S640"
+# ═══════════════════════════════════════════════════════════
+# ENVIRONMENT VARIABLES - ALL SECRETS FROM ENV
+# ═══════════════════════════════════════════════════════════
 
-# Spotify API (from environment variables)
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID", "")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET", "")
+REDIS_URL = os.getenv("REDIS_URL", "")
+REDIS_TOKEN = os.getenv("REDIS_TOKEN", "")
+
+# Proxies from environment (comma-separated)
+PROXIES_STR = os.getenv("PROXIES", "")
+PROXIES = [p.strip() for p in PROXIES_STR.split(",") if p.strip()] if PROXIES_STR else []
 
 # Cookie files and folders
 IG_COOKIES = "cookies_instagram.txt"
 YT_COOKIES_FOLDER = "yt cookies"
 YT_MUSIC_COOKIES_FOLDER = "yt music cookies"
 
-IG_STICKER = "CAACAgIAAxkBAAEadEdpekZa1-2qYm-1a3dX0JmM_Z9uDgAC4wwAAjAT0Euml6TE9QhYWzgE"
-YT_STICKER = "CAACAgIAAxkBAAEaedlpez9LOhwF-tARQsD1V9jzU8iw1gACQjcAAgQyMEixyZ896jTkCDgE"
-PIN_STICKER = "CAACAgIAAxkBAAEaegZpe0KJMDIkiCbudZrXhJDwBXYHqgACExIAAq3mUUhZ4G5Cm78l2DgE"
-MUSIC_STICKER = "CAACAgIAAxkBAAEaegZpe0KJMDIkiCbudZrXhJDwBXYHqgACExIAAq3mUUhZ4G5Cm78l2DgE"
-
-PROXIES = [
-    "http://203033:JmNd95Z3vcX@196.51.85.7:8800",
-    "http://203033:JmNd95Z3vcX@196.51.218.227:8800",
-    "http://203033:JmNd95Z3vcX@196.51.106.149:8800",
-    "http://203033:JmNd95Z3vcX@170.130.62.211:8800",
-    "http://203033:JmNd95Z3vcX@196.51.106.30:8800",
-    "http://203033:JmNd95Z3vcX@196.51.85.207:8800",
-]
+# Stickers
+IG_STICKER = os.getenv("IG_STICKER", "CAACAgIAAxkBAAEadEdpekZa1-2qYm-1a3dX0JmM_Z9uDgAC4wwAAjAT0Euml6TE9QhYWzgE")
+YT_STICKER = os.getenv("YT_STICKER", "CAACAgIAAxkBAAEaedlpez9LOhwF-tARQsD1V9jzU8iw1gACQjcAAgQyMEixyZ896jTkCDgE")
+PIN_STICKER = os.getenv("PIN_STICKER", "CAACAgIAAxkBAAEaegZpe0KJMDIkiCbudZrXhJDwBXYHqgACExIAAq3mUUhZ4G5Cm78l2DgE")
+MUSIC_STICKER = os.getenv("MUSIC_STICKER", "CAACAgIAAxkBAAEaegZpe0KJMDIkiCbudZrXhJDwBXYHqgACExIAAq3mUUhZ4G5Cm78l2DgE")
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
@@ -40,8 +42,19 @@ USER_AGENTS = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
 ]
 
-def pick_proxy(): return random.choice(PROXIES)
+def pick_proxy(): return random.choice(PROXIES) if PROXIES else None
 def pick_ua(): return random.choice(USER_AGENTS)
+
+# ═══════════════════════════════════════════════════════════
+# REDIS DATABASE CONNECTION
+# ═══════════════════════════════════════════════════════════
+
+try:
+    redis = Redis(url=REDIS_URL, token=REDIS_TOKEN)
+    logger.info("Redis connected successfully")
+except Exception as e:
+    logger.error(f"Redis connection failed: {e}")
+    redis = None
 
 # Cookie rotation system
 def get_random_cookie(folder):
@@ -61,9 +74,120 @@ def resolve_pin(url):
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 semaphore = asyncio.Semaphore(16)
-MUSIC_SEMAPHORE = asyncio.Semaphore(2)  # Reduced from 6 to 2 to protect cookies
+MUSIC_SEMAPHORE = asyncio.Semaphore(2)
 
 LINK_RE = re.compile(r"https?://\S+")
+
+# ═══════════════════════════════════════════════════════════
+# REDIS HELPER FUNCTIONS
+# ═══════════════════════════════════════════════════════════
+
+def get_admin_key(chat_id): return f"admins:{chat_id}"
+def get_mute_key(chat_id, user_id): return f"mute:{chat_id}:{user_id}"
+def get_filter_key(chat_id): return f"filters:{chat_id}"
+def get_blocklist_key(chat_id): return f"blocklist:{chat_id}"
+
+async def is_admin(chat_id, user_id):
+    """Check if user is admin"""
+    if not redis: return False
+    try:
+        admins = redis.smembers(get_admin_key(chat_id))
+        return str(user_id) in [str(a) for a in admins]
+    except:
+        return False
+
+async def add_admin(chat_id, user_id):
+    """Add user as admin"""
+    if redis:
+        redis.sadd(get_admin_key(chat_id), str(user_id))
+
+async def remove_admin(chat_id, user_id):
+    """Remove user from admins"""
+    if redis:
+        redis.srem(get_admin_key(chat_id), str(user_id))
+
+async def is_muted(chat_id, user_id):
+    """Check if user is muted"""
+    if not redis: return False
+    try:
+        mute_until = redis.get(get_mute_key(chat_id, user_id))
+        if not mute_until: return False
+        if datetime.now().timestamp() > float(mute_until):
+            redis.delete(get_mute_key(chat_id, user_id))
+            return False
+        return True
+    except:
+        return False
+
+async def mute_user(chat_id, user_id, duration_minutes=0):
+    """Mute user for duration (0 = permanent)"""
+    if not redis: return
+    if duration_minutes == 0:
+        redis.set(get_mute_key(chat_id, user_id), "permanent")
+    else:
+        until = (datetime.now() + timedelta(minutes=duration_minutes)).timestamp()
+        redis.set(get_mute_key(chat_id, user_id), str(until))
+
+async def unmute_user(chat_id, user_id):
+    """Unmute user"""
+    if redis:
+        redis.delete(get_mute_key(chat_id, user_id))
+
+async def add_filter(chat_id, word):
+    """Add word to filter list"""
+    if redis:
+        redis.sadd(get_filter_key(chat_id), word.lower())
+
+async def remove_filter(chat_id, word):
+    """Remove word from filter list"""
+    if redis:
+        redis.srem(get_filter_key(chat_id), word.lower())
+
+async def get_filters(chat_id):
+    """Get all filtered words"""
+    if not redis: return []
+    try:
+        return list(redis.smembers(get_filter_key(chat_id)))
+    except:
+        return []
+
+async def add_to_blocklist(chat_id, word):
+    """Add exact word to blocklist"""
+    if redis:
+        redis.sadd(get_blocklist_key(chat_id), word.lower())
+
+async def remove_from_blocklist(chat_id, word):
+    """Remove word from blocklist"""
+    if redis:
+        redis.srem(get_blocklist_key(chat_id), word.lower())
+
+async def get_blocklist(chat_id):
+    """Get all blocked words"""
+    if not redis: return []
+    try:
+        return list(redis.smembers(get_blocklist_key(chat_id)))
+    except:
+        return []
+
+async def check_message_filters(chat_id, text):
+    """Check if message contains filtered/blocked words"""
+    if not text: return False, None
+    text_lower = text.lower()
+    
+    # Check blocklist (exact word match)
+    blocklist = await get_blocklist(chat_id)
+    words = text_lower.split()
+    for blocked in blocklist:
+        if blocked in words:
+            return True, f"Blocked word: {blocked}"
+    
+    # Check filters (substring match)
+    filters = await get_filters(chat_id)
+    for filtered in filters:
+        if filtered in text_lower:
+            return True, f"Filtered word: {filtered}"
+    
+    return False, None
 
 # ═══════════════════════════════════════════════════════════
 # MINIMALIST PREMIUM UI
@@ -71,53 +195,59 @@ LINK_RE = re.compile(r"https?://\S+")
 
 @dp.message(CommandStart())
 async def start(m: Message):
-    # Fix username formatting
-    if m.from_user.username:
-        username = f"@{m.from_user.username}"
-    else:
-        username = "No Username"
+    username = f"@{m.from_user.username}" if m.from_user.username else "No Username"
     
-    await m.reply(f"""𝐖𝐞𝐥𝐜𝐨𝐦𝐞 𝐓𝐨 𝐍𝐀𝐆𝐔 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑 ★
-- - - - - - - - - - - - - - - - - - - - - - - - - - - -
-₪ 𝐈𝐃 : {m.from_user.id}
-₪ 𝐔𝐒𝐄𝐑 : {username}
-₪ 𝐍𝐀𝐌𝐄 : {m.from_user.first_name}
-- - - - - - - - - - - - - - - - - - - - - - - - - - - -
-𝐁𝐎𝐓 𝐇𝐄𝐋𝐏 𝐏𝐀𝐆𝐄 ⇁ /help
-- - - - - - - - - - - - - - - - - - - - - - - - - - - -
-𝐎𝐖𝐍𝐄𝐑 ⇁ @bhosadih""", quote=True)
+    await m.reply(f"""
+╔══════════════════════════╗
+║   NAGU DOWNLOADER BOT    ║
+╚══════════════════════════╝
+
+USER INFORMATION
+├─ ID: {m.from_user.id}
+├─ Username: {username}
+└─ Name: {m.from_user.first_name}
+
+COMMANDS
+├─ /help - View all features
+├─ /mp3 - Download music
+└─ Send any link to download
+
+═══════════════════════════
+Owner: @bhosadih
+═══════════════════════════""", quote=True)
 
 @dp.message(F.text == "/help")
 async def help_command(m: Message):
-    await m.reply("""𝐍𝐀𝐆𝐔 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑 - 𝐇𝐄𝐋𝐏 ★
-- - - - - - - - - - - - - - - - - - - - - - - - - - - -
-𝐕𝐈𝐃𝐄𝐎 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃:
+    await m.reply("""
+╔══════════════════════════╗
+║    BOT HELP & FEATURES   ║
+╚══════════════════════════╝
 
-📸 𝐈𝐍𝐒𝐓𝐀𝐆𝐑𝐀𝐌 - Posts, Reels, Stories
-🎬 𝐘𝐎𝐔𝐓𝐔𝐁𝐄 - Videos, Shorts, Streams
-📌 𝐏𝐈𝐍𝐓𝐄𝐑𝐄𝐒𝐓 - Video Pins
+VIDEO DOWNLOAD
+├─ Instagram: Posts, Reels, Stories
+├─ YouTube: Videos, Shorts, Streams
+└─ Pinterest: Video Pins
+   >> Just send the link!
 
-Just send the link!
-- - - - - - - - - - - - - - - - - - - - - - - - - - - -
-𝐌𝐔𝐒𝐈𝐂 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃:
+MUSIC DOWNLOAD
+├─ /mp3 [song name]
+│  └─ Search & download any song
+│     192kbps MP3 quality
+│
+└─ Spotify Playlists
+   └─ Send Spotify URL
+      Downloads all songs to DM
 
-🎵 /𝐦𝐩𝟑 song name
-   • Searches & downloads any song
-   • 320kbps MP3 quality
-   • Sends to chat
+FEATURES
+├─ Ultra Fast (1-7s)
+├─ HD Quality (720p)
+├─ Small File Size
+├─ No Watermarks
+└─ High Quality Audio
 
-🎧 𝐒𝐏𝐎𝐓𝐈𝐅𝐘 𝐏𝐋𝐀𝐘𝐋𝐈𝐒𝐓
-   • Send Spotify playlist URL
-   • Downloads all songs
-   • Sends to your DM
-- - - - - - - - - - - - - - - - - - - - - - - - - - - -
-𝐅𝐄𝐀𝐓𝐔𝐑𝐄𝐒:
-⚡ Ultra Fast (1-7s)
-🎯 HD Quality (720p)
-💾 Small File Size
-🔒 No Watermarks
-🎵 320kbps Audio
-- - - - - - - - - - - - - - - - - - - - - - - - - - - -
+═══════════════════════════
+Owner: @bhosadih
+═══════════════════════════""")
 𝐎𝐖𝐍𝐄𝐑 ⇁ @bhosadih""", quote=True)
 
 def mention(u):
@@ -461,25 +591,48 @@ async def download_single_track(track_info, tmp_dir, cookie_file, retry_count=0)
         
         return None
 
+def create_progress_bar(current, total, length=10):
+    """Create a text-based progress bar"""
+    filled = int(length * current / total)
+    bar = '█' * filled + '░' * (length - filled)
+    percent = int(100 * current / total)
+    return f"[{bar}] {percent}%"
+
 async def download_spotify_playlist(m, url):
     """Download Spotify playlist using spotdl directly"""
     logger.info(f"SPOTIFY: {url}")
     
     # Check if Spotify credentials are set
     if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
-        await m.answer("❌ 𝐒𝐩𝐨𝐭𝐢𝐟𝐲 𝐀𝐏𝐈 𝐧𝐨𝐭 𝐜𝐨𝐧𝐟𝐢𝐠𝐮𝐫𝐞𝐝")
+        await m.answer("[ X ] Spotify API not configured")
         return
     
-    # Send initial message
-    status_msg = await m.answer("🎵 𝐏𝐫𝐨𝐜𝐞𝐬𝐬𝐢𝐧𝐠 𝐒𝐩𝐨𝐭𝐢𝐟𝐲 𝐏𝐥𝐚𝐲𝐥𝐢𝐬𝐭...")
+    # Phase 1: Processing
+    status_msg = await m.answer("""
+╔══════════════════════════╗
+║   SPOTIFY PLAYLIST       ║
+╚══════════════════════════╝
+
+PHASE 1/3: Processing
+[░░░░░░░░░░] 0%
+
+Status: Initializing...""")
     start = time.perf_counter()
     
     try:
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             
-            # Update: Downloading
-            await status_msg.edit_text("📥 𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐢𝐧𝐠 𝐬𝐨𝐧𝐠𝐬...\n⏳ 𝐏𝐥𝐞𝐚𝐬𝐞 𝐰𝐚𝐢𝐭...")
+            # Phase 2: Downloading
+            await status_msg.edit_text("""
+╔══════════════════════════╗
+║   SPOTIFY PLAYLIST       ║
+╚══════════════════════════╝
+
+PHASE 2/3: Downloading
+[███░░░░░░░] 33%
+
+Status: Downloading songs...""")
             
             # Use spotdl to download entire playlist
             cmd = [
@@ -502,23 +655,28 @@ async def download_spotify_playlist(m, url):
             
             if result.returncode != 0:
                 logger.error(f"spotdl failed: {result.stderr}")
-                await status_msg.edit_text(f"❌ 𝐒𝐩𝐨𝐭𝐢𝐟𝐲 𝐅𝐚𝐢𝐥𝐞𝐝\n{result.stderr[:100]}")
+                await status_msg.edit_text(f"[ X ] Spotify Failed\n{result.stderr[:100]}")
                 return
             
             # Find all downloaded MP3 files
             mp3_files = list(tmp.glob("*.mp3"))
             
             if not mp3_files:
-                await status_msg.edit_text("❌ 𝐍𝐨 𝐬𝐨𝐧𝐠𝐬 𝐝𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐞𝐝")
+                await status_msg.edit_text("[ X ] No songs downloaded")
                 return
             
             total = len(mp3_files)
             
-            # Update: Sending to DM
-            await status_msg.edit_text(
-                f"✅ 𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝 𝐂𝐨𝐦𝐩𝐥𝐞𝐭𝐞\n"
-                f"📤 𝐒𝐞𝐧𝐝𝐢𝐧𝐠 {total} 𝐬𝐨𝐧𝐠𝐬 𝐭𝐨 𝐲𝐨𝐮𝐫 𝐃𝐌..."
-            )
+            # Phase 3: Sending to DM
+            await status_msg.edit_text(f"""
+╔══════════════════════════╗
+║   SPOTIFY PLAYLIST       ║
+╚══════════════════════════╝
+
+PHASE 3/3: Sending to DM
+[██████░░░░] 66%
+
+Status: Sending {total} songs...""")
             
             sent = 0
             failed = 0
@@ -548,11 +706,17 @@ async def download_spotify_playlist(m, url):
                     
                     # Update progress every 5 songs
                     if i % 5 == 0 or i == total:
+                        progress_bar = create_progress_bar(sent, total)
                         try:
-                            await status_msg.edit_text(
-                                f"✅ 𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝 𝐂𝐨𝐦𝐩𝐥𝐞𝐭𝐞\n"
-                                f"📤 𝐒𝐞𝐧𝐝𝐢𝐧𝐠 𝐭𝐨 𝐃𝐌: {sent}/{total}"
-                            )
+                            await status_msg.edit_text(f"""
+╔══════════════════════════╗
+║   SPOTIFY PLAYLIST       ║
+╚══════════════════════════╝
+
+PHASE 3/3: Sending to DM
+{progress_bar}
+
+Status: Sent {sent}/{total} songs""")
                         except:
                             pass
                     
@@ -566,24 +730,29 @@ async def download_spotify_playlist(m, url):
             elapsed = time.perf_counter() - start
             
             # Final status in group
-            await status_msg.edit_text(
-                f"✅ 𝐏𝐥𝐚𝐲𝐥𝐢𝐬𝐭 𝐂𝐨𝐦𝐩𝐥𝐞𝐭𝐞𝐝\n\n"
-                f"{mention(m.from_user)}\n"
-                f"₪ 𝐓𝐨𝐭𝐚𝐥 𝐒𝐨𝐧𝐠𝐬: {total}\n"
-                f"₪ 𝐒𝐞𝐧𝐭 𝐭𝐨 𝐃𝐌: {sent}\n"
-                f"₪ 𝐅𝐚𝐢𝐥𝐞𝐝: {failed}\n"
-                f"₪ 𝐓𝐢𝐦𝐞: {elapsed:.1f}s",
-                parse_mode="HTML"
-            )
+            await status_msg.edit_text(f"""
+╔══════════════════════════╗
+║   PLAYLIST COMPLETED     ║
+╚══════════════════════════╝
+
+{mention(m.from_user)}
+
+SUMMARY
+├─ Total Songs: {total}
+├─ Sent to DM: {sent}
+├─ Failed: {failed}
+└─ Time: {elapsed:.1f}s
+
+All songs sent to your DM!""", parse_mode="HTML")
             
             logger.info(f"SPOTIFY: {sent} songs in {elapsed:.2f}s")
         
     except Exception as e:
         logger.error(f"SPOTIFY: {e}")
         try:
-            await status_msg.edit_text(f"❌ 𝐒𝐩𝐨𝐭𝐢𝐟𝐲 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
+            await status_msg.edit_text(f"[ X ] Spotify Failed\n{str(e)[:100]}")
         except:
-            await m.answer(f"❌ 𝐒𝐩𝐨𝐭𝐢𝐟𝐲 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
+            await m.answer(f"[ X ] Spotify Failed\n{str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════
 # MP3 SEARCH COMMAND (WITH COOKIE ROTATION)
