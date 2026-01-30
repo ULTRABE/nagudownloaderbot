@@ -366,12 +366,13 @@ async def cmd_promote(m: Message):
     await add_admin(m.chat.id, target_user.id)
     
     await m.reply(f"""
-╔══════════════════════════╗
-║    USER PROMOTED         ║
-╚══════════════════════════╝
-
-{target_user.first_name} is now an admin!
-User ID: {target_user.id}""")
+╭─ ✅ 𝗨𝗦𝗘𝗥 𝗣𝗥𝗢𝗠𝗢𝗧𝗘𝗗
+│
+│ ▸ 𝘜𝘴𝘦𝘳: {target_user.first_name}
+│ ▸ 𝘐𝘋: `{target_user.id}`
+│ ▸ 𝘚𝘵𝘢𝘵𝘶𝘴: 𝘈𝘥𝘮𝘪𝘯
+│
+╰──────────────""")
 
 @dp.message(Command("demote"))
 async def cmd_demote(m: Message):
@@ -398,12 +399,13 @@ async def cmd_demote(m: Message):
     await remove_admin(m.chat.id, target_user.id)
     
     await m.reply(f"""
-╔══════════════════════════╗
-║    USER DEMOTED          ║
-╚══════════════════════════╝
-
-{target_user.first_name} is no longer an admin
-User ID: {target_user.id}""")
+╭─ ⬇️ 𝗨𝗦𝗘𝗥 𝗗𝗘𝗠𝗢𝗧𝗘𝗗
+│
+│ ▸ 𝘜𝘴𝘦𝘳: {target_user.first_name}
+│ ▸ 𝘐𝘋: `{target_user.id}`
+│ ▸ 𝘚𝘵𝘢𝘵𝘶𝘴: 𝘙𝘦𝘨𝘶𝘭𝘢𝘳 𝘜𝘴𝘦𝘳
+│
+╰──────────────""")
 
 # ═══════════════════════════════════════════════════════════
 # MUTE/BAN COMMANDS
@@ -450,15 +452,15 @@ async def cmd_mute(m: Message):
     # Store in Redis
     await mute_user(m.chat.id, target_user.id, duration)
     
-    duration_text = f"{duration} minutes" if duration > 0 else "permanently"
+    duration_text = f"{duration} 𝘮𝘪𝘯𝘶𝘵𝘦𝘴" if duration > 0 else "𝘱𝘦𝘳𝘮𝘢𝘯𝘦𝘯𝘵𝘭𝘺"
     await m.reply(f"""
-╔══════════════════════════╗
-║    USER MUTED            ║
-╚══════════════════════════╝
-
-User: {target_user.first_name}
-Duration: {duration_text}
-User ID: {target_user.id}""")
+╭─ 🔇 𝗨𝗦𝗘𝗥 𝗠𝗨𝗧𝗘𝗗
+│
+│ ▸ 𝘜𝘴𝘦𝘳: {target_user.first_name}
+│ ▸ 𝘋𝘶𝘳𝘢𝘵𝘪𝘰𝘯: {duration_text}
+│ ▸ 𝘐𝘋: `{target_user.id}`
+│
+╰──────────────""")
 
 @dp.message(Command("unmute"))
 async def cmd_unmute(m: Message):
