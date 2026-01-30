@@ -461,150 +461,105 @@ async def download_single_track(track_info, tmp_dir, cookie_file, retry_count=0)
         
         return None
 
-async def get_spotify_tracks_with_spotdl(url):
-    """Extract track list from Spotify using spotdl list command"""
-    try:
-        logger.info(f"Extracting Spotify tracks with spotdl...")
-        
-        # Use spotdl list command to get track names
-        cmd = [
-            "spotdl",
-            "list",
-            url,
-            "--client-id", SPOTIFY_CLIENT_ID,
-            "--client-secret", SPOTIFY_CLIENT_SECRET,
-        ]
-        
-        result = await asyncio.to_thread(
-            lambda: subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        )
-        
-        if result.returncode != 0:
-            logger.error(f"spotdl list failed: {result.stderr}")
-            return []
-        
-        # Parse output - spotdl list outputs "Artist - Title" format
-        tracks = []
-        for line in result.stdout.strip().split('\n'):
-            line = line.strip()
-            if line and ' - ' in line:
-                parts = line.split(' - ', 1)
-                if len(parts) == 2:
-                    tracks.append({
-                        'artist': parts[0].strip(),
-                        'title': parts[1].strip()
-                    })
-        
-        logger.info(f"Found {len(tracks)} tracks")
-        return tracks
-        
-    except Exception as e:
-        logger.error(f"Failed to extract Spotify tracks: {e}")
-        return []
-
 async def download_spotify_playlist(m, url):
-    """Download Spotify playlist using yt-dlp with proper metadata"""
+    """Download Spotify playlist using spotdl directly"""
     logger.info(f"SPOTIFY: {url}")
     
     # Check if Spotify credentials are set
     if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
-        await m.answer("❌ 𝐒𝐩𝐨𝐭𝐢𝐟𝐲 𝐀𝐏𝐈 𝐧𝐨𝐭 𝐜𝐨𝐧𝐟𝐢𝐠𝐮𝐫𝐞𝐝\n\nPlease set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET environment variables.")
+        await m.answer("❌ 𝐒𝐩𝐨𝐭𝐢𝐟𝐲 𝐀𝐏𝐈 𝐧𝐨𝐭 𝐜𝐨𝐧𝐟𝐢𝐠𝐮𝐫𝐞𝐝")
         return
     
     # Send initial message
-    status_msg = await m.answer("🎵 𝐏𝐫𝐨𝐜𝐞𝐬𝐬𝐢𝐧𝐠 𝐒𝐩𝐨𝐭𝐢𝐟𝐲 𝐏𝐥𝐚𝐲𝐥𝐢𝐬𝐭...")
+    status_msg = await m.answer("🎵 𝐏𝐫𝐨𝐜𝐞𝐬𝐬𝐢𝐧𝐠 𝐒𝐩𝐨𝐭𝐢𝐟𝐲 𝐏𝐥𝐚𝐲𝐥𝐢𝐬𝐭...\n⏳ 𝐓𝐡𝐢𝐬 𝐦𝐚𝐲 𝐭𝐚𝐤𝐞 𝐚 𝐰𝐡𝐢𝐥𝐞...")
     start = time.perf_counter()
     
     try:
-        # Extract track list using spotdl
-        tracks = await get_spotify_tracks_with_spotdl(url)
-        
-        if not tracks:
-            await status_msg.edit_text("❌ 𝐍𝐨 𝐭𝐫𝐚𝐜𝐤𝐬 𝐟𝐨𝐮𝐧𝐝")
-            return
-        
-        total_tracks = len(tracks)
-        await status_msg.edit_text(
-            f"📥 𝐅𝐨𝐮𝐧𝐝 {total_tracks} 𝐭𝐫𝐚𝐜𝐤𝐬\n"
-            f"⏳ 𝐒𝐭𝐚𝐫𝐭𝐢𝐧𝐠 𝐝𝐨𝐰𝐧𝐥𝐨𝐚𝐝 𝐢𝐧 𝟓 𝐬𝐞𝐜𝐨𝐧𝐝𝐬...\n"
-            f"⚠️ 𝐋𝐚𝐫𝐠𝐞 𝐩𝐥𝐚𝐲𝐥𝐢𝐬𝐭 - 𝐭𝐡𝐢𝐬 𝐰𝐢𝐥𝐥 𝐭𝐚𝐤𝐞 𝐚 𝐰𝐡𝐢𝐥𝐞"
-        )
-        
-        # 5 second cooldown before starting
-        await asyncio.sleep(5)
-        
-        downloaded = 0
-        failed = 0
-        last_update = 0
-        
-        # Process tracks ONE AT A TIME to protect cookies
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             
-            for i, track in enumerate(tracks, 1):
-                # Update progress every 10 tracks or at start
-                if i == 1 or i % 10 == 0 or i == total_tracks:
-                    try:
-                        await status_msg.edit_text(
-                            f"📥 𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐢𝐧𝐠...\n"
-                            f"🎵 𝐓𝐫𝐚𝐜𝐤 {i}/{total_tracks}\n"
-                            f"✅ 𝐒𝐮𝐜𝐜𝐞𝐬𝐬: {downloaded}\n"
-                            f"❌ 𝐅𝐚𝐢𝐥𝐞𝐝: {failed}\n"
-                            f"⏱️ 𝐄𝐬𝐭. 𝐭𝐢𝐦𝐞: {(total_tracks - i) * 5 // 60} 𝐦𝐢𝐧"
-                        )
-                    except:
-                        pass  # Ignore update errors
-                
-                # Rotate cookie every 20 tracks to avoid flagging
-                if i % 20 == 0:
-                    cookie_file = get_random_cookie(YT_MUSIC_COOKIES_FOLDER)
-                    logger.info(f"Rotated to new cookie at track {i}")
-                else:
-                    cookie_file = get_random_cookie(YT_MUSIC_COOKIES_FOLDER)
-                
-                # Download single track
-                result = await download_single_track(track, tmp, cookie_file)
-                
-                # Send to DM if successful
-                if result and result.get('file'):
-                    try:
-                        await bot.send_audio(
-                            m.from_user.id,
-                            FSInputFile(result['file']),
-                            title=result['title'],
-                            performer=result['artist'],
-                            caption=f"🎵 {result['title']}\n🎤 {result['artist']}\n💾 {result['size_mb']:.1f}MB"
-                        )
-                        downloaded += 1
-                        logger.info(f"DM: {result['title']} by {result['artist']} ({result['size_mb']:.1f}MB)")
-                        
-                        # Clean up the file after sending
-                        try:
-                            result['file'].unlink()
-                        except:
-                            pass
-                    except Exception as e:
-                        logger.error(f"Failed to send {result['title']}: {e}")
-                        failed += 1
-                else:
+            # Use spotdl to download entire playlist
+            cmd = [
+                "spotdl",
+                "download",
+                url,
+                "--client-id", SPOTIFY_CLIENT_ID,
+                "--client-secret", SPOTIFY_CLIENT_SECRET,
+                "--output", str(tmp),
+                "--format", "mp3",
+                "--bitrate", "192k",
+                "--threads", "1",  # Single thread to avoid rate limiting
+                "--print-errors",
+            ]
+            
+            logger.info(f"Running spotdl download...")
+            result = await asyncio.to_thread(
+                lambda: subprocess.run(cmd, capture_output=True, text=True)
+            )
+            
+            if result.returncode != 0:
+                logger.error(f"spotdl failed: {result.stderr}")
+                await status_msg.edit_text(f"❌ 𝐒𝐩𝐨𝐭𝐢𝐟𝐲 𝐅𝐚𝐢𝐥𝐞𝐝\n{result.stderr[:100]}")
+                return
+            
+            # Find all downloaded MP3 files
+            mp3_files = list(tmp.glob("*.mp3"))
+            
+            if not mp3_files:
+                await status_msg.edit_text("❌ 𝐍𝐨 𝐬𝐨𝐧𝐠𝐬 𝐝𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐞𝐝")
+                return
+            
+            total = len(mp3_files)
+            await status_msg.edit_text(f"📤 𝐒𝐞𝐧𝐝𝐢𝐧𝐠 {total} 𝐬𝐨𝐧𝐠𝐬 𝐭𝐨 𝐃𝐌...")
+            
+            sent = 0
+            failed = 0
+            
+            # Send each song to DM
+            for mp3 in mp3_files:
+                try:
+                    # Extract artist and title from filename (spotdl format: "Artist - Title.mp3")
+                    filename = mp3.stem
+                    if ' - ' in filename:
+                        artist, title = filename.split(' - ', 1)
+                    else:
+                        artist = "Unknown Artist"
+                        title = filename
+                    
+                    file_size = mp3.stat().st_size / 1024 / 1024
+                    
+                    await bot.send_audio(
+                        m.from_user.id,
+                        FSInputFile(mp3),
+                        title=title,
+                        performer=artist,
+                        caption=f"🎵 {title}\n🎤 {artist}\n💾 {file_size:.1f}MB"
+                    )
+                    sent += 1
+                    logger.info(f"DM: {title} by {artist} ({file_size:.1f}MB)")
+                    
+                    # Small delay between sends
+                    await asyncio.sleep(0.5)
+                    
+                except Exception as e:
+                    logger.error(f"Failed to send {mp3.name}: {e}")
                     failed += 1
         
-        elapsed = time.perf_counter() - start
-        
-        # Final status
-        await status_msg.edit_text(
-            f"✅ 𝐏𝐥𝐚𝐲𝐥𝐢𝐬𝐭 𝐂𝐨𝐦𝐩𝐥𝐞𝐭𝐞𝐝\n\n"
-            f"{mention(m.from_user)}\n"
-            f"₪ 𝐓𝐨𝐭𝐚𝐥: {total_tracks}\n"
-            f"₪ 𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐞𝐝: {downloaded}\n"
-            f"₪ 𝐅𝐚𝐢𝐥𝐞𝐝: {failed}\n"
-            f"₪ 𝐓𝐢𝐦𝐞: {elapsed:.1f}s\n"
-            f"₪ 𝐒𝐞𝐧𝐭 𝐭𝐨 𝐲𝐨𝐮𝐫 𝐃𝐌",
-            parse_mode="HTML"
-        )
-        
-        logger.info(f"SPOTIFY: {url}")
-        logger.info(f"SPOTIFY: {downloaded} songs in {elapsed:.2f}s")
+            elapsed = time.perf_counter() - start
+            
+            # Final status
+            await status_msg.edit_text(
+                f"✅ 𝐏𝐥𝐚𝐲𝐥𝐢𝐬𝐭 𝐂𝐨𝐦𝐩𝐥𝐞𝐭𝐞𝐝\n\n"
+                f"{mention(m.from_user)}\n"
+                f"₪ 𝐓𝐨𝐭𝐚𝐥: {total}\n"
+                f"₪ 𝐒𝐞𝐧𝐭: {sent}\n"
+                f"₪ 𝐅𝐚𝐢𝐥𝐞𝐝: {failed}\n"
+                f"₪ 𝐓𝐢𝐦𝐞: {elapsed:.1f}s\n"
+                f"₪ 𝐒𝐞𝐧𝐭 𝐭𝐨 𝐲𝐨𝐮𝐫 𝐃𝐌",
+                parse_mode="HTML"
+            )
+            
+            logger.info(f"SPOTIFY: {sent} songs in {elapsed:.2f}s")
         
     except Exception as e:
         logger.error(f"SPOTIFY: {e}")
