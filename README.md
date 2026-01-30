@@ -1,390 +1,263 @@
-# ⟣—◈ NAGU ULTRA DOWNLOADER ◈—⟢
+# NAGU Downloader Bot
 
-<div align="center">
+**Production-grade Telegram bot for downloading media from multiple platforms with advanced management features.**
 
-![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)
-![Python](https://img.shields.io/badge/python-3.11+-green.svg)
-![License](https://img.shields.io/badge/license-MIT-orange.svg)
-![Status](https://img.shields.io/badge/status-active-success.svg)
+## 🚀 Features
 
-**🚀 Lightning Fast Video Downloader Bot for Telegram**
+### Media Download
+- **Instagram** — Posts, Reels, Stories
+- **YouTube** — Videos, Shorts, Streams (with cookie rotation)
+- **Pinterest** — Video Pins (with URL resolution)
+- **Spotify** — Full playlist downloads with real-time progress
+- **MP3 Search** — Search and download music with metadata
 
-*Download videos from Instagram, YouTube, and Pinterest with Ultra HD quality and optimized file sizes*
+### Admin & Moderation
+- **User Management** — Promote/demote admins
+- **Moderation Tools** — Mute, unmute, ban, unban
+- **Permission System** — Proper admin detection with caching
+- **Content Filtering** — Word filters and exact blocklists
 
-[Features](#-features) • [Installation](#-installation) • [Usage](#-usage) • [Configuration](#-configuration) • [Deployment](#-deployment)
+### Premium Features
+- **Real-time Progress** — Live progress bars for Spotify downloads
+- **Batch Delivery** — Songs sent in batches of 10 to user DM
+- **Whisper Command** — Private messages in groups
+- **Premium UI** — Clean quoted blocks throughout
+- **Clickable Mentions** — All user references are clickable
 
-</div>
-
----
-
-## ✨ Features
-
-### 🎯 **Multi-Platform Support**
-- 📸 **Instagram**: Posts, Reels, IGTV, Stories
-- 🎬 **YouTube**: Videos, Shorts, Live Streams
-- 📌 **Pinterest**: Video Pins, Idea Pins
-
-### ⚡ **Performance**
-- 🚀 Lightning-fast concurrent downloads (8 simultaneous)
-- 💾 Smart compression with VP9 codec
-- 🔄 Automatic proxy rotation for reliability
-- ⚙️ Multi-threaded FFmpeg processing
-
-### 🎨 **Premium UI/UX**
-- 💎 Beautiful formatted messages with Unicode symbols
-- 📊 Real-time progress indicators
-- ⏱️ Response time tracking
-- 🎭 Platform-specific animated stickers
-
-### 🔒 **Security & Privacy**
-- 🔐 Cookie-based authentication
-- 🌐 Proxy support for anonymity
-- 🔄 User-Agent rotation
-- 📝 Comprehensive error logging
-
-### 🎥 **Quality Options**
-- 📺 Ultra HD support (up to 1080p)
-- 💾 Optimized file sizes (VP9 + Opus)
-- 🎬 Streaming-optimized output
-- 🔊 High-quality audio (96kbps Opus)
-
----
+### Performance
+- **Fully Async** — Non-blocking architecture
+- **Worker Pools** — Concurrent download management
+- **Cookie Rotation** — Multiple cookies for reliability
+- **Proxy Support** — Configurable proxy rotation
+- **Rate Limiting** — Semaphore-based concurrency control
 
 ## 📋 Requirements
 
-- Python 3.11+
-- FFmpeg with VP9 and Opus support
-- Telegram Bot Token
-- Cookie files for authentication
+- Python 3.10+
+- Redis (Upstash or local)
+- FFmpeg (for audio processing)
+- spotdl (for Spotify downloads)
+- yt-dlp (for video downloads)
 
----
+## 🔧 Installation
 
-## 🚀 Installation
-
-### 1. Clone the Repository
-
+### 1. Clone Repository
 ```bash
-git clone https://github.com/yourusername/nagu-ultra-downloader.git
-cd nagu-ultra-downloader
+git clone <repository-url>
+cd nagu-downloader-bot
 ```
 
 ### 2. Install Dependencies
-
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. Install FFmpeg
-
-**Ubuntu/Debian:**
+### 3. Install System Dependencies
 ```bash
-sudo apt-get update
-sudo apt-get install -y ffmpeg
-```
+# Ubuntu/Debian
+sudo apt update
+sudo apt install ffmpeg
 
-**macOS:**
-```bash
+# macOS
 brew install ffmpeg
+
+# Windows
+# Download from https://ffmpeg.org/download.html
 ```
 
-**Windows:**
-Download from [ffmpeg.org](https://ffmpeg.org/download.html)
+### 4. Configure Environment Variables
 
-### 4. Configure Bot Token
+Create a `.env` file:
 
-Edit [`main.py`](main.py:12) and replace with your bot token:
+```env
+# Bot Configuration
+BOT_TOKEN=your_telegram_bot_token
 
-```python
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
+# Spotify API (get from https://developer.spotify.com)
+SPOTIFY_CLIENT_ID=your_spotify_client_id
+SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
+
+# Redis (Upstash or local)
+REDIS_URL=your_redis_url
+REDIS_TOKEN=your_redis_token
+
+# Optional: Proxies (comma-separated)
+PROXIES=http://proxy1:port,http://proxy2:port
+
+# Optional: Custom Stickers
+IG_STICKER=sticker_file_id
+YT_STICKER=sticker_file_id
+PIN_STICKER=sticker_file_id
+MUSIC_STICKER=sticker_file_id
 ```
 
-### 5. Add Cookie Files
+### 5. Add Cookies (Optional but Recommended)
 
-Create cookie files for authentication:
+For better reliability, add cookie files:
 
-- `cookies_youtube.txt` - YouTube cookies
-- `cookies_instagram.txt` - Instagram cookies
+```
+yt cookies/
+  ├── cookie1.txt
+  ├── cookie2.txt
+  └── cookie3.txt
 
-**How to export cookies:**
-1. Install browser extension: "Get cookies.txt LOCALLY"
-2. Visit the platform while logged in
-3. Export cookies in Netscape format
-4. Save to the respective file
+yt music cookies/
+  ├── music_cookie1.txt
+  └── music_cookie2.txt
 
----
+cookies_instagram.txt (optional)
+```
 
-## 💻 Usage
+### 6. Add Start Image (Optional)
 
-### Start the Bot
+Place a `picture.png` in the `assets/` folder for the `/start` command.
 
+## 🚀 Running the Bot
+
+### Development
 ```bash
-python main.py
+python bot.py
 ```
 
-### Using the Bot
-
-1. Start a chat with your bot on Telegram
-2. Send `/start` to see the welcome message
-3. Send any supported video URL
-4. Wait for processing (5-30 seconds)
-5. Receive your video!
-
-### Supported URL Formats
-
-**Instagram:**
-```
-https://www.instagram.com/p/ABC123xyz/
-https://www.instagram.com/reel/ABC123xyz/
-```
-
-**YouTube:**
-```
-https://www.youtube.com/watch?v=dQw4w9WgXcQ
-https://youtu.be/dQw4w9WgXcQ
-```
-
-**Pinterest:**
-```
-https://www.pinterest.com/pin/123456789/
-https://pin.it/abc123
-```
-
----
-
-## ⚙️ Configuration
-
-### Video Quality Settings
-
-**Instagram** ([`main.py`](main.py:136)):
-```python
-"format": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best"
-```
-
-**YouTube** ([`main.py`](main.py:413)):
-```python
-"format": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]/best"
-```
-
-### Compression Settings
-
-**VP9 Encoding** ([`main.py`](main.py:485)):
-```python
-"-c:v", "libvpx-vp9", "-crf", "31", "-b:v", "0",
-"-cpu-used", "5", "-row-mt", "1", "-threads", "4",
-"-c:a", "libopus", "-b:a", "96k"
-```
-
-### Concurrent Downloads
-
-Adjust semaphore limit ([`main.py`](main.py:58)):
-```python
-semaphore = asyncio.Semaphore(8)  # 8 concurrent downloads
-```
-
-### Proxy Configuration
-
-Add/modify proxies ([`main.py`](main.py:30)):
-```python
-PROXIES = [
-    "http://user:pass@ip:port",
-    # Add more proxies
-]
-```
-
----
-
-## 🌐 Deployment
-
-### Railway
-
-1. Create a new project on [Railway](https://railway.app)
-2. Connect your GitHub repository
-3. Add environment variables (if needed)
-4. Deploy!
-
-**Procfile:**
-```
-web: python main.py
-```
-
-### Docker
-
-**Build:**
+### Production (with Docker)
 ```bash
-docker build -t nagu-downloader .
+docker build -t nagu-bot .
+docker run -d --env-file .env nagu-bot
 ```
 
-**Run:**
+### Production (with systemd)
 ```bash
-docker run -d --name nagu-bot nagu-downloader
+sudo cp nagu-bot.service /etc/systemd/system/
+sudo systemctl enable nagu-bot
+sudo systemctl start nagu-bot
 ```
 
-### Heroku
+## 📖 Usage
 
-```bash
-heroku create your-app-name
-git push heroku main
-heroku ps:scale web=1
+### Basic Commands
+
+#### Download Commands
+- Send any Instagram/YouTube/Pinterest/Spotify link
+- `/mp3 <song name>` — Search and download music
+
+#### Info Commands
+- `/start` — Welcome message with user info
+- `/help` — View all features (5 premium panels)
+- `/id` — Get user ID
+- `/chatid` — Get chat ID
+- `/myinfo` — Get detailed user information
+
+#### Admin Commands (Groups Only)
+- `/promote` — Promote user to admin (reply to user)
+- `/demote` — Demote admin (reply to user)
+- `/mute [minutes]` — Mute user (reply to user)
+- `/unmute` — Unmute user (reply to user)
+- `/ban` — Ban user (reply to user)
+- `/unban` — Unban user (reply to user)
+
+#### Filter Commands (Groups Only)
+- `/filter <word>` — Add word to filter (substring match)
+- `/unfilter <word>` — Remove word from filter
+- `/filters` — List all filters
+- `/block <word>` — Block exact word
+- `/unblock <word>` — Unblock word
+- `/blocklist` — List all blocked words
+
+#### Other Commands
+- `/whisper <message>` — Send private message (reply to user in group)
+
+### Spotify Workflow
+
+1. User sends Spotify playlist link
+2. Bot deletes user message after 3-5 seconds
+3. Bot sends "Spotify Playlist Fetched" message
+4. Live progress updates with dual progress bars:
+   - Main bar: Overall playlist progress
+   - Sub bar: Current song progress
+5. Songs sent in batches of 10 to user's DM
+6. Final completion message in group
+
+## 🏗️ Architecture
+
+```
+/core           → Bot initialization, config, dispatcher
+/downloaders    → Instagram, Pinterest, YouTube, Spotify, MP3
+/workers        → Async queues, concurrency pools
+/ui             → Message formatting, progress bars
+/admin          → Permissions, moderation, filters
+/utils          → Logging, Redis, helpers
+/assets         → Images for UI
 ```
 
----
+## ⚡ Performance Optimizations
+
+- **Async Subprocess** — All downloads run asynchronously
+- **Worker Pools** — Configurable concurrency limits
+- **Cookie Rotation** — Random cookie selection per request
+- **Proxy Rotation** — Random proxy selection per request
+- **Redis Caching** — Admin permissions cached for 5 minutes
+- **Batch Processing** — Spotify songs sent in batches
+- **Rate Limiting** — Semaphore-based concurrency control
+
+## 🔒 Security
+
+- All secrets stored in environment variables
+- Admin permissions verified with Telegram API
+- Redis-backed permission caching
+- Secure whisper delivery (no public leaks)
+- Input validation and sanitization
 
 ## 🐛 Troubleshooting
 
-### Common Issues
+### Bot not responding
+- Check bot token is correct
+- Verify Redis connection
+- Check logs for errors
 
-**1. Instagram: "Empty media response"**
-- ✅ Update cookies from a logged-in session
-- ✅ Check if the post is public
-- ✅ Verify URL format is correct
+### Downloads failing
+- Verify FFmpeg is installed
+- Check cookie files are valid
+- Try adding proxies
+- Check yt-dlp is up to date
 
-**2. YouTube: "Video unavailable"**
-- ✅ Check if video ID is valid (11 characters)
-- ✅ Update cookies for age-restricted content
-- ✅ Try different proxy
+### Spotify not working
+- Verify Spotify API credentials
+- Check spotdl is installed
+- Ensure FFmpeg is available
 
-**3. Pinterest: "Unsupported URL"**
-- ✅ Ensure URL contains pin ID
-- ✅ Use complete URL, not base domain
-- ✅ Check if pin contains video content
+### Admin commands not working
+- Verify user is Telegram admin
+- Check Redis connection
+- Clear admin cache if needed
 
-### Enable Debug Logging
+## 📝 License
 
-Modify logging level ([`main.py`](main.py:14)):
-```python
-logging.basicConfig(level=logging.DEBUG)
-```
+MIT License - See LICENSE file for details
 
----
+## 👥 Contributing
 
-## 📊 Performance Optimization
-
-### File Size Reduction
-
-| Platform | Original | Optimized | Reduction |
-|----------|----------|-----------|-----------|
-| Instagram | 25 MB | 8 MB | 68% |
-| YouTube | 50 MB | 15 MB | 70% |
-| Pinterest | 10 MB | 10 MB | 0% (copy) |
-
-### Processing Speed
-
-- **Instagram**: 5-15 seconds
-- **YouTube**: 10-30 seconds
-- **Pinterest**: 3-10 seconds
-
-*Times vary based on video length and server load*
-
----
-
-## 🔧 Advanced Configuration
-
-### Custom FFmpeg Parameters
-
-**For better quality** (larger files):
-```python
-"-crf", "28"  # Lower CRF = better quality
-"-b:a", "128k"  # Higher audio bitrate
-```
-
-**For smaller files** (lower quality):
-```python
-"-crf", "35"  # Higher CRF = smaller files
-"-b:a", "48k"  # Lower audio bitrate
-```
-
-### Cookie Auto-Refresh
-
-Consider implementing automatic cookie refresh:
-```python
-# Check cookie expiration
-# Re-authenticate if needed
-# Update cookie files
-```
-
----
-
-## 📝 API Reference
-
-### Main Functions
-
-#### `validate_instagram_url(url)`
-Validates Instagram URL format
-- **Returns**: `bool`
-
-#### `validate_youtube_url(url)`
-Validates YouTube URL format
-- **Returns**: `bool`
-
-#### `validate_pinterest_url(url)`
-Validates Pinterest URL format
-- **Returns**: `bool`
-
-#### `handle_instagram(m, url)`
-Downloads and processes Instagram videos
-- **Parameters**: 
-  - `m`: Message object
-  - `url`: Instagram URL
-
-#### `handle_youtube(m, url)`
-Downloads and processes YouTube videos
-- **Parameters**:
-  - `m`: Message object
-  - `url`: YouTube URL
-
-#### `handle_pinterest(m, url)`
-Downloads and processes Pinterest videos
-- **Parameters**:
-  - `m`: Message object
-  - `url`: Pinterest URL
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Please follow these steps:
-
+Contributions welcome! Please:
 1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+2. Create a feature branch
+3. Make your changes
+4. Submit a pull request
+
+## 📧 Support
+
+For issues and questions:
+- Open an issue on GitHub
+- Contact: @bhosadih
+
+## 🎯 Roadmap
+
+- [ ] Twitter/X downloader
+- [ ] TikTok downloader
+- [ ] Batch download queue
+- [ ] User statistics
+- [ ] Download history
+- [ ] Custom download quality settings
+- [ ] Multi-language support
 
 ---
 
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-## 👨‍💻 Author
-
-**NAGU ULTRA TECHNOLOGY**
-
-- Telegram: [@bhosadih](https://t.me/bhosadih)
-- Bot: [@nagudownloaderbot](https://t.me/nagudownloaderbot)
-
----
-
-## 🙏 Acknowledgments
-
-- [aiogram](https://github.com/aiogram/aiogram) - Telegram Bot framework
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp) - Video downloader
-- [FFmpeg](https://ffmpeg.org/) - Video processing
-
----
-
-## ⚠️ Disclaimer
-
-This bot is for educational purposes only. Users are responsible for complying with the terms of service of Instagram, YouTube, and Pinterest. The developers are not responsible for any misuse of this software.
-
----
-
-<div align="center">
-
-**⟣—◈ Made with ❤️ by NAGU ULTRA ◈—⟢**
-
-⭐ Star this repo if you find it useful!
-
-</div>
+**Built with ❤️ for the Telegram community**
