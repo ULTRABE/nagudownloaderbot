@@ -195,26 +195,22 @@ async def check_message_filters(chat_id, text):
 
 @dp.message(CommandStart())
 async def start(m: Message):
-    username = f"@{m.from_user.username}" if m.from_user.username else "No Username"
+    username = f"@{m.from_user.username}" if m.from_user.username else "𝘕𝘰 𝘜𝘴𝘦𝘳𝘯𝘢𝘮𝘦"
     
     caption = f"""
-╔══════════════════════════╗
-║   NAGU DOWNLOADER BOT    ║
-╚══════════════════════════╝
-
-USER INFORMATION
-├─ ID: {m.from_user.id}
-├─ Username: {username}
-└─ Name: {m.from_user.first_name}
-
-COMMANDS
-├─ /help - View all features
-├─ /mp3 - Download music
-└─ Send any link to download
-
-═══════════════════════════
-Owner: @bhosadih
-═══════════════════════════"""
+╭─ ✨ 𝗡𝗔𝗚𝗨 𝗗𝗢𝗪𝗡𝗟𝗢𝗔𝗗𝗘𝗥 𝗕𝗢𝗧
+│
+│ 👤 𝘜𝘴𝘦𝘳 𝘐𝘯𝘧𝘰𝘳𝘮𝘢𝘵𝘪𝘰𝘯
+│ ▸ 𝘐𝘋: {m.from_user.id}
+│ ▸ 𝘜𝘴𝘦𝘳: {username}
+│ ▸ 𝘕𝘢𝘮𝘦: {m.from_user.first_name}
+│
+│ ⚡ 𝘘𝘶𝘪𝘤𝘬 𝘊𝘰𝘮𝘮𝘢𝘯𝘥𝘴
+│ ▸ /help ⟶ 𝘝𝘪𝘦𝘸 𝘢𝘭𝘭 𝘧𝘦𝘢𝘵𝘶𝘳𝘦𝘴
+│ ▸ /mp3 ⟶ 𝘋𝘰𝘸𝘯𝘭𝘰𝘢𝘥 𝘮𝘶𝘴𝘪𝘤
+│ ▸ 𝘚𝘦𝘯𝘥 𝘢𝘯𝘺 𝘭𝘪𝘯𝘬 𝘵𝘰 𝘥𝘰𝘸𝘯𝘭𝘰𝘢𝘥
+│
+╰─ 💎 𝘖𝘸𝘯𝘦𝘳: @bhosadih"""
     
     # Try to send with picture
     picture_path = Path("assets/picture.png")
@@ -231,49 +227,55 @@ Owner: @bhosadih
 @dp.message(F.text == "/help")
 async def help_command(m: Message):
     await m.reply("""
-╔══════════════════════════╗
-║    BOT HELP & FEATURES   ║
-╚══════════════════════════╝
-
-VIDEO DOWNLOAD
-├─ Instagram: Posts, Reels, Stories
-├─ YouTube: Videos, Shorts, Streams
-└─ Pinterest: Video Pins
-   >> Just send the link!
-
-MUSIC DOWNLOAD
-├─ /mp3 [song name]
-│  └─ Search & download any song
-└─ Spotify Playlists
-   └─ Send Spotify URL
-
-INFO COMMANDS
-├─ /id - Get user ID
-├─ /chatid - Get chat ID
-└─ /myinfo - Your full info
-
-ADMIN COMMANDS
-├─ /promote - Make user admin
-├─ /demote - Remove admin
-├─ /mute [minutes] - Mute user
-├─ /unmute - Unmute user
-├─ /ban - Ban user
-└─ /unban - Unban user
-
-FILTER COMMANDS
-├─ /filter <word> - Filter word
-├─ /unfilter <word> - Remove filter
-├─ /filters - List filters
-├─ /block <word> - Block exact word
-├─ /unblock <word> - Unblock word
-└─ /blocklist - List blocked
-
-OTHER
-└─ /whisper <msg> - Private message
-
-═══════════════════════════
-Owner: @bhosadih
-═══════════════════════════""")
+╭─ ✨ 𝗕𝗢𝗧 𝗙𝗘𝗔𝗧𝗨𝗥𝗘𝗦 & 𝗖𝗢𝗠𝗠𝗔𝗡𝗗𝗦
+│
+│ 📥 𝘝𝘪𝘥𝘦𝘰 𝘋𝘰𝘸𝘯𝘭𝘰𝘢𝘥
+│ ▸ 𝘐𝘯𝘴𝘵𝘢𝘨𝘳𝘢𝘮 ⟶ 𝘗𝘰𝘴𝘵𝘴, 𝘙𝘦𝘦𝘭𝘴, 𝘚𝘵𝘰𝘳𝘪𝘦𝘴
+│ ▸ 𝘠𝘰𝘶𝘛𝘶𝘣𝘦 ⟶ 𝘝𝘪𝘥𝘦𝘰𝘴, 𝘚𝘩𝘰𝘳𝘵𝘴, 𝘚𝘵𝘳𝘦𝘢𝘮𝘴
+│ ▸ 𝘗𝘪𝘯𝘵𝘦𝘳𝘦𝘴𝘵 ⟶ 𝘝𝘪𝘥𝘦𝘰 𝘗𝘪𝘯𝘴
+│ ➜ 𝘑𝘶𝘴𝘵 𝘴𝘦𝘯𝘥 𝘵𝘩𝘦 𝘭𝘪𝘯𝘬!
+│
+│ 🎵 𝘔𝘶𝘴𝘪𝘤 𝘋𝘰𝘸𝘯𝘭𝘰𝘢𝘥
+│ ▸ /mp3 [𝘴𝘰𝘯𝘨 𝘯𝘢𝘮𝘦] ⟶ 𝘚𝘦𝘢𝘳𝘤𝘩 & 𝘥𝘰𝘸𝘯𝘭𝘰𝘢𝘥
+│ ▸ 𝘚𝘱𝘰𝘵𝘪𝘧𝘺 𝘜𝘙𝘓 ⟶ 𝘋𝘰𝘸𝘯𝘭𝘰𝘢𝘥 𝘱𝘭𝘢𝘺𝘭𝘪𝘴𝘵 𝘵𝘰 𝘋𝘔
+│
+│ ℹ️ 𝘐𝘯𝘧𝘰 𝘊𝘰𝘮𝘮𝘢𝘯𝘥𝘴
+│ ▸ /id ⟶ 𝘎𝘦𝘵 𝘶𝘴𝘦𝘳 𝘐𝘋
+│ ▸ /chatid ⟶ 𝘎𝘦𝘵 𝘤𝘩𝘢𝘵 𝘐𝘋
+│ ▸ /myinfo ⟶ 𝘠𝘰𝘶𝘳 𝘧𝘶𝘭𝘭 𝘪𝘯𝘧𝘰
+│
+│ 👮 𝘈𝘥𝘮𝘪𝘯 𝘊𝘰𝘮𝘮𝘢𝘯𝘥𝘴
+│ ▸ /promote ⟶ 𝘔𝘢𝘬𝘦 𝘶𝘴𝘦𝘳 𝘢𝘥𝘮𝘪𝘯
+│ ▸ /demote ⟶ 𝘙𝘦𝘮𝘰𝘷𝘦 𝘢𝘥𝘮𝘪𝘯
+│ ▸ /mute [𝘮𝘪𝘯] ⟶ 𝘔𝘶𝘵𝘦 𝘶𝘴𝘦𝘳
+│ ▸ /unmute ⟶ 𝘜𝘯𝘮𝘶𝘵𝘦 𝘶𝘴𝘦𝘳
+│ ▸ /ban ⟶ 𝘉𝘢𝘯 𝘶𝘴𝘦𝘳
+│ ▸ /unban ⟶ 𝘜𝘯𝘣𝘢𝘯 𝘶𝘴𝘦𝘳
+│
+│ 🛡️ 𝘍𝘪𝘭𝘵𝘦𝘳 𝘊𝘰𝘮𝘮𝘢𝘯𝘥𝘴
+│ ▸ /filter <𝘸𝘰𝘳𝘥> ⟶ 𝘍𝘪𝘭𝘵𝘦𝘳 𝘸𝘰𝘳𝘥
+│ ▸ /unfilter <𝘸𝘰𝘳𝘥> ⟶ 𝘙𝘦𝘮𝘰𝘷𝘦 𝘧𝘪𝘭𝘵𝘦𝘳
+│ ▸ /filters ⟶ 𝘓𝘪𝘴𝘵 𝘢𝘭𝘭 𝘧𝘪𝘭𝘵𝘦𝘳𝘴
+│ ▸ /block <𝘸𝘰𝘳𝘥> ⟶ 𝘉𝘭𝘰𝘤𝘬 𝘦𝘹𝘢𝘤𝘵 𝘸𝘰𝘳𝘥
+│ ▸ /unblock <𝘸𝘰𝘳𝘥> ⟶ 𝘜𝘯𝘣𝘭𝘰𝘤𝘬 𝘸𝘰𝘳𝘥
+│ ▸ /blocklist ⟶ 𝘓𝘪𝘴𝘵 𝘣𝘭𝘰𝘤𝘬𝘦𝘥
+│
+│ 💬 𝘖𝘵𝘩𝘦𝘳 𝘊𝘰𝘮𝘮𝘢𝘯𝘥𝘴
+│ ▸ /whisper <𝘮𝘴𝘨> ⟶ 𝘗𝘳𝘪𝘷𝘢𝘵𝘦 𝘮𝘦𝘴𝘴𝘢𝘨𝘦
+│
+╰─ 💎 𝘖𝘸𝘯𝘦𝘳: @bhosadih"""
+    
+    # Try to send with picture
+    picture_path = Path("assets/picture.png")
+    if picture_path.exists():
+        try:
+            await m.reply_photo(FSInputFile(picture_path), caption=caption)
+            return
+        except:
+            pass
+    
+    # Fallback to text only
+    await m.reply(caption, quote=True)
 
 # ═══════════════════════════════════════════════════════════
 # MANAGEMENT COMMANDS
@@ -285,55 +287,55 @@ async def cmd_id(m: Message):
     if m.reply_to_message:
         user = m.reply_to_message.from_user
         await m.reply(f"""
-╔══════════════════════════╗
-║      USER ID INFO        ║
-╚══════════════════════════╝
-
-├─ Name: {user.first_name}
-├─ Username: @{user.username if user.username else 'None'}
-└─ ID: {user.id}""")
+╭─ 👤 𝗨𝗦𝗘𝗥 𝗜𝗗 𝗜𝗡𝗙𝗢
+│
+│ ▸ 𝘕𝘢𝘮𝘦: {user.first_name}
+│ ▸ 𝘜𝘴𝘦𝘳𝘯𝘢𝘮𝘦: @{user.username if user.username else '𝘕𝘰𝘯𝘦'}
+│ ▸ 𝘐𝘋: `{user.id}`
+│
+╰──────────────""")
     else:
         await m.reply(f"""
-╔══════════════════════════╗
-║      YOUR ID INFO        ║
-╚══════════════════════════╝
-
-├─ Name: {m.from_user.first_name}
-├─ Username: @{m.from_user.username if m.from_user.username else 'None'}
-└─ ID: {m.from_user.id}""")
+╭─ 👤 𝗬𝗢𝗨𝗥 𝗜𝗗 𝗜𝗡𝗙𝗢
+│
+│ ▸ 𝘕𝘢𝘮𝘦: {m.from_user.first_name}
+│ ▸ 𝘜𝘴𝘦𝘳𝘯𝘢𝘮𝘦: @{m.from_user.username if m.from_user.username else '𝘕𝘰𝘯𝘦'}
+│ ▸ 𝘐𝘋: `{m.from_user.id}`
+│
+╰──────────────""")
 
 @dp.message(Command("chatid"))
 async def cmd_chatid(m: Message):
     """Get chat ID"""
     await m.reply(f"""
-╔══════════════════════════╗
-║      CHAT ID INFO        ║
-╚══════════════════════════╝
-
-├─ Chat Name: {m.chat.title if m.chat.title else 'Private Chat'}
-├─ Chat Type: {m.chat.type}
-└─ Chat ID: {m.chat.id}""")
+╭─ 💬 𝗖𝗛𝗔𝗧 𝗜𝗗 𝗜𝗡𝗙𝗢
+│
+│ ▸ 𝘊𝘩𝘢𝘵: {m.chat.title if m.chat.title else '𝘗𝘳𝘪𝘷𝘢𝘵𝘦 𝘊𝘩𝘢𝘵'}
+│ ▸ 𝘛𝘺𝘱𝘦: {m.chat.type}
+│ ▸ 𝘐𝘋: `{m.chat.id}`
+│
+╰──────────────""")
 
 @dp.message(Command("myinfo"))
 async def cmd_myinfo(m: Message):
     """Get detailed user info"""
     user = m.from_user
     await m.reply(f"""
-╔══════════════════════════╗
-║    YOUR INFORMATION      ║
-╚══════════════════════════╝
-
-USER DETAILS
-├─ First Name: {user.first_name}
-├─ Last Name: {user.last_name if user.last_name else 'None'}
-├─ Username: @{user.username if user.username else 'None'}
-├─ ID: {user.id}
-└─ Language: {user.language_code if user.language_code else 'Unknown'}
-
-CHAT DETAILS
-├─ Chat Name: {m.chat.title if m.chat.title else 'Private Chat'}
-├─ Chat Type: {m.chat.type}
-└─ Chat ID: {m.chat.id}""")
+╭─ ✨ 𝗬𝗢𝗨𝗥 𝗜𝗡𝗙𝗢𝗥𝗠𝗔𝗧𝗜𝗢𝗡
+│
+│ 👤 𝘜𝘴𝘦𝘳 𝘋𝘦𝘵𝘢𝘪𝘭𝘴
+│ ▸ 𝘍𝘪𝘳𝘴𝘵 𝘕𝘢𝘮𝘦: {user.first_name}
+│ ▸ 𝘓𝘢𝘴𝘵 𝘕𝘢𝘮𝘦: {user.last_name if user.last_name else '𝘕𝘰𝘯𝘦'}
+│ ▸ 𝘜𝘴𝘦𝘳𝘯𝘢𝘮𝘦: @{user.username if user.username else '𝘕𝘰𝘯𝘦'}
+│ ▸ 𝘐𝘋: `{user.id}`
+│ ▸ 𝘓𝘢𝘯𝘨𝘶𝘢𝘨𝘦: {user.language_code if user.language_code else '𝘜𝘯𝘬𝘯𝘰𝘸𝘯'}
+│
+│ 💬 𝘊𝘩𝘢𝘵 𝘋𝘦𝘵𝘢𝘪𝘭𝘴
+│ ▸ 𝘊𝘩𝘢𝘵: {m.chat.title if m.chat.title else '𝘗𝘳𝘪𝘷𝘢𝘵𝘦'}
+│ ▸ 𝘛𝘺𝘱𝘦: {m.chat.type}
+│ ▸ 𝘐𝘋: `{m.chat.id}`
+│
+╰──────────────""")
 
 # ═══════════════════════════════════════════════════════════
 # ADMIN MANAGEMENT
