@@ -788,9 +788,9 @@ Message:
 # MESSAGE FILTER HANDLER
 # ═══════════════════════════════════════════════════════════
 
-@dp.message(F.text)
+@dp.message(F.text & ~F.text.startswith("/") & ~F.text.regexp(LINK_RE))
 async def check_filters(m: Message):
-    """Check all messages for filtered/blocked words"""
+    """Check all messages for filtered/blocked words (skip commands and links)"""
     if m.chat.type == "private":
         return
     
