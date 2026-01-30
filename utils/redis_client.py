@@ -1,111 +1,140 @@
-"""Redis client wrapper"""
-from typing import Optional, List, Set
+"""Async Redis client wrapper"""
+import asyncio
+from typing import Optional, Any, List
 from upstash_redis import Redis
 from core.config import config
-from .logger import logger
+from utils.logger import logger
 
-class RedisClient:
-    """Redis client wrapper with error handling"""
+class AsyncRedisClient:
+    """Async wrapper for Upstash Redis client"""
     
     def __init__(self):
         self.client: Optional[Redis] = None
-        self._connect()
+        self._initialized = False
     
-    def _connect(self):
+    def initialize(self):
         """Initialize Redis connection"""
+        if self._initialized:
+            return
+        
         try:
             if config.REDIS_URL and config.REDIS_TOKEN:
                 self.client = Redis(url=config.REDIS_URL, token=config.REDIS_TOKEN)
-                logger.info("Redis connected successfully")
+                self._initialized = True
+                logger.info("Redis client initialized")
             else:
-                logger.warning("Redis credentials not provided - running without Redis")
+                logger.warning("Redis credentials not configured")
         except Exception as e:
-            logger.error(f"Redis connection failed: {e}")
+            logger.error(f"Redis initialization failed: {e}")
             self.client = None
     
-    def is_connected(self) -> bool:
-        """Check if Redis is connected"""
-        return self.client is not None
+    async def get(self, key: str) -> Optional[str]:
+        """Get value from Redis"""
+        if not self.client:
+            return None
+        try:
+            return await asyncio.to_thread(self.client.get, key)
+        except Exception as e:
+            logger.error(f"Redis GET failed for {key}: {e}")
+            return None
     
-    # Key generators
-    def get_admin_key(self, chat_id: int) -> str:
-        return f"admins:{chat_id}"
+    async def set(self, key: str, value: Any) -> bool:
+        """Set value in Redis"""
+        if not self.client:
+            return False
+        try:
+            await asyncio.to_thread(self.client.set, key, value)
+            return True
+        except Exception as e:
+            logger.error(f"Redis SET failed for {key}: {e}")
+            return False
     
-    def get_mute_key(self, chat_id: int, user_id: int) -> str:
-        return f"mute:{chat_id}:{user_id}"
+    async def setex(self, key: str, seconds: int, value: Any) -> bool:
+        """Set value with expiration"""
+        if not self.client:
+            return False
+        try:
+            await asyncio.to_thread(self.client.setex, key, seconds, value)
+            return True
+        except Exception as e:
+            logger.error(f"Redis SETEX failed for {key}: {e}")
+            return False
     
-    def get_filter_key(self, chat_id: int) -> str:
-        return f"filters:{chat_id}"
+    async def delete(self, *keys: str) -> bool:
+        """Delete keys from Redis"""
+        if not self.client:
+            return False
+        try:
+            await asyncio.to_thread(self.client.delete, *keys)
+            return True
+        except Exception as e:
+            logger.error(f"Redis DELETE failed: {e}")
+            return False
     
-    def get_blocklist_key(self, chat_id: int) -> str:
-        return f"blocklist:{chat_id}"
-    
-    # Set operations
-    def sadd(self, key: str, *values) -> bool:
+    async def sadd(self, key: str, *members: Any) -> bool:
         """Add members to set"""
         if not self.client:
             return False
         try:
-            self.client.sadd(key, *values)
+            await asyncio.to_thread(self.client.sadd, key, *members)
             return True
         except Exception as e:
-            logger.error(f"Redis SADD error: {e}")
+            logger.error(f"Redis SADD failed for {key}: {e}")
             return False
     
-    def srem(self, key: str, *values) -> bool:
+    async def srem(self, key: str, *members: Any) -> bool:
         """Remove members from set"""
         if not self.client:
             return False
         try:
-            self.client.srem(key, *values)
+            await asyncio.to_thread(self.client.srem, key, *members)
             return True
         except Exception as e:
-            logger.error(f"Redis SREM error: {e}")
+            logger.error(f"Redis SREM failed for {key}: {e}")
             return False
     
-    def smembers(self, key: str) -> Set[str]:
+    async def smembers(self, key: str) -> List[str]:
         """Get all members of set"""
         if not self.client:
-            return set()
+            return []
         try:
-            result = self.client.smembers(key)
-            return set(result) if result else set()
+            result = await asyncio.to_thread(self.client.smembers, key)
+            return list(result) if result else []
         except Exception as e:
-            logger.error(f"Redis SMEMBERS error: {e}")
-            return set()
+            logger.error(f"Redis SMEMBERS failed for {key}: {e}")
+            return []
     
-    # String operations
-    def set(self, key: str, value: str) -> bool:
-        """Set key value"""
+    async def keys(self, pattern: str) -> List[str]:
+        """Get keys matching pattern"""
+        if not self.client:
+            return []
+        try:
+            result = await asyncio.to_thread(self.client.keys, pattern)
+            return list(result) if result else []
+        except Exception as e:
+            logger.error(f"Redis KEYS failed for {pattern}: {e}")
+            return []
+    
+    async def exists(self, key: str) -> bool:
+        """Check if key exists"""
         if not self.client:
             return False
         try:
-            self.client.set(key, value)
-            return True
+            result = await asyncio.to_thread(self.client.exists, key)
+            return bool(result)
         except Exception as e:
-            logger.error(f"Redis SET error: {e}")
+            logger.error(f"Redis EXISTS failed for {key}: {e}")
             return False
     
-    def get(self, key: str) -> Optional[str]:
-        """Get key value"""
+    async def ttl(self, key: str) -> int:
+        """Get time to live for key"""
         if not self.client:
-            return None
+            return -1
         try:
-            return self.client.get(key)
+            return await asyncio.to_thread(self.client.ttl, key)
         except Exception as e:
-            logger.error(f"Redis GET error: {e}")
-            return None
-    
-    def delete(self, key: str) -> bool:
-        """Delete key"""
-        if not self.client:
-            return False
-        try:
-            self.client.delete(key)
-            return True
-        except Exception as e:
-            logger.error(f"Redis DELETE error: {e}")
-            return False
+            logger.error(f"Redis TTL failed for {key}: {e}")
+            return -1
 
 # Global Redis client instance
-redis_client = RedisClient()
+redis_client = AsyncRedisClient()

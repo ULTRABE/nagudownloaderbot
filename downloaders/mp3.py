@@ -1,4 +1,4 @@
-"""MP3 downloader - fully async with proper audio sending"""
+"""MP3 downloader - Fully async with proper audio metadata"""
 import asyncio
 import time
 import tempfile
@@ -10,21 +10,27 @@ from aiogram.filters import Command
 from core.bot import bot, dp
 from core.config import config
 from workers.task_queue import music_semaphore
-from ui.formatting import format_audio_caption
-from utils.helpers import get_random_cookie
+from ui.formatting import format_audio_info
+from utils.helpers import get_random_cookie, get_file_size_mb
 from utils.logger import logger
 
 async def handle_mp3_search(m: Message, query: str):
-    """Search and download single song with proper metadata and thumbnail"""
+    """
+    Search and download single song with metadata and thumbnail
+    Fully async, non-blocking implementation
+    """
     async with music_semaphore:
-        logger.info(f"MP3: {query}")
+        logger.info(f"MP3: Searching for '{query}'")
+        
+        # Send sticker as progress indicator
         sticker = await bot.send_sticker(m.chat.id, config.MUSIC_STICKER)
-        start = time.perf_counter()
-
+        start_time = time.perf_counter()
+        
         try:
             with tempfile.TemporaryDirectory() as tmp_dir:
                 tmp = Path(tmp_dir)
                 
+                # yt-dlp options for best audio quality
                 opts = {
                     "quiet": True,
                     "no_warnings": True,
@@ -35,7 +41,7 @@ async def handle_mp3_search(m: Message, query: str):
                         "User-Agent": config.pick_user_agent(),
                         "Accept-Language": "en-US,en;q=0.9",
                         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                        "DNT": "1",
+                        "DNT": "1"
                     },
                     "default_search": "ytsearch1",
                     "writethumbnail": True,
@@ -45,82 +51,86 @@ async def handle_mp3_search(m: Message, query: str):
                         {
                             "key": "FFmpegExtractAudio",
                             "preferredcodec": "mp3",
-                            "preferredquality": "192",
+                            "preferredquality": "192"
                         },
                         {
                             "key": "EmbedThumbnail",
-                            "already_have_thumbnail": False,
+                            "already_have_thumbnail": False
                         },
                         {
                             "key": "FFmpegMetadata",
-                            "add_metadata": True,
+                            "add_metadata": True
                         }
                     ],
                     "postprocessor_args": [
                         "-ar", "44100",
                         "-ac", "2",
-                        "-b:a", "192k",
-                    ],
+                        "-b:a", "192k"
+                    ]
                 }
                 
-                # Use random cookie from yt_music_cookies folder
+                # Use random cookie from yt music cookies folder
                 cookie_file = get_random_cookie(config.YT_MUSIC_COOKIES_FOLDER)
                 if cookie_file:
                     opts["cookiefile"] = cookie_file
-                    logger.info(f"MP3: Using cookie {cookie_file}")
+                    logger.info(f"MP3: Using cookie {Path(cookie_file).name}")
                 
-                # Search and download
+                # Search and download asynchronously
                 with YoutubeDL(opts) as ydl:
                     info = await asyncio.to_thread(
                         lambda: ydl.extract_info(f"ytsearch1:{query}", download=True)
                     )
                 
-                # Find MP3
-                mp3 = None
+                # Find downloaded MP3 file
+                mp3_file = None
                 for f in tmp.iterdir():
                     if f.suffix == ".mp3":
-                        mp3 = f
+                        mp3_file = f
                         break
                 
-                if not mp3:
+                if not mp3_file:
                     await bot.delete_message(m.chat.id, sticker.message_id)
-                    await m.answer("❌ 𝐒𝐨𝐧𝐠 𝐧𝐨𝐭 𝐟𝐨𝐮𝐧𝐝")
+                    await m.answer("Song not found")
                     return
                 
                 # Extract metadata
                 entry = info['entries'][0] if 'entries' in info else info
-                title = entry.get('title', mp3.stem)
+                title = entry.get('title', mp3_file.stem)
                 artist = entry.get('artist') or entry.get('uploader', 'Unknown Artist')
-                file_size = mp3.stat().st_size / 1024 / 1024
+                file_size = get_file_size_mb(str(mp3_file))
                 
-                elapsed = time.perf_counter() - start
+                elapsed = time.perf_counter() - start_time
+                
+                # Delete sticker
                 await bot.delete_message(m.chat.id, sticker.message_id)
                 
-                # Send to chat with proper audio metadata
+                # Send audio with metadata
                 await bot.send_audio(
                     m.chat.id,
-                    FSInputFile(mp3),
-                    caption=format_audio_caption(m.from_user, elapsed, title, artist, file_size),
+                    FSInputFile(mp3_file),
+                    caption=format_audio_info(m.from_user, title, artist, file_size, elapsed),
                     parse_mode="HTML",
                     title=title,
                     performer=artist
                 )
                 
-                logger.info(f"MP3: {title} by {artist} ({file_size:.1f}MB) in {elapsed:.2f}s")
-                
+                logger.info(f"MP3: Sent '{title}' by {artist} ({file_size:.1f}MB) in {elapsed:.2f}s")
+        
         except Exception as e:
-            logger.error(f"MP3: {e}")
+            logger.error(f"MP3 ERROR: {e}")
             try:
                 await bot.delete_message(m.chat.id, sticker.message_id)
             except:
                 pass
-            await m.answer(f"❌ 𝐌𝐏𝟑 𝐅𝐚𝐢𝐥𝐞𝐝\n{str(e)[:100]}")
+            await m.answer(f"MP3 download failed\n{str(e)[:100]}")
 
 @dp.message(Command("mp3"))
 async def mp3_command(m: Message):
     """MP3 command handler"""
     query = m.text.replace("/mp3", "").strip()
+    
     if not query:
-        await m.answer("𝐔𝐬𝐚𝐠𝐞: /mp3 song name")
+        await m.answer("Usage: /mp3 <song name>")
         return
+    
     await handle_mp3_search(m, query)
