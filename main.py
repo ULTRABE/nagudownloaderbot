@@ -471,16 +471,22 @@ async def get_spotify_tracks(url):
         auth_str = f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}"
         auth_b64 = base64.b64encode(auth_str.encode()).decode()
         
+        logger.info(f"Authenticating with Spotify API...")
+        
         token_response = await asyncio.to_thread(
             lambda: requests.post(
-                "https://api.spotify.com/v1/token",
-                headers={"Authorization": f"Basic {auth_b64}"},
+                "https://accounts.spotify.com/api/token",
+                headers={
+                    "Authorization": f"Basic {auth_b64}",
+                    "Content-Type": "application/x-www-form-urlencoded"
+                },
                 data={"grant_type": "client_credentials"}
             )
         )
         
         if token_response.status_code != 200:
-            logger.error(f"Failed to get Spotify token: {token_response.text}")
+            logger.error(f"Failed to get Spotify token (status {token_response.status_code}): {token_response.text}")
+            logger.error(f"CLIENT_ID length: {len(SPOTIFY_CLIENT_ID)}, CLIENT_SECRET length: {len(SPOTIFY_CLIENT_SECRET)}")
             return []
         
         access_token = token_response.json()["access_token"]
