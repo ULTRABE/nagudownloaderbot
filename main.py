@@ -461,85 +461,41 @@ async def download_single_track(track_info, tmp_dir, cookie_file, retry_count=0)
         
         return None
 
-async def get_spotify_tracks(url):
-    """Extract track list from Spotify playlist/album using Spotify API"""
+async def get_spotify_tracks_with_spotdl(url):
+    """Extract track list from Spotify using spotdl list command"""
     try:
-        import requests
-        import base64
+        logger.info(f"Extracting Spotify tracks with spotdl...")
         
-        # Get Spotify access token
-        auth_str = f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}"
-        auth_b64 = base64.b64encode(auth_str.encode()).decode()
+        # Use spotdl list command to get track names
+        cmd = [
+            "spotdl",
+            "list",
+            url,
+            "--client-id", SPOTIFY_CLIENT_ID,
+            "--client-secret", SPOTIFY_CLIENT_SECRET,
+        ]
         
-        logger.info(f"Authenticating with Spotify API...")
-        
-        token_response = await asyncio.to_thread(
-            lambda: requests.post(
-                "https://accounts.spotify.com/api/token",
-                headers={
-                    "Authorization": f"Basic {auth_b64}",
-                    "Content-Type": "application/x-www-form-urlencoded"
-                },
-                data={"grant_type": "client_credentials"}
-            )
+        result = await asyncio.to_thread(
+            lambda: subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         )
         
-        if token_response.status_code != 200:
-            logger.error(f"Failed to get Spotify token (status {token_response.status_code}): {token_response.text}")
-            logger.error(f"CLIENT_ID length: {len(SPOTIFY_CLIENT_ID)}, CLIENT_SECRET length: {len(SPOTIFY_CLIENT_SECRET)}")
+        if result.returncode != 0:
+            logger.error(f"spotdl list failed: {result.stderr}")
             return []
         
-        access_token = token_response.json()["access_token"]
-        headers = {"Authorization": f"Bearer {access_token}"}
-        
-        # Extract playlist/album ID from URL
-        if "playlist" in url:
-            playlist_id = url.split("playlist/")[1].split("?")[0]
-            api_url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
-        elif "album" in url:
-            album_id = url.split("album/")[1].split("?")[0]
-            api_url = f"https://api.spotify.com/v1/albums/{album_id}/tracks"
-        elif "track" in url:
-            track_id = url.split("track/")[1].split("?")[0]
-            api_url = f"https://api.spotify.com/v1/tracks/{track_id}"
-        else:
-            logger.error("Invalid Spotify URL")
-            return []
-        
+        # Parse output - spotdl list outputs "Artist - Title" format
         tracks = []
-        
-        # Handle single track
-        if "track" in url:
-            response = await asyncio.to_thread(lambda: requests.get(api_url, headers=headers))
-            if response.status_code == 200:
-                data = response.json()
-                tracks.append({
-                    'title': data['name'],
-                    'artist': ', '.join([artist['name'] for artist in data['artists']])
-                })
-            return tracks
-        
-        # Handle playlist/album with pagination
-        while api_url:
-            response = await asyncio.to_thread(lambda: requests.get(api_url, headers=headers))
-            
-            if response.status_code != 200:
-                logger.error(f"Failed to fetch tracks: {response.text}")
-                break
-            
-            data = response.json()
-            
-            for item in data.get('items', []):
-                track = item.get('track') if 'track' in item else item
-                if track and track.get('name'):
+        for line in result.stdout.strip().split('\n'):
+            line = line.strip()
+            if line and ' - ' in line:
+                parts = line.split(' - ', 1)
+                if len(parts) == 2:
                     tracks.append({
-                        'title': track['name'],
-                        'artist': ', '.join([artist['name'] for artist in track.get('artists', [])])
+                        'artist': parts[0].strip(),
+                        'title': parts[1].strip()
                     })
-            
-            # Get next page
-            api_url = data.get('next')
         
+        logger.info(f"Found {len(tracks)} tracks")
         return tracks
         
     except Exception as e:
@@ -560,8 +516,8 @@ async def download_spotify_playlist(m, url):
     start = time.perf_counter()
     
     try:
-        # Extract track list
-        tracks = await get_spotify_tracks(url)
+        # Extract track list using spotdl
+        tracks = await get_spotify_tracks_with_spotdl(url)
         
         if not tracks:
             await status_msg.edit_text("❌ 𝐍𝐨 𝐭𝐫𝐚𝐜𝐤𝐬 𝐟𝐨𝐮𝐧𝐝")
