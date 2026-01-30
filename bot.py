@@ -1,22 +1,27 @@
 """
 NAGU DOWNLOADER BOT - Production Grade Refactored Version
-Ultra-fast, stable, scalable Telegram music + downloader + management bot
+Ultra-fast, stable, premium-quality Telegram music + downloader + management bot
 
 Features:
-- Instagram, Pinterest, YouTube downloaders
-- MP3 search and download
-- Spotify playlist downloader with real-time progress
-- Full admin/moderation system
-- Whisper command
-- Content filters
+- Instagram, Pinterest, YouTube downloaders (fully async)
+- MP3 search and download with metadata
+- Spotify playlist downloader with real-time progress and batching
+- Full admin/moderation system with proper permission detection
+- Content filtering system (filters and blocklists)
+- Whisper command for private messages
+- Premium quoted block UI throughout
 - Fully async, non-blocking architecture
+- Worker pools and concurrency management
+- Structured logging and error handling
 """
 import asyncio
 import glob
 import os
 
-from core import config, bot, dp
+from core.bot import bot, dp
+from core.config import config
 from utils.logger import logger
+from utils.redis_client import redis_client
 from admin.handlers import register_admin_handlers
 from downloaders.router import register_download_handlers
 
@@ -33,6 +38,9 @@ async def main():
     except ValueError as e:
         logger.error(f"✗ Configuration error: {e}")
         return
+    
+    # Initialize Redis
+    redis_client.initialize()
     
     # Log configuration
     logger.info(f"✓ Max concurrent downloads: {config.MAX_CONCURRENT_DOWNLOADS}")

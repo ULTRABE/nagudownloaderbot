@@ -1,83 +1,134 @@
-"""Progress bar utilities"""
+"""Progress bar and real-time update system"""
 from typing import Optional
 
-def create_progress_bar(current: int, total: int, length: int = 14) -> str:
+def create_progress_bar(current: int, total: int, length: int = 12) -> str:
     """
-    Create a text-based progress bar
+    Create clean progress bar
     
     Args:
         current: Current progress value
         total: Total value
-        length: Length of progress bar in characters
+        length: Bar length in characters
     
     Returns:
-        Formatted progress bar string with percentage
+        Progress bar with percentage
     """
     if total == 0:
         return f"{'░' * length} 0%"
     
-    filled = int(length * current / total)
-    filled = min(filled, length)  # Ensure we don't exceed length
+    percent = min(100, int(100 * current / total))
+    filled = int(length * percent / 100)
+    filled = min(filled, length)
+    
     bar = '█' * filled + '░' * (length - filled)
-    percent = int(100 * current / total)
     return f"{bar} {percent}%"
 
-class ProgressBar:
+class SpotifyProgress:
     """
-    Progress bar manager for real-time updates
+    Spotify download progress manager with dual progress bars
     """
     
-    def __init__(self, total: int, length: int = 14):
+    def __init__(self, total_songs: int):
+        self.total_songs = total_songs
+        self.completed_songs = 0
+        self.current_song: Optional[str] = None
+        self.current_song_progress: int = 0
+        self.bar_length = 12
+    
+    def set_current_song(self, song_name: str, artist: str = ""):
+        """Set currently downloading song"""
+        if artist:
+            self.current_song = f"{song_name} — {artist}"
+        else:
+            self.current_song = song_name
+        self.current_song_progress = 0
+    
+    def update_song_progress(self, progress: int):
+        """Update current song progress (0-100)"""
+        self.current_song_progress = min(100, max(0, progress))
+    
+    def complete_song(self):
+        """Mark current song as complete"""
+        self.completed_songs += 1
+        self.current_song = None
+        self.current_song_progress = 0
+    
+    def get_main_progress_bar(self) -> str:
+        """Get main playlist progress bar"""
+        return create_progress_bar(self.completed_songs, self.total_songs, self.bar_length)
+    
+    def get_song_progress_bar(self) -> str:
+        """Get current song progress bar"""
+        filled = int(self.bar_length * self.current_song_progress / 100)
+        filled = min(filled, self.bar_length)
+        bar = '█' * filled + '░' * (self.bar_length - filled)
+        return f"{bar} {self.current_song_progress}%"
+    
+    def format_message(self, phase: str = "downloading") -> str:
+        """
+        Format progress message for Telegram
+        
+        Args:
+            phase: Current phase (downloading, sending, complete)
+        """
+        if phase == "fetching":
+            return "Spotify Playlist Fetched\nStarting download..."
+        
+        if phase == "downloading":
+            main_bar = self.get_main_progress_bar()
+            
+            if self.current_song:
+                song_bar = self.get_song_progress_bar()
+                return (
+                    f"Downloading Playlist\n"
+                    f"{main_bar}\n\n"
+                    f"Now downloading:\n"
+                    f"{self.current_song}\n"
+                    f"{song_bar}"
+                )
+            else:
+                return (
+                    f"Downloading Playlist\n"
+                    f"{main_bar}\n\n"
+                    f"Preparing next track..."
+                )
+        
+        if phase == "sending":
+            progress_bar = create_progress_bar(self.completed_songs, self.total_songs, self.bar_length)
+            return (
+                f"Sending to DM\n"
+                f"{progress_bar}\n\n"
+                f"Sent {self.completed_songs}/{self.total_songs} songs"
+            )
+        
+        if phase == "complete":
+            return "All songs downloaded\nSending final batch..."
+        
+        return "Processing..."
+
+class DownloadProgress:
+    """Generic download progress tracker"""
+    
+    def __init__(self, total: int = 100):
         self.total = total
         self.current = 0
-        self.length = length
-        self.current_item: Optional[str] = None
-        self.current_item_progress: int = 0
+        self.bar_length = 12
     
     def update(self, current: int):
-        """Update main progress"""
+        """Update progress"""
         self.current = min(current, self.total)
     
-    def increment(self):
-        """Increment main progress by 1"""
-        self.current = min(self.current + 1, self.total)
+    def increment(self, amount: int = 1):
+        """Increment progress"""
+        self.current = min(self.current + amount, self.total)
     
-    def set_current_item(self, item: str, progress: int = 0):
-        """Set current item being processed"""
-        self.current_item = item
-        self.current_item_progress = progress
+    def get_bar(self) -> str:
+        """Get progress bar"""
+        return create_progress_bar(self.current, self.total, self.bar_length)
     
-    def update_item_progress(self, progress: int):
-        """Update current item progress"""
-        self.current_item_progress = min(progress, 100)
-    
-    def get_main_bar(self) -> str:
-        """Get main progress bar"""
-        return create_progress_bar(self.current, self.total, self.length)
-    
-    def get_item_bar(self) -> str:
-        """Get current item progress bar"""
-        if self.current_item_progress == 0:
-            return f"{'░' * self.length} 0%"
-        filled = int(self.length * self.current_item_progress / 100)
-        filled = min(filled, self.length)
-        bar = '█' * filled + '░' * (self.length - filled)
-        return f"{bar} {self.current_item_progress}%"
-    
-    def format_spotify_progress(self) -> str:
-        """Format Spotify-style progress display"""
-        main_bar = self.get_main_bar()
-        
-        if self.current_item:
-            item_bar = self.get_item_bar()
-            return f"""🎵 Downloading Spotify Playlist
-{main_bar}
-
-Now downloading:
-{self.current_item}
-{item_bar}"""
-        else:
-            return f"""🎵 Downloading Spotify Playlist
-{main_bar}
-
-Preparing next track..."""
+    def format_message(self, title: str, subtitle: str = "") -> str:
+        """Format progress message"""
+        bar = self.get_bar()
+        if subtitle:
+            return f"{title}\n{bar}\n\n{subtitle}"
+        return f"{title}\n{bar}"
