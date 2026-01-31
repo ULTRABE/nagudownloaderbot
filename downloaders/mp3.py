@@ -89,8 +89,8 @@ async def handle_mp3_search(m: Message, query: str):
                         break
                 
                 if not mp3_file:
-                    await bot.delete_message(m.chat.id, sticker.message_id)
-                    await m.answer("Song not found")
+                    await progress_msg.delete()
+                    await m.answer("❌ Song not found")
                     return
                 
                 # Extract metadata
@@ -101,10 +101,14 @@ async def handle_mp3_search(m: Message, query: str):
                 
                 elapsed = time.perf_counter() - start_time
                 
-                # Delete sticker
-                await bot.delete_message(m.chat.id, sticker.message_id)
+                # Delete progress message and user's command
+                try:
+                    await progress_msg.delete()
+                    await m.delete()
+                except:
+                    pass
                 
-                # Send audio with metadata
+                # Send audio with metadata (this won't be deleted)
                 await bot.send_audio(
                     m.chat.id,
                     FSInputFile(mp3_file),
@@ -119,10 +123,11 @@ async def handle_mp3_search(m: Message, query: str):
         except Exception as e:
             logger.error(f"MP3 ERROR: {e}")
             try:
-                await bot.delete_message(m.chat.id, sticker.message_id)
+                await progress_msg.delete()
+                await m.delete()
             except:
                 pass
-            await m.answer(f"MP3 download failed\n{str(e)[:100]}")
+            await bot.send_message(m.chat.id, f"❌ MP3 download failed\n{str(e)[:100]}")
 
 @dp.message(Command("mp3"))
 async def mp3_command(m: Message):
