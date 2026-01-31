@@ -31,11 +31,11 @@ Railway is the recommended platform for deployment.
    cd nagu-ultra-downloader
    ```
 
-2. **Update Bot Token**
+2. **Set Environment Variables**
    
-   Edit `main.py` line 12:
-   ```python
-   BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
+   ```bash
+   export BOT_TOKEN="YOUR_BOT_TOKEN_HERE"
+   # Or add to .env file or Railway environment variables
    ```
 
 3. **Add Cookie Files**
@@ -229,7 +229,7 @@ docker-compose up -d
    ```
 
 6. **Configure Bot**
-   - Edit `main.py` with your bot token
+   - Set BOT_TOKEN environment variable
    - Upload cookie files
 
 7. **Create Systemd Service**
@@ -244,7 +244,8 @@ docker-compose up -d
    Type=simple
    User=your-username
    WorkingDirectory=/home/your-username/nagu-ultra-downloader
-   ExecStart=/usr/bin/python3 /home/your-username/nagu-ultra-downloader/main.py
+   Environment="BOT_TOKEN=your_token_here"
+   ExecStart=/usr/bin/python3 /home/your-username/nagu-ultra-downloader/bot.py
    Restart=always
    RestartSec=10
 
@@ -279,7 +280,7 @@ sudo apt install screen
 screen -S nagu-bot
 
 # Run bot
-python3 main.py
+python3 bot.py
 
 # Detach: Press Ctrl+A then D
 

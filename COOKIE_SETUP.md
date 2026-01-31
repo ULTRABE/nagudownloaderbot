@@ -23,7 +23,7 @@ nagu-downloader/
 │   └── ytm_cookie_6.txt
 │
 ├── cookies_instagram.txt
-└── main.py
+└── bot.py
 ```
 
 ---

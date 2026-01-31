@@ -14,10 +14,9 @@ Get your bot running in 5 minutes!
    cd nagu-ultra-downloader
    ```
 
-2. **Update bot token** in [`main.py`](main.py:12):
-   ```python
-   BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # Get from @BotFather
-   ```
+2. **Configure environment variables**:
+   - Set `BOT_TOKEN` environment variable (get from @BotFather)
+   - Or update in [`core/config.py`](core/config.py)
 
 3. **Add cookie files** (IMPORTANT!):
    - Export cookies from your browser using "Get cookies.txt LOCALLY" extension
@@ -65,12 +64,14 @@ Check logs in Railway dashboard:
 ### Quick Docker Run
 
 ```bash
-# 1. Update bot token in main.py
+# 1. Set environment variables (BOT_TOKEN, etc.)
 # 2. Add cookie files
 # 3. Build and run:
 
 docker build -t nagu-bot .
-docker run -d --name nagu-downloader --restart unless-stopped nagu-bot
+docker run -d --name nagu-downloader \
+  -e BOT_TOKEN="your_token_here" \
+  --restart unless-stopped nagu-bot
 
 # View logs:
 docker logs -f nagu-downloader
@@ -104,12 +105,13 @@ cd nagu-ultra-downloader
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Update bot token in main.py
+# 3. Set environment variables
+export BOT_TOKEN="your_token_here"
 
 # 4. Add cookie files
 
 # 5. Run bot
-python main.py
+python bot.py
 ```
 
 ---
@@ -133,7 +135,7 @@ python main.py
    nagu-ultra-downloader/
    ├── cookies_instagram.txt  ← Here
    ├── cookies_youtube.txt    ← Here
-   └── main.py
+   └── bot.py
    ```
 
 ### Method 2: Manual Export
@@ -234,31 +236,22 @@ ffmpeg -version
 
 ### Adjust Concurrent Downloads
 
-Edit [`main.py`](main.py:58):
+Edit [`core/config.py`](core/config.py):
 ```python
-semaphore = asyncio.Semaphore(8)  # Change 8 to 4 for slower servers
+MAX_CONCURRENT_DOWNLOADS = 8  # Change to 4 for slower servers
+MAX_CONCURRENT_MUSIC = 5
+MAX_CONCURRENT_SPOTIFY = 3
 ```
 
 ### Change Video Quality
 
-Edit format strings in [`main.py`](main.py:136):
+Edit downloader settings in respective files under [`downloaders/`](downloaders/):
 ```python
 # For better quality (larger files):
 "format": "bestvideo[height<=1440]+bestaudio/best"
 
 # For smaller files (lower quality):
 "format": "bestvideo[height<=720]+bestaudio/best"
-```
-
-### Modify Compression
-
-Edit FFmpeg settings in [`main.py`](main.py:485):
-```python
-# Better quality:
-"-crf", "28"  # Lower = better quality
-
-# Smaller files:
-"-crf", "35"  # Higher = smaller files
 ```
 
 ---
@@ -297,7 +290,7 @@ Edit FFmpeg settings in [`main.py`](main.py:485):
 - **Full Documentation:** [README.md](README.md)
 - **Deployment Guide:** [DEPLOYMENT.md](DEPLOYMENT.md)
 - **Changelog:** [CHANGELOG.md](CHANGELOG.md)
-- **Fixes Summary:** [FIXES_SUMMARY.md](FIXES_SUMMARY.md)
+- **Cookie Setup:** [COOKIE_SETUP.md](COOKIE_SETUP.md)
 
 ---
 
@@ -314,7 +307,7 @@ Edit FFmpeg settings in [`main.py`](main.py:485):
 
 Before deploying, ensure:
 
-- [ ] Bot token updated in main.py
+- [ ] BOT_TOKEN environment variable set
 - [ ] Cookie files added (cookies_youtube.txt, cookies_instagram.txt)
 - [ ] FFmpeg installed (for local/VPS deployment)
 - [ ] Repository pushed to GitHub (for Railway)
