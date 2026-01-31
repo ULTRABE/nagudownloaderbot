@@ -5,8 +5,10 @@ from .redis_client import redis_client
 from .user_database import user_db, DownloadRecord, SpotifySession
 from .error_handler import error_handler
 from .quality_settings import quality_settings
+from .rate_limiter import rate_limiter
 
 __all__ = [
     'logger', 'mention', 'get_random_cookie', 'resolve_pinterest_url', 'redis_client',
-    'user_db', 'DownloadRecord', 'SpotifySession', 'error_handler', 'quality_settings'
+    'user_db', 'DownloadRecord', 'SpotifySession', 'error_handler', 'quality_settings',
+    'rate_limiter'
 ]
