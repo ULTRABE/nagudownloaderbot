@@ -46,6 +46,19 @@ class Config:
         self.MAX_CONCURRENT_MUSIC = 3
         self.MAX_CONCURRENT_SPOTIFY = 4
         
+        # Archive channel (hidden, backend only)
+        self.ARCHIVE_CHANNEL_ID = os.getenv("ARCHIVE_CHANNEL_ID", "")
+        
+        # Abuse handling
+        self.ABUSE_TIMEOUT_HOURS = 1  # Reduced from 3 to 1 hour
+        
+        # Session memory duration (24 hours)
+        self.SESSION_MEMORY_HOURS = 24
+        
+        # Video quality settings
+        self.VIDEO_QUALITY_PRESET = "premium"  # premium, high, medium
+        self.AUDIO_BITRATE = "320k"  # High quality audio
+        
     def pick_proxy(self) -> Optional[str]:
         """Get random proxy from list"""
         return random.choice(self.PROXIES) if self.PROXIES else None

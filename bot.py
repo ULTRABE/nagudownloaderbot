@@ -17,6 +17,7 @@ from core.bot import bot, dp
 from core.config import config
 from utils.logger import logger
 from utils.redis_client import redis_client
+from utils.archive import init_archive_manager
 from downloaders.router import register_download_handlers
 
 async def main():
@@ -35,6 +36,9 @@ async def main():
     
     # Initialize Redis
     redis_client.initialize()
+    
+    # Initialize archive manager
+    init_archive_manager(bot)
     
     # Log configuration
     logger.info(f"✓ Max concurrent downloads: {config.MAX_CONCURRENT_DOWNLOADS}")
