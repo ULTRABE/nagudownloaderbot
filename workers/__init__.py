@@ -1,4 +1,4 @@
 """Worker module for async task management"""
-from .task_queue import TaskQueue, download_semaphore, music_semaphore, spotify_semaphore
+from .task_queue import download_semaphore, music_semaphore, spotify_semaphore
 
-__all__ = ['TaskQueue', 'download_semaphore', 'music_semaphore', 'spotify_semaphore']
+__all__ = ['download_semaphore', 'music_semaphore', 'spotify_semaphore']
