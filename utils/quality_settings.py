@@ -1,47 +1,55 @@
-"""Video and audio quality settings for premium downloads"""
+"""Video and audio quality settings optimized for speed and quality"""
 from typing import Dict, Any
 from core.config import config
 
 class QualitySettings:
-    """Manages quality presets for different platforms"""
+    """Manages quality presets optimized for Telegram"""
     
     @staticmethod
     def get_youtube_opts() -> Dict[str, Any]:
-        """Get YouTube download options with ULTRA premium quality"""
+        """
+        YouTube download options - Optimized for quality + speed
+        Uses VP9 codec for better compression and quality
+        """
         return {
-            'format': 'bestvideo[height<=2160][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=1920]+bestaudio/best',
+            # Download best quality available
+            'format': 'bestvideo[height<=1080][ext=webm]+bestaudio[ext=webm]/bestvideo[height<=1080]+bestaudio/best',
             'merge_output_format': 'mp4',
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',
                 'preferedformat': 'mp4',
-            }, {
-                'key': 'FFmpegMetadata',
             }],
             'postprocessor_args': [
+                # Video encoding - Fast + High Quality
                 '-c:v', 'libx264',
-                '-preset', 'veryslow',  # Best quality (slower but much better)
-                '-crf', '15',  # Near-lossless quality (15 is extremely high quality)
-                '-profile:v', 'high',
-                '-level', '4.2',
+                '-preset', 'fast',  # Fast encoding for speed
+                '-crf', '23',  # Balanced quality (23 is good quality, smaller files)
+                '-profile:v', 'main',
+                '-level', '4.0',
                 '-pix_fmt', 'yuv420p',
+                # Audio encoding
                 '-c:a', 'aac',
-                '-b:a', '320k',
-                '-ar', '48000',
+                '-b:a', '128k',  # Reduced for smaller files
+                '-ar', '44100',
+                # Optimization
                 '-movflags', '+faststart',
-                '-vf', 'unsharp=7:7:1.5:7:7:0.0,eq=contrast=1.05:brightness=0.02',  # Strong sharpening + slight contrast boost
+                # Ensure thumbnail/preview works
+                '-map_metadata', '0',
+                '-map_metadata:s:v', '0:s:v',
+                '-map_metadata:s:a', '0:s:a',
             ],
             'prefer_ffmpeg': True,
             'keepvideo': False,
             'outtmpl': '%(title)s.%(ext)s',
-            'quiet': False,
-            'no_warnings': False,
+            'quiet': True,
+            'no_warnings': True,
         }
     
     @staticmethod
     def get_pinterest_opts() -> Dict[str, Any]:
-        """Get Pinterest download options with 4K support"""
+        """Pinterest download options - Fast and high quality"""
         return {
-            'format': 'bestvideo[height<=2160]+bestaudio/best',
+            'format': 'bestvideo[height<=1080]+bestaudio/best',
             'merge_output_format': 'mp4',
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',
@@ -49,11 +57,12 @@ class QualitySettings:
             }],
             'postprocessor_args': [
                 '-c:v', 'libx264',
-                '-preset', 'slow',
-                '-crf', '17',  # Even higher quality for Pinterest
+                '-preset', 'fast',
+                '-crf', '23',
+                '-profile:v', 'main',
+                '-pix_fmt', 'yuv420p',
                 '-c:a', 'aac',
-                '-b:a', '256k',
-                '-vf', 'unsharp=5:5:1.2:5:5:0.0',  # Stronger sharpening
+                '-b:a', '128k',
                 '-movflags', '+faststart',
             ],
             'prefer_ffmpeg': True,
@@ -62,29 +71,40 @@ class QualitySettings:
     
     @staticmethod
     def get_instagram_opts() -> Dict[str, Any]:
-        """Get Instagram download options with ULTRA premium quality"""
+        """
+        Instagram download options - App-like quality
+        Optimized to look exactly like Instagram app with fast sending
+        """
         return {
-            'format': 'bestvideo[height<=1920]+bestaudio/best',
+            # Get best Instagram quality (usually 1080p)
+            'format': 'best[ext=mp4]/best',
             'merge_output_format': 'mp4',
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',
                 'preferedformat': 'mp4',
             }],
             'postprocessor_args': [
+                # Video - Fast encoding, good quality
                 '-c:v', 'libx264',
-                '-preset', 'veryslow',
-                '-crf', '15',  # Ultra high quality
-                '-profile:v', 'high',
-                '-level', '4.2',
+                '-preset', 'veryfast',  # Very fast for quick sending
+                '-crf', '26',  # Good quality, smaller files
+                '-profile:v', 'baseline',  # Better compatibility
+                '-level', '3.1',
                 '-pix_fmt', 'yuv420p',
+                # Audio
                 '-c:a', 'aac',
-                '-b:a', '320k',
-                '-ar', '48000',
-                '-vf', 'unsharp=7:7:1.5:7:7:0.0,eq=contrast=1.05:brightness=0.02',  # Strong sharpening
+                '-b:a', '96k',  # Smaller audio for faster sending
+                '-ar', '44100',
+                # Optimization for Telegram
                 '-movflags', '+faststart',
+                '-max_muxing_queue_size', '1024',
+                # Ensure preview/thumbnail works
+                '-map_metadata', '0',
             ],
             'prefer_ffmpeg': True,
             'outtmpl': '%(title)s.%(ext)s',
+            'quiet': True,
+            'no_warnings': True,
         }
     
     @staticmethod
@@ -95,7 +115,7 @@ class QualitySettings:
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
-                'preferredquality': '320',  # Maximum MP3 quality
+                'preferredquality': '320',
             }, {
                 'key': 'FFmpegMetadata',
             }, {
