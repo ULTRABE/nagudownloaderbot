@@ -22,8 +22,8 @@ async def handle_mp3_search(m: Message, query: str):
     async with music_semaphore:
         logger.info(f"MP3: Searching for '{query}'")
         
-        # Send sticker as progress indicator
-        sticker = await bot.send_sticker(m.chat.id, config.MUSIC_STICKER)
+        # Send progress message
+        progress_msg = await m.answer(f"🔍 Searching for: {query}...")
         start_time = time.perf_counter()
         
         try:

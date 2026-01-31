@@ -7,9 +7,9 @@ class QualitySettings:
     
     @staticmethod
     def get_youtube_opts() -> Dict[str, Any]:
-        """Get YouTube download options with premium quality"""
+        """Get YouTube download options with ULTRA premium quality"""
         return {
-            'format': 'bestvideo[height<=2160][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            'format': 'bestvideo[height<=2160][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=1920]+bestaudio/best',
             'merge_output_format': 'mp4',
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',
@@ -19,12 +19,16 @@ class QualitySettings:
             }],
             'postprocessor_args': [
                 '-c:v', 'libx264',
-                '-preset', 'slow',  # Better quality, slower encoding
-                '-crf', '18',  # High quality (lower = better, 18 is visually lossless)
+                '-preset', 'veryslow',  # Best quality (slower but much better)
+                '-crf', '15',  # Near-lossless quality (15 is extremely high quality)
+                '-profile:v', 'high',
+                '-level', '4.2',
+                '-pix_fmt', 'yuv420p',
                 '-c:a', 'aac',
-                '-b:a', config.AUDIO_BITRATE,
+                '-b:a', '320k',
+                '-ar', '48000',
                 '-movflags', '+faststart',
-                '-vf', 'unsharp=5:5:1.0:5:5:0.0',  # Sharpen filter
+                '-vf', 'unsharp=7:7:1.5:7:7:0.0,eq=contrast=1.05:brightness=0.02',  # Strong sharpening + slight contrast boost
             ],
             'prefer_ffmpeg': True,
             'keepvideo': False,
@@ -58,7 +62,7 @@ class QualitySettings:
     
     @staticmethod
     def get_instagram_opts() -> Dict[str, Any]:
-        """Get Instagram download options with premium quality"""
+        """Get Instagram download options with ULTRA premium quality"""
         return {
             'format': 'bestvideo[height<=1920]+bestaudio/best',
             'merge_output_format': 'mp4',
@@ -68,11 +72,15 @@ class QualitySettings:
             }],
             'postprocessor_args': [
                 '-c:v', 'libx264',
-                '-preset', 'slow',
-                '-crf', '18',
+                '-preset', 'veryslow',
+                '-crf', '15',  # Ultra high quality
+                '-profile:v', 'high',
+                '-level', '4.2',
+                '-pix_fmt', 'yuv420p',
                 '-c:a', 'aac',
-                '-b:a', '256k',
-                '-vf', 'unsharp=5:5:1.0:5:5:0.0',
+                '-b:a', '320k',
+                '-ar', '48000',
+                '-vf', 'unsharp=7:7:1.5:7:7:0.0,eq=contrast=1.05:brightness=0.02',  # Strong sharpening
                 '-movflags', '+faststart',
             ],
             'prefer_ffmpeg': True,
