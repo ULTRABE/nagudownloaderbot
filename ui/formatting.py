@@ -1,4 +1,4 @@
-"""Premium UI formatting system - Clean quoted blocks with serif Unicode"""
+"""Premium UI formatting system with styled Unicode font"""
 from aiogram.types import User
 
 def mention(user: User) -> str:
@@ -15,6 +15,37 @@ def format_user_id(user_id: int) -> str:
 def quoted_block(content: str) -> str:
     """Wrap content in Telegram quoted block"""
     return f"<blockquote>{content}</blockquote>"
+
+def styled_text(text: str) -> str:
+    """
+    Convert text to styled Unicode font
+    Example: "Spotify Playlist Downloader" -> "𝐒ᴘᴏᴛɪꜰʏ 𝐏ʟᴀʏʟɪꜱᴛ 𝐃ᴏᴡɴʟᴏᴀᴅᴇʀ"
+    """
+    # Mapping for styled Unicode characters
+    bold_map = {
+        'A': '𝐀', 'B': '𝐁', 'C': '𝐂', 'D': '𝐃', 'E': '𝐄', 'F': '𝐅', 'G': '𝐆', 'H': '𝐇',
+        'I': '𝐈', 'J': '𝐉', 'K': '𝐊', 'L': '𝐋', 'M': '𝐌', 'N': '𝐍', 'O': '𝐎', 'P': '𝐏',
+        'Q': '𝐐', 'R': '𝐑', 'S': '𝐒', 'T': '𝐓', 'U': '𝐔', 'V': '𝐕', 'W': '𝐖', 'X': '𝐗',
+        'Y': '𝐘', 'Z': '𝐙'
+    }
+    
+    small_caps_map = {
+        'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ꜰ', 'g': 'ɢ', 'h': 'ʜ',
+        'i': 'ɪ', 'j': 'ᴊ', 'k': 'ᴋ', 'l': 'ʟ', 'm': 'ᴍ', 'n': 'ɴ', 'o': 'ᴏ', 'p': 'ᴘ',
+        'q': 'ǫ', 'r': 'ʀ', 's': 'ꜱ', 't': 'ᴛ', 'u': 'ᴜ', 'v': 'ᴠ', 'w': 'ᴡ', 'x': 'x',
+        'y': 'ʏ', 'z': 'ᴢ'
+    }
+    
+    result = []
+    for char in text:
+        if char in bold_map:
+            result.append(bold_map[char])
+        elif char in small_caps_map:
+            result.append(small_caps_map[char])
+        else:
+            result.append(char)
+    
+    return ''.join(result)
 
 def premium_panel(title: str, lines: list[str]) -> str:
     """
@@ -52,6 +83,84 @@ def format_audio_info(user: User, title: str, artist: str, size_mb: float, elaps
     ]
     return premium_panel("Audio Download", lines)
 
+def format_spotify_complete(user: User, total: int, sent: int) -> str:
+    """Format Spotify completion message with styled font"""
+    return f"{mention(user)} — {styled_text('All')} {sent} {styled_text('songs sent to your DM successfully')}"
+
+def format_welcome(user: User, user_id: int) -> str:
+    """Format welcome message for /start with styled font"""
+    username = f"@{user.username}" if user.username else "No username"
+    
+    lines = [
+        f"🎧 {styled_text('NAGU Downloader Bot')}",
+        "━" * 30,
+        "",
+        f"👤 {styled_text('User Information')}",
+        f"  ▸ Name: {user.first_name}",
+        f"  ▸ Username: {username}",
+        f"  ▸ ID: {format_user_id(user_id)}",
+        "",
+        f"⚡ {styled_text('Quick Commands')}",
+        f"  ▸ /help — {styled_text('View all features')}",
+        f"  ▸ /mp3 — {styled_text('Download music')}",
+        f"  ▸ {styled_text('Send any link to download')}",
+        "",
+        "💎 Owner: @bhosadih"
+    ]
+    return quoted_block("\n".join(lines))
+
+def format_help_video() -> str:
+    """Format video download help section with styled font"""
+    lines = [
+        f"📥 {styled_text('Video Download')}",
+        "━" * 30,
+        "",
+        f"{styled_text('Supported Platforms')}:",
+        f"  • Instagram — {styled_text('Posts, Reels, Stories')}",
+        f"  • YouTube — {styled_text('Videos, Shorts, Streams')}",
+        f"  • Pinterest — {styled_text('Video Pins')}",
+        "",
+        f"{styled_text('Usage')}:",
+        f"  {styled_text('Just send the link!')}"
+    ]
+    return quoted_block("\n".join(lines))
+
+def format_help_music() -> str:
+    """Format music download help section with styled font"""
+    lines = [
+        f"🎵 {styled_text('Music Download')}",
+        "━" * 30,
+        "",
+        f"{styled_text('Commands')}:",
+        f"  /mp3 [song name] — {styled_text('Search and download')}",
+        "",
+        f"🎧 {styled_text('Spotify Playlists')}:",
+        f"  • {styled_text('Send Spotify playlist URL in groups')}",
+        f"  • {styled_text('Songs sent to your DM')}",
+        f"  • {styled_text('Real-time progress updates')}"
+    ]
+    return quoted_block("\n".join(lines))
+
+def format_help_info() -> str:
+    """Format info commands help section"""
+    lines = [
+        f"ℹ️ {styled_text('Info Commands')}",
+        "━" * 30,
+        "",
+        "  /id — Get user ID",
+        "  /chatid — Get chat ID",
+        "  /myinfo — Your full info"
+    ]
+    return quoted_block("\n".join(lines))
+
+def format_error(error_type: str, message: str) -> str:
+    """Format error message"""
+    lines = [
+        f"Type: {error_type}",
+        f"Message: {message}"
+    ]
+    return premium_panel("Error", lines)
+
 def format_user_info(user: User, chat_title: str = None) -> str:
     """Format user information panel"""
     username = f"@{user.username}" if user.username else "No username"
@@ -63,129 +172,3 @@ def format_user_info(user: User, chat_title: str = None) -> str:
     if chat_title:
         lines.append(f"Chat: {chat_title}")
     return premium_panel("User Information", lines)
-
-def format_admin_action(action: str, target_user: User, details: str = None) -> str:
-    """Format admin action confirmation"""
-    lines = [
-        f"Action: {action}",
-        f"Target: {mention(target_user)}",
-        f"ID: {format_user_id(target_user.id)}"
-    ]
-    if details:
-        lines.append(f"Details: {details}")
-    return premium_panel("Admin Action", lines)
-
-def format_error(error_type: str, message: str) -> str:
-    """Format error message"""
-    lines = [
-        f"Type: {error_type}",
-        f"Message: {message}"
-    ]
-    return premium_panel("Error", lines)
-
-def format_spotify_complete(user: User, total: int, sent: int) -> str:
-    """Format Spotify completion message"""
-    return f"{mention(user)} — All {sent} songs sent to your DM successfully"
-
-def format_welcome(user: User, user_id: int) -> str:
-    """Format welcome message for /start"""
-    username = f"@{user.username}" if user.username else "No username"
-    
-    lines = [
-        "Welcome to NAGU Downloader Bot",
-        "━" * 30,
-        "",
-        "User Information",
-        f"  Name: {user.first_name}",
-        f"  Username: {username}",
-        f"  ID: {format_user_id(user_id)}",
-        "",
-        "Quick Commands",
-        "  /help — View all features",
-        "  /mp3 — Download music",
-        "  Send any link to download",
-        "",
-        "Owner: @bhosadih"
-    ]
-    return quoted_block("\n".join(lines))
-
-def format_help_video() -> str:
-    """Format video download help section"""
-    lines = [
-        "Video Download",
-        "━" * 30,
-        "",
-        "Supported Platforms:",
-        "  • Instagram — Posts, Reels, Stories",
-        "  • YouTube — Videos, Shorts, Streams",
-        "  • Pinterest — Video Pins",
-        "",
-        "Usage:",
-        "  Just send the link!"
-    ]
-    return quoted_block("\n".join(lines))
-
-def format_help_music() -> str:
-    """Format music download help section"""
-    lines = [
-        "Music Download",
-        "━" * 30,
-        "",
-        "Commands:",
-        "  /mp3 [song name] — Search and download",
-        "",
-        "Spotify:",
-        "  Send Spotify playlist URL",
-        "  Songs sent to your DM",
-        "  Real-time progress updates"
-    ]
-    return quoted_block("\n".join(lines))
-
-def format_help_info() -> str:
-    """Format info commands help section"""
-    lines = [
-        "Info Commands",
-        "━" * 30,
-        "",
-        "  /id — Get user ID",
-        "  /chatid — Get chat ID",
-        "  /myinfo — Your full info"
-    ]
-    return quoted_block("\n".join(lines))
-
-def format_help_admin() -> str:
-    """Format admin commands help section"""
-    lines = [
-        "Admin Commands",
-        "━" * 30,
-        "",
-        "User Management:",
-        "  /promote — Make user admin",
-        "  /demote — Remove admin",
-        "  /mute [min] — Mute user",
-        "  /unmute — Unmute user",
-        "  /ban — Ban user",
-        "  /unban — Unban user"
-    ]
-    return quoted_block("\n".join(lines))
-
-def format_help_filters() -> str:
-    """Format filter commands help section"""
-    lines = [
-        "Filter Commands",
-        "━" * 30,
-        "",
-        "Word Filtering:",
-        "  /filter <word> — Filter word",
-        "  /unfilter <word> — Remove filter",
-        "  /filters — List all filters",
-        "",
-        "Exact Blocking:",
-        "  /block <word> — Block exact word",
-        "  /unblock <word> — Unblock word",
-        "  /blocklist — List blocked words",
-        "",
-        "Other:",
-        "  /whisper <msg> — Private message"
-    ]
-    return quoted_block("\n".join(lines))

@@ -15,8 +15,9 @@ from ui.formatting import (
     format_help_video,
     format_help_music,
     format_help_info,
-    format_help_admin,
-    format_help_filters
+    premium_panel,
+    format_user_id,
+    styled_text
 )
 from utils.logger import logger
 from pathlib import Path
@@ -31,13 +32,26 @@ LINK_RE = re.compile(r"https?://\S+")
 
 @dp.message(CommandStart())
 async def start_command(m: Message):
-    """Start command with image and clickable user mention"""
+    """Start command with image and clickable user mention - registers user"""
     logger.info(f"START: User {m.from_user.id}")
+    
+    # Import user state manager
+    from utils.user_state import user_state_manager
+    
+    # Register user as started
+    await user_state_manager.mark_user_started(m.from_user.id)
+    
+    # Mark user as unblocked (in case they were blocked before)
+    await user_state_manager.mark_user_unblocked(m.from_user.id)
     
     # Try to send with picture
     picture_path = Path("assets/picture.png")
     
     caption = format_welcome(m.from_user, m.from_user.id)
+    
+    # Add registration confirmation if started from Spotify link
+    if m.text and "start=spotify" in m.text:
+        caption += f"\n\n✅ {styled_text('You are registered! You can now send Spotify playlist links in groups.')}"
     
     if picture_path.exists():
         try:
@@ -59,10 +73,10 @@ async def start_command(m: Message):
 
 @dp.message(Command("help"))
 async def help_command(m: Message):
-    """Help command with 5 premium quoted blocks"""
+    """Help command with styled sections"""
     logger.info(f"HELP: User {m.from_user.id}")
     
-    # Send 5 separate quoted blocks
+    # Send 3 separate quoted blocks
     await m.reply(format_help_video(), parse_mode="HTML")
     await asyncio.sleep(0.2)
     
@@ -70,12 +84,61 @@ async def help_command(m: Message):
     await asyncio.sleep(0.2)
     
     await m.reply(format_help_info(), parse_mode="HTML")
-    await asyncio.sleep(0.2)
+
+# ═══════════════════════════════════════════════════════════
+# INFO COMMANDS
+# ═══════════════════════════════════════════════════════════
+
+@dp.message(Command("id"))
+async def cmd_id(m: Message):
+    """Get user ID"""
+    if m.reply_to_message:
+        user = m.reply_to_message.from_user
+        lines = [
+            f"Name: {user.first_name}",
+            f"Username: @{user.username}" if user.username else "Username: None",
+            f"ID: {format_user_id(user.id)}"
+        ]
+        await m.reply(premium_panel("User ID Info", lines), parse_mode="HTML")
+    else:
+        lines = [
+            f"Name: {m.from_user.first_name}",
+            f"Username: @{m.from_user.username}" if m.from_user.username else "Username: None",
+            f"ID: {format_user_id(m.from_user.id)}"
+        ]
+        await m.reply(premium_panel("Your ID Info", lines), parse_mode="HTML")
+
+@dp.message(Command("chatid"))
+async def cmd_chatid(m: Message):
+    """Get chat ID"""
+    chat_title = m.chat.title if m.chat.title else "Private Chat"
+    lines = [
+        f"Chat: {chat_title}",
+        f"Type: {m.chat.type}",
+        f"ID: {format_user_id(m.chat.id)}"
+    ]
+    await m.reply(premium_panel("Chat ID Info", lines), parse_mode="HTML")
+
+@dp.message(Command("myinfo"))
+async def cmd_myinfo(m: Message):
+    """Get detailed user info"""
+    user = m.from_user
+    chat_title = m.chat.title if m.chat.title else "Private"
     
-    await m.reply(format_help_admin(), parse_mode="HTML")
-    await asyncio.sleep(0.2)
-    
-    await m.reply(format_help_filters(), parse_mode="HTML")
+    lines = [
+        f"{styled_text('User Details')}",
+        f"  First Name: {user.first_name}",
+        f"  Last Name: {user.last_name}" if user.last_name else "  Last Name: None",
+        f"  Username: @{user.username}" if user.username else "  Username: None",
+        f"  ID: {format_user_id(user.id)}",
+        f"  Language: {user.language_code}" if user.language_code else "  Language: Unknown",
+        "",
+        f"{styled_text('Chat Details')}",
+        f"  Chat: {chat_title}",
+        f"  Type: {m.chat.type}",
+        f"  ID: {format_user_id(m.chat.id)}"
+    ]
+    await m.reply(premium_panel("Your Information", lines), parse_mode="HTML")
 
 # ═══════════════════════════════════════════════════════════
 # LINK HANDLER

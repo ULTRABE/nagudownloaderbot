@@ -1,15 +1,10 @@
 """
-NAGU DOWNLOADER BOT - Production Grade Refactored Version
-Ultra-fast, stable, premium-quality Telegram music + downloader + management bot
+NAGU DOWNLOADER BOT - Professional Downloader Bot
 
 Features:
 - Instagram, Pinterest, YouTube downloaders (fully async)
 - MP3 search and download with metadata
-- Spotify playlist downloader with real-time progress and batching
-- Full admin/moderation system with proper permission detection
-- Content filtering system (filters and blocklists)
-- Whisper command for private messages
-- Premium quoted block UI throughout
+- Spotify playlist downloader with real-time progress
 - Fully async, non-blocking architecture
 - Worker pools and concurrency management
 - Structured logging and error handling
@@ -22,7 +17,6 @@ from core.bot import bot, dp
 from core.config import config
 from utils.logger import logger
 from utils.redis_client import redis_client
-from admin.handlers import register_admin_handlers
 from downloaders.router import register_download_handlers
 
 async def main():
@@ -62,7 +56,6 @@ async def main():
         logger.warning(f"⚠ YT Music cookies folder not found: {config.YT_MUSIC_COOKIES_FOLDER}")
     
     # Register handlers
-    register_admin_handlers()
     register_download_handlers()
     logger.info("✓ All handlers registered")
     
