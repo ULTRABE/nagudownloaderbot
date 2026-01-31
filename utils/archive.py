@@ -1,4 +1,4 @@
-"""Archive channel and file management system"""
+"""Archive channel and file management system - DISABLED"""
 import hashlib
 import json
 from typing import Optional, Dict, Any
@@ -10,12 +10,12 @@ from utils.logger import logger
 from utils.redis_client import redis_client
 
 class ArchiveManager:
-    """Manages file archiving and duplicate detection"""
+    """Manages file archiving and duplicate detection - ARCHIVE CHANNEL DISABLED"""
     
     def __init__(self, bot: Bot):
         self.bot = bot
-        self.channel_id = config.ARCHIVE_CHANNEL_ID
-        self.enabled = bool(self.channel_id)
+        self.channel_id = None  # DISABLED: Archive channel feature removed
+        self.enabled = False  # DISABLED: Always False
         
     def calculate_file_hash(self, file_path: str) -> str:
         """Calculate SHA256 hash of file for duplicate detection"""

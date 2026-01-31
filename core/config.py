@@ -46,8 +46,8 @@ class Config:
         self.MAX_CONCURRENT_MUSIC = 3
         self.MAX_CONCURRENT_SPOTIFY = 4
         
-        # Archive channel (hidden, backend only)
-        self.ARCHIVE_CHANNEL_ID = os.getenv("ARCHIVE_CHANNEL_ID", "")
+        # Archive channel - DISABLED (causes flood control issues)
+        # self.ARCHIVE_CHANNEL_ID = os.getenv("ARCHIVE_CHANNEL_ID", "")
         
         # Abuse handling
         self.ABUSE_TIMEOUT_HOURS = 1  # Reduced from 3 to 1 hour
