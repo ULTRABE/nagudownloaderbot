@@ -28,9 +28,16 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
-COPY main.py .
+COPY bot.py .
 COPY audiohandler.py .
 COPY cookies_*.txt ./
+
+# Copy application modules
+COPY core/ ./core/
+COPY downloaders/ ./downloaders/
+COPY ui/ ./ui/
+COPY utils/ ./utils/
+COPY workers/ ./workers/
 
 # Create temp directory
 RUN mkdir -p /tmp/downloads
@@ -40,4 +47,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import sys; sys.exit(0)"
 
 # Run the bot
-CMD ["python", "-u", "main.py"]
+CMD ["python", "-u", "bot.py"]
