@@ -1,183 +1,351 @@
-"""Premium UI formatting system with styled Unicode font"""
+"""
+╔══════════════════════════════════════════════════════════╗
+║         NAGU BOT — Premium Monospace UI System           ║
+║         Symmetrical · Clean · Minimal · Fast             ║
+╚══════════════════════════════════════════════════════════╝
+
+Design principles:
+  - Monospace code blocks for all structured data
+  - Symmetrical borders using box-drawing characters
+  - Minimal captions — no debug, no timing, no platform info
+  - Quote original message on every reply
+  - Premium emoji support via config
+"""
+from __future__ import annotations
+from typing import List
 from aiogram.types import User
 
+
+# ─── Core primitives ──────────────────────────────────────────────────────────
+
 def mention(user: User) -> str:
-    """Create clickable user mention"""
+    """Clickable HTML user mention"""
     if not user:
-        return "Unknown User"
-    name = user.first_name or "User"
+        return "Unknown"
+    name = (user.first_name or "User")[:32]
     return f'<a href="tg://user?id={user.id}">{name}</a>'
 
 def format_user_id(user_id: int) -> str:
-    """Format user ID as clickable code block"""
-    return f'<code>{user_id}</code>'
+    """Monospace user ID"""
+    return f"<code>{user_id}</code>"
+
+def mono(text: str) -> str:
+    """Wrap in monospace code block"""
+    return f"<code>{text}</code>"
+
+def bold(text: str) -> str:
+    """Bold text"""
+    return f"<b>{text}</b>"
 
 def quoted_block(content: str) -> str:
-    """Wrap content in Telegram quoted block"""
+    """Telegram expandable quote block"""
     return f"<blockquote>{content}</blockquote>"
 
 def styled_text(text: str) -> str:
     """
-    Convert text to styled Unicode font.
-    Example: "Spotify Playlist Downloader" → "𝐒ᴘᴏᴛɪꜰʏ 𝐏ʟᴀʏʟɪꜱᴛ 𝐃ᴏᴡɴʟᴏᴀᴅᴇʀ"
+    Convert text to styled Unicode small-caps font.
+    Used for section headers and labels.
     """
     bold_map = {
-        'A': '𝐀', 'B': '𝐁', 'C': '𝐂', 'D': '𝐃', 'E': '𝐄', 'F': '𝐅', 'G': '𝐆', 'H': '𝐇',
-        'I': '𝐈', 'J': '𝐉', 'K': '𝐊', 'L': '𝐋', 'M': '𝐌', 'N': '𝐍', 'O': '𝐎', 'P': '𝐏',
-        'Q': '𝐐', 'R': '𝐑', 'S': '𝐒', 'T': '𝐓', 'U': '𝐔', 'V': '𝐕', 'W': '𝐖', 'X': '𝐗',
-        'Y': '𝐘', 'Z': '𝐙'
+        'A': '𝗔', 'B': '𝗕', 'C': '𝗖', 'D': '𝗗', 'E': '𝗘', 'F': '𝗙', 'G': '𝗚', 'H': '𝗛',
+        'I': '𝗜', 'J': '𝗝', 'K': '𝗞', 'L': '𝗟', 'M': '𝗠', 'N': '𝗡', 'O': '𝗢', 'P': '𝗣',
+        'Q': '𝗤', 'R': '𝗥', 'S': '𝗦', 'T': '𝗧', 'U': '𝗨', 'V': '𝗩', 'W': '𝗪', 'X': '𝗫',
+        'Y': '𝗬', 'Z': '𝗭',
     }
-    
-    small_caps_map = {
+    small_caps = {
         'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ꜰ', 'g': 'ɢ', 'h': 'ʜ',
         'i': 'ɪ', 'j': 'ᴊ', 'k': 'ᴋ', 'l': 'ʟ', 'm': 'ᴍ', 'n': 'ɴ', 'o': 'ᴏ', 'p': 'ᴘ',
         'q': 'ǫ', 'r': 'ʀ', 's': 'ꜱ', 't': 'ᴛ', 'u': 'ᴜ', 'v': 'ᴠ', 'w': 'ᴡ', 'x': 'x',
-        'y': 'ʏ', 'z': 'ᴢ'
+        'y': 'ʏ', 'z': 'ᴢ',
     }
-    
-    result = []
-    for char in text:
-        if char in bold_map:
-            result.append(bold_map[char])
-        elif char in small_caps_map:
-            result.append(small_caps_map[char])
+    return ''.join(bold_map.get(c) or small_caps.get(c) or c for c in text)
+
+
+# ─── Panel builder ────────────────────────────────────────────────────────────
+
+def panel(lines: List[str], width: int = 32) -> str:
+    """
+    Build a symmetrical monospace panel.
+
+    ╔══════════════════════════════╗
+    ║  TITLE                       ║
+    ╠══════════════════════════════╣
+    ║  key  ·  value               ║
+    ╚══════════════════════════════╝
+    """
+    top    = f"╔{'═' * width}╗"
+    mid    = f"╠{'═' * width}╣"
+    bottom = f"╚{'═' * width}╝"
+
+    def row(text: str) -> str:
+        # Pad to width, truncate if needed
+        text = text[:width]
+        pad = width - len(text)
+        return f"║ {text}{' ' * (pad - 1)}║"
+
+    result = [top]
+    for line in lines:
+        if line == "---":
+            result.append(mid)
         else:
-            result.append(char)
-    
-    return ''.join(result)
+            result.append(row(line))
+    result.append(bottom)
+    return "<code>" + "\n".join(result) + "</code>"
+
+
+def _panel_raw(lines: List[str], width: int = 32) -> str:
+    """Build panel as plain text (for use inside <code> blocks)"""
+    top    = f"╔{'═' * width}╗"
+    mid    = f"╠{'═' * width}╣"
+    bottom = f"╚{'═' * width}╝"
+
+    def row(text: str) -> str:
+        text = text[:width]
+        pad = width - len(text)
+        return f"║ {text}{' ' * (pad - 1)}║"
+
+    result = [top]
+    for line in lines:
+        if line == "---":
+            result.append(mid)
+        else:
+            result.append(row(line))
+    result.append(bottom)
+    return "\n".join(result)
+
+
+def code_panel(lines: List[str], width: int = 32) -> str:
+    """Monospace panel wrapped in <code> block"""
+    return f"<code>{_panel_raw(lines, width)}</code>"
+
 
 def premium_panel(title: str, lines: list) -> str:
-    """
-    Create premium quoted panel with clean serif font.
-    """
-    content = f"{title}\n"
-    content += "━" * 30 + "\n"
-    content += "\n".join(lines)
+    """Legacy compat — builds a quoted panel"""
+    content = f"{title}\n{'─' * 28}\n" + "\n".join(lines)
     return quoted_block(content)
 
-def format_download_complete(user: User, elapsed: float, platform: str) -> str:
-    """Format download completion message"""
-    lines = [
-        f"User: {mention(user)}",
-        f"Platform: {platform}",
-        f"Time: {elapsed:.1f}s"
-    ]
-    return premium_panel("Download Complete", lines)
 
-def format_audio_info(user: User, title: str, artist: str, size_mb: float, elapsed: float) -> str:
-    """Format audio download info"""
-    lines = [
-        f"Title: {title}",
-        f"Artist: {artist}",
-        f"Size: {size_mb:.1f}MB",
-        f"User: {mention(user)}",
-        f"Time: {elapsed:.1f}s"
-    ]
-    return premium_panel("Audio Download", lines)
-
-def format_spotify_complete(user: User, total: int, sent: int) -> str:
-    """Format Spotify completion message with styled font"""
-    return f"{mention(user)} — {styled_text('All')} {sent} {styled_text('songs sent to your DM successfully')}"
+# ─── Welcome / Start ──────────────────────────────────────────────────────────
 
 def format_welcome(user: User, user_id: int) -> str:
-    """Format welcome message for /start with styled font"""
-    username = f"@{user.username}" if user.username else "No username"
-    
+    """
+    Welcome message — symmetrical monospace panel.
+
+    ╔══════════════════════════════╗
+    ║  NAGU DOWNLOADER             ║
+    ╠══════════════════════════════╣
+    ║  Name  ·  John               ║
+    ║  ID    ·  123456789          ║
+    ╠══════════════════════════════╣
+    ║  /help  ·  commands          ║
+    ║  Send any link to download   ║
+    ╚══════════════════════════════╝
+    """
+    username = f"@{user.username}" if user.username else "—"
+    name = (user.first_name or "User")[:20]
+
     lines = [
-        f"🎧 {styled_text('NAGU Downloader Bot')}",
-        "━" * 30,
-        "",
-        f"👤 {styled_text('User Information')}",
-        f"  ▸ Name: {user.first_name}",
-        f"  ▸ Username: {username}",
-        f"  ▸ ID: {format_user_id(user_id)}",
-        "",
-        f"⚡ {styled_text('Quick Commands')}",
-        f"  ▸ /help — {styled_text('View all features')}",
-        f"  ▸ {styled_text('Send any link to download')}",
-        "",
-        "💎 Owner: @bhosadih"
+        "  NAGU  DOWNLOADER  BOT",
+        "---",
+        f"  Name  ·  {name}",
+        f"  User  ·  {username}",
+        f"  ID    ·  {user_id}",
+        "---",
+        "  /help  ·  all commands",
+        "  Send any link to start",
+        "---",
+        "  Owner  ·  @bhosadih",
     ]
-    return quoted_block("\n".join(lines))
+    return code_panel(lines, width=32)
+
+
+# ─── Help panels ──────────────────────────────────────────────────────────────
 
 def format_help_video() -> str:
-    """Format video download help section"""
     lines = [
-        f"📥 {styled_text('Video Download')}",
-        "━" * 30,
-        "",
-        f"{styled_text('Supported Platforms')}:",
-        f"  • Instagram — {styled_text('Posts, Reels, Stories')}",
-        f"  • YouTube — {styled_text('Videos, Shorts')}",
-        f"  • Pinterest — {styled_text('Video Pins')}",
-        "",
-        f"{styled_text('Usage')}: {styled_text('Just send the link')}"
+        "  VIDEO  DOWNLOAD",
+        "---",
+        "  Instagram  ·  Reels / Posts",
+        "  YouTube    ·  Videos / Shorts",
+        "  Pinterest  ·  Video Pins",
+        "---",
+        "  Just send the link",
     ]
-    return quoted_block("\n".join(lines))
+    return code_panel(lines, width=32)
+
 
 def format_help_music() -> str:
-    """Format music download help section"""
     lines = [
-        f"🎵 {styled_text('Music Download')}",
-        "━" * 30,
-        "",
-        f"🎧 {styled_text('Spotify')}:",
-        f"  • {styled_text('Single track')} — {styled_text('Send track link anywhere')}",
-        f"  • {styled_text('Playlist')} — {styled_text('Send playlist link in groups')}",
-        f"  • {styled_text('Songs delivered to your DM')}"
+        "  MUSIC  DOWNLOAD",
+        "---",
+        "  Spotify  ·  Single track",
+        "  Spotify  ·  Playlist (groups)",
+        "  YT Music ·  320kbps audio",
+        "---",
+        "  Playlist → songs to DM",
     ]
-    return quoted_block("\n".join(lines))
+    return code_panel(lines, width=32)
+
 
 def format_help_info() -> str:
-    """Format info commands help section"""
     lines = [
-        f"ℹ️ {styled_text('Info Commands')}",
-        "━" * 30,
-        "",
-        "  /id — Get user ID",
-        "  /chatid — Get chat ID",
-        "  /myinfo — Your full info"
+        "  INFO  COMMANDS",
+        "---",
+        "  /id      ·  your user ID",
+        "  /chatid  ·  chat ID",
+        "  /myinfo  ·  full details",
     ]
-    return quoted_block("\n".join(lines))
+    return code_panel(lines, width=32)
+
+
+# ─── Admin panel ──────────────────────────────────────────────────────────────
 
 def format_admin_panel(stats: dict = None) -> str:
-    """Format admin panel (admin-only)"""
     lines = [
-        f"🔧 {styled_text('Admin Panel')}",
-        "━" * 30,
-        "",
-        f"{styled_text('Broadcast Commands')}:",
-        f"  /broadcast &lt;message&gt; — {styled_text('Text broadcast')}",
-        f"  /broadcast_media — {styled_text('Reply to media to broadcast')}",
-        "",
-        f"{styled_text('User Commands')}:",
-        f"  /stats — {styled_text('Bot statistics')}",
+        "  ADMIN  PANEL",
+        "---",
+        "  /broadcast <msg>",
+        "  /broadcast_media",
+        "  /stats",
+        "---",
     ]
     if stats:
         lines += [
-            "",
-            f"{styled_text('Current Stats')}:",
-            f"  Users: {stats.get('users', 0)}",
-            f"  Groups: {stats.get('groups', 0)}",
+            f"  Users   ·  {stats.get('users', 0)}",
+            f"  Groups  ·  {stats.get('groups', 0)}",
         ]
-    return quoted_block("\n".join(lines))
+    return code_panel(lines, width=32)
 
-def format_error(error_type: str, message: str) -> str:
-    """Format error message"""
+
+# ─── Download status messages ─────────────────────────────────────────────────
+
+def format_downloading() -> str:
+    """Initial 'downloading' status"""
+    return mono("  ⬇  Downloading...")
+
+
+def format_progress(pct: int, label: str = "") -> str:
+    """
+    Dynamic progress bar.
+    [▓▓▓▓▓░░░░░]  50%
+    """
+    width = 10
+    filled = int(width * pct / 100)
+    bar = "▓" * filled + "░" * (width - filled)
+    line = f"  [{bar}]  {pct}%"
+    if label:
+        line += f"  {label}"
+    return mono(line)
+
+
+def format_delivered() -> str:
+    """Minimal delivery confirmation — reply to original"""
+    return "✓ Delivered"
+
+
+def format_spotify_complete(user: User, total: int, sent: int) -> str:
+    """Spotify playlist completion — mention user"""
+    return (
+        f"{mention(user)}\n"
+        f"{mono(f'  Playlist  ·  {sent}/{total} sent')}"
+    )
+
+
+# ─── Spotify progress (group chat) ───────────────────────────────────────────
+
+def format_playlist_progress(name: str, done: int, total: int) -> str:
+    """
+    Monospace playlist progress for group chat.
+
+    ╔══════════════════════════════╗
+    ║  Playlist: NAME              ║
+    ╠══════════════════════════════╣
+    ║  [▓▓▓▓░░░░░░]  40%           ║
+    ║  280 / 700  completed        ║
+    ╚══════════════════════════════╝
+    """
+    if total > 0:
+        pct = min(100, int(done * 100 / total))
+    else:
+        pct = 0
+    width = 10
+    filled = int(width * pct / 100)
+    bar = "▓" * filled + "░" * (width - filled)
+    name_short = name[:22] if name else "Playlist"
+
     lines = [
-        f"Type: {error_type}",
-        f"Message: {message}"
+        f"  Playlist: {name_short}",
+        "---",
+        f"  [{bar}]  {pct}%",
+        f"  {done} / {total}  completed",
     ]
-    return premium_panel("Error", lines)
+    return code_panel(lines, width=32)
+
+
+def format_playlist_final(user: User, name: str, total: int, sent: int, failed: int) -> str:
+    """
+    Final group chat summary after playlist completes.
+    """
+    lines = [
+        "  PLAYLIST  COMPLETE",
+        "---",
+        f"  Name    ·  {name[:20]}",
+        f"  Total   ·  {total}",
+        f"  Sent    ·  {sent}",
+        f"  Failed  ·  {failed}",
+    ]
+    return f"{mention(user)}\n{code_panel(lines, width=32)}"
+
+
+def format_playlist_dm_complete(name: str) -> str:
+    """Final DM message after playlist delivery"""
+    lines = [
+        "  PLAYLIST  DELIVERED",
+        "---",
+        f"  {name[:28]}",
+        "---",
+        "  Status  ·  Completed",
+        "  Thank you for using",
+        "  IDIRECTNango Downloader",
+    ]
+    return code_panel(lines, width=32)
+
+
+# ─── Broadcast report ─────────────────────────────────────────────────────────
+
+def format_broadcast_report(total_users: int, total_groups: int, success: int, failed: int) -> str:
+    lines = [
+        "  BROADCAST  REPORT",
+        "---",
+        f"  Users    ·  {total_users}",
+        f"  Groups   ·  {total_groups}",
+        f"  Success  ·  {success}",
+        f"  Failed   ·  {failed}",
+    ]
+    return code_panel(lines, width=32)
+
+
+# ─── User info panels ─────────────────────────────────────────────────────────
 
 def format_user_info(user: User, chat_title: str = None) -> str:
-    """Format user information panel"""
-    username = f"@{user.username}" if user.username else "No username"
+    username = f"@{user.username}" if user.username else "—"
     lines = [
-        f"Name: {user.first_name}",
-        f"Username: {username}",
-        f"ID: {format_user_id(user.id)}"
+        "  USER  INFO",
+        "---",
+        f"  Name  ·  {(user.first_name or '')[:20]}",
+        f"  User  ·  {username[:20]}",
+        f"  ID    ·  {user.id}",
     ]
     if chat_title:
-        lines.append(f"Chat: {chat_title}")
-    return premium_panel("User Information", lines)
+        lines += ["---", f"  Chat  ·  {chat_title[:20]}"]
+    return code_panel(lines, width=32)
+
+
+def format_download_complete(user: User, elapsed: float, platform: str) -> str:
+    """Legacy compat — minimal caption"""
+    return format_delivered()
+
+
+def format_audio_info(user: User, title: str, artist: str, size_mb: float, elapsed: float) -> str:
+    """Legacy compat"""
+    return format_delivered()
