@@ -1,65 +1,70 @@
 """
-Emoji configuration — supports both normal and premium Telegram emojis.
+Emoji Configuration — Premium vs Normal fallback.
 
 Usage:
     from core.emoji_config import E
 
-    await m.answer(f"{E.music} Processing your track...")
+    text = f"{E.music} Processing..."
+    text = f"{E.check} Done"
 
-If BOT_HAS_PREMIUM=true in environment, premium custom emoji IDs are used.
-Otherwise, standard Unicode emojis are used as fallback.
+If BOT_HAS_PREMIUM=true → uses Telegram custom emoji HTML tags.
+Else → standard Unicode emoji.
 
-Premium emoji format for Telegram: <tg-emoji emoji-id="...">fallback</tg-emoji>
+To find premium emoji IDs:
+  Forward a custom emoji sticker to @userinfobot
+  or use @stickers bot to get the emoji ID.
 """
 import os
 
-# ─── Premium emoji IDs (Telegram custom emoji) ───────────────────────────────
-# These are example IDs — replace with actual custom emoji IDs from your bot's
-# premium emoji pack. Find IDs by forwarding a sticker/emoji to @userinfobot.
-_PREMIUM_EMOJI_IDS = {
-    "music":      "5368324170671202286",
-    "video":      "5368324170671202287",
-    "download":   "5368324170671202288",
-    "check":      "5368324170671202289",
-    "error":      "5368324170671202290",
-    "loading":    "5368324170671202291",
-    "spotify":    "5368324170671202292",
-    "youtube":    "5368324170671202293",
-    "instagram":  "5368324170671202294",
-    "pinterest":  "5368324170671202295",
-    "star":       "5368324170671202296",
-    "fire":       "5368324170671202297",
-    "rocket":     "5368324170671202298",
-    "crown":      "5368324170671202299",
-    "diamond":    "5368324170671202300",
+# ─── Premium emoji IDs ────────────────────────────────────────────────────────
+# Replace these with actual custom emoji IDs from your premium pack.
+_PREMIUM_IDS = {
+    "music":     "5368324170671202286",
+    "video":     "5368324170671202287",
+    "download":  "5368324170671202288",
+    "check":     "5368324170671202289",
+    "error":     "5368324170671202290",
+    "loading":   "5368324170671202291",
+    "spotify":   "5368324170671202292",
+    "youtube":   "5368324170671202293",
+    "instagram": "5368324170671202294",
+    "pinterest": "5368324170671202295",
+    "star":      "5368324170671202296",
+    "fire":      "5368324170671202297",
+    "rocket":    "5368324170671202298",
+    "crown":     "5368324170671202299",
+    "diamond":   "5368324170671202300",
+    "zap":       "5368324170671202301",
+    "wave":      "5368324170671202302",
 }
 
 # ─── Normal emoji fallbacks ───────────────────────────────────────────────────
-_NORMAL_EMOJIS = {
-    "music":      "🎧",
-    "video":      "🎥",
-    "download":   "⬇️",
-    "check":      "✅",
-    "error":      "❌",
-    "loading":    "⏳",
-    "spotify":    "🎵",
-    "youtube":    "▶️",
-    "instagram":  "📸",
-    "pinterest":  "📌",
-    "star":       "⭐",
-    "fire":       "🔥",
-    "rocket":     "🚀",
-    "crown":      "👑",
-    "diamond":    "💎",
+_NORMAL = {
+    "music":     "🎧",
+    "video":     "🎥",
+    "download":  "⬇️",
+    "check":     "✅",
+    "error":     "❌",
+    "loading":   "⏳",
+    "spotify":   "🎵",
+    "youtube":   "▶️",
+    "instagram": "📸",
+    "pinterest": "📌",
+    "star":      "⭐",
+    "fire":      "🔥",
+    "rocket":    "🚀",
+    "crown":     "👑",
+    "diamond":   "💎",
+    "zap":       "⚡",
+    "wave":      "👋",
 }
 
 # ─── Emoji accessor ───────────────────────────────────────────────────────────
 
 class _EmojiConfig:
     """
-    Emoji accessor class.
-    Access emojis as attributes: E.music, E.video, etc.
-    Automatically uses premium emojis if BOT_HAS_PREMIUM=true.
+    Access emojis as attributes: E.music, E.check, etc.
+    Automatically uses premium custom emojis if BOT_HAS_PREMIUM=true.
     """
 
     def __init__(self):
@@ -71,11 +76,11 @@ class _EmojiConfig:
 
     def get(self, name: str) -> str:
         """Get emoji by name"""
-        if self._premium and name in _PREMIUM_EMOJI_IDS:
-            fallback = _NORMAL_EMOJIS.get(name, "•")
-            emoji_id = _PREMIUM_EMOJI_IDS[name]
-            return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
-        return _NORMAL_EMOJIS.get(name, "•")
+        if self._premium and name in _PREMIUM_IDS:
+            fallback = _NORMAL.get(name, "•")
+            eid = _PREMIUM_IDS[name]
+            return f'<tg-emoji emoji-id="{eid}">{fallback}</tg-emoji>'
+        return _NORMAL.get(name, "•")
 
     def __getattr__(self, name: str) -> str:
         if name.startswith("_"):
@@ -83,6 +88,7 @@ class _EmojiConfig:
         return self.get(name)
 
     # ─── Convenience properties ───────────────────────────────────────────────
+
     @property
     def music(self) -> str:
         return self.get("music")
@@ -142,6 +148,14 @@ class _EmojiConfig:
     @property
     def diamond(self) -> str:
         return self.get("diamond")
+
+    @property
+    def zap(self) -> str:
+        return self.get("zap")
+
+    @property
+    def wave(self) -> str:
+        return self.get("wave")
 
 
 # Global emoji instance

@@ -149,6 +149,6 @@ def init_archive_manager(bot: Bot):
     global archive_manager
     archive_manager = ArchiveManager(bot)
     if archive_manager.enabled:
-        logger.info(f"✓ Archive channel enabled: {config.ARCHIVE_CHANNEL_ID}")
+        logger.info("✓ Archive channel enabled")
     else:
-        logger.info("⚠ Archive channel disabled (ARCHIVE_CHANNEL_ID not set)")
+        logger.info("Archive channel disabled")
