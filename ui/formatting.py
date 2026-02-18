@@ -9,7 +9,7 @@ def mention(user: User) -> str:
     return f'<a href="tg://user?id={user.id}">{name}</a>'
 
 def format_user_id(user_id: int) -> str:
-    """Format user ID as clickable link"""
+    """Format user ID as clickable code block"""
     return f'<code>{user_id}</code>'
 
 def quoted_block(content: str) -> str:
@@ -18,10 +18,9 @@ def quoted_block(content: str) -> str:
 
 def styled_text(text: str) -> str:
     """
-    Convert text to styled Unicode font
-    Example: "Spotify Playlist Downloader" -> "𝐒ᴘᴏᴛɪꜰʏ 𝐏ʟᴀʏʟɪꜱᴛ 𝐃ᴏᴡɴʟᴏᴀᴅᴇʀ"
+    Convert text to styled Unicode font.
+    Example: "Spotify Playlist Downloader" → "𝐒ᴘᴏᴛɪꜰʏ 𝐏ʟᴀʏʟɪꜱᴛ 𝐃ᴏᴡɴʟᴏᴀᴅᴇʀ"
     """
-    # Mapping for styled Unicode characters
     bold_map = {
         'A': '𝐀', 'B': '𝐁', 'C': '𝐂', 'D': '𝐃', 'E': '𝐄', 'F': '𝐅', 'G': '𝐆', 'H': '𝐇',
         'I': '𝐈', 'J': '𝐉', 'K': '𝐊', 'L': '𝐋', 'M': '𝐌', 'N': '𝐍', 'O': '𝐎', 'P': '𝐏',
@@ -47,16 +46,9 @@ def styled_text(text: str) -> str:
     
     return ''.join(result)
 
-def premium_panel(title: str, lines: list[str]) -> str:
+def premium_panel(title: str, lines: list) -> str:
     """
-    Create premium quoted panel with clean serif font
-    
-    Args:
-        title: Panel title
-        lines: List of content lines
-    
-    Returns:
-        Formatted quoted block panel
+    Create premium quoted panel with clean serif font.
     """
     content = f"{title}\n"
     content += "━" * 30 + "\n"
@@ -102,7 +94,6 @@ def format_welcome(user: User, user_id: int) -> str:
         "",
         f"⚡ {styled_text('Quick Commands')}",
         f"  ▸ /help — {styled_text('View all features')}",
-        f"  ▸ /mp3 — {styled_text('Download music')}",
         f"  ▸ {styled_text('Send any link to download')}",
         "",
         "💎 Owner: @bhosadih"
@@ -110,34 +101,30 @@ def format_welcome(user: User, user_id: int) -> str:
     return quoted_block("\n".join(lines))
 
 def format_help_video() -> str:
-    """Format video download help section with styled font"""
+    """Format video download help section"""
     lines = [
         f"📥 {styled_text('Video Download')}",
         "━" * 30,
         "",
         f"{styled_text('Supported Platforms')}:",
         f"  • Instagram — {styled_text('Posts, Reels, Stories')}",
-        f"  • YouTube — {styled_text('Videos, Shorts, Streams')}",
+        f"  • YouTube — {styled_text('Videos, Shorts')}",
         f"  • Pinterest — {styled_text('Video Pins')}",
         "",
-        f"{styled_text('Usage')}:",
-        f"  {styled_text('Just send the link!')}"
+        f"{styled_text('Usage')}: {styled_text('Just send the link')}"
     ]
     return quoted_block("\n".join(lines))
 
 def format_help_music() -> str:
-    """Format music download help section with styled font"""
+    """Format music download help section"""
     lines = [
         f"🎵 {styled_text('Music Download')}",
         "━" * 30,
         "",
-        f"{styled_text('Commands')}:",
-        f"  /mp3 [song name] — {styled_text('Search and download')}",
-        "",
-        f"🎧 {styled_text('Spotify Playlists')}:",
-        f"  • {styled_text('Send Spotify playlist URL in groups')}",
-        f"  • {styled_text('Songs sent to your DM')}",
-        f"  • {styled_text('Real-time progress updates')}"
+        f"🎧 {styled_text('Spotify')}:",
+        f"  • {styled_text('Single track')} — {styled_text('Send track link anywhere')}",
+        f"  • {styled_text('Playlist')} — {styled_text('Send playlist link in groups')}",
+        f"  • {styled_text('Songs delivered to your DM')}"
     ]
     return quoted_block("\n".join(lines))
 
@@ -151,6 +138,28 @@ def format_help_info() -> str:
         "  /chatid — Get chat ID",
         "  /myinfo — Your full info"
     ]
+    return quoted_block("\n".join(lines))
+
+def format_admin_panel(stats: dict = None) -> str:
+    """Format admin panel (admin-only)"""
+    lines = [
+        f"🔧 {styled_text('Admin Panel')}",
+        "━" * 30,
+        "",
+        f"{styled_text('Broadcast Commands')}:",
+        f"  /broadcast &lt;message&gt; — {styled_text('Text broadcast')}",
+        f"  /broadcast_media — {styled_text('Reply to media to broadcast')}",
+        "",
+        f"{styled_text('User Commands')}:",
+        f"  /stats — {styled_text('Bot statistics')}",
+    ]
+    if stats:
+        lines += [
+            "",
+            f"{styled_text('Current Stats')}:",
+            f"  Users: {stats.get('users', 0)}",
+            f"  Groups: {stats.get('groups', 0)}",
+        ]
     return quoted_block("\n".join(lines))
 
 def format_error(error_type: str, message: str) -> str:
