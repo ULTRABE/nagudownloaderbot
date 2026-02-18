@@ -296,7 +296,7 @@ async def handle_link(m: Message):
     try:
         if "instagram.com" in url.lower():
             await handle_instagram(m, url)
-        elif "youtube.com" in url.lower() or "youtu.be" in url.lower():
+        elif "youtube.com" in url.lower() or "youtu.be" in url.lower() or "music.youtube.com" in url.lower():
             await handle_youtube(m, url)
         elif "pinterest.com" in url.lower() or "pin.it" in url.lower():
             await handle_pinterest(m, url)

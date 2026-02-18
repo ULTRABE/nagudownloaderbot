@@ -50,15 +50,18 @@ class Config:
         ]
         
         # Performance settings
-        self.MAX_CONCURRENT_DOWNLOADS = 16
+        self.MAX_CONCURRENT_DOWNLOADS = 8
         self.MAX_CONCURRENT_MUSIC = 3
-        self.MAX_CONCURRENT_SPOTIFY = 4
+        self.MAX_CONCURRENT_SPOTIFY = 2    # Limit to 2 concurrent playlist downloads
         self.MAX_CONCURRENT_PER_USER = 2   # Max simultaneous jobs per user
         
         # Timeout settings (seconds)
-        self.DOWNLOAD_TIMEOUT = 300        # 5 minutes max per download
-        self.FFMPEG_TIMEOUT = 120          # 2 minutes max for FFmpeg
+        self.DOWNLOAD_TIMEOUT = 600        # 10 minutes max per download (large playlists)
+        self.FFMPEG_TIMEOUT = 180          # 3 minutes max for FFmpeg
         self.SEND_TIMEOUT = 60             # 1 minute max for Telegram send
+        
+        # Premium emoji support
+        self.BOT_HAS_PREMIUM = os.getenv("BOT_HAS_PREMIUM", "false").lower() in ("true", "1", "yes")
         
         # Retry settings
         self.MAX_RETRIES = 2               # Max retry attempts
