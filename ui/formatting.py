@@ -243,6 +243,19 @@ def format_delivered() -> str:
     return "✓ Delivered"
 
 
+def format_error(message: str | None = None) -> str:
+    """Error message with optional detail"""
+    base = "⚠ Unable to process this link."
+    if message:
+        return f"{base}\n\n{message}"
+    return base
+
+
+def format_processing(text: str = "Processing...") -> str:
+    """Generic processing status"""
+    return f"⏳ {text}"
+
+
 def format_spotify_complete(user: User, total: int, sent: int) -> str:
     """Spotify playlist completion — mention user"""
     return (
