@@ -119,6 +119,8 @@ async def main():
     logger.info(f"✓ Max per-user slots: {config.MAX_CONCURRENT_PER_USER}")
     logger.info(f"✓ Proxies configured: {len(config.PROXIES)}")
     logger.info(f"✓ Admin IDs: {config.ADMIN_IDS or 'none configured'}")
+    logger.info(f"✓ Premium emojis: {'enabled' if config.BOT_HAS_PREMIUM else 'disabled'}")
+    logger.info(f"✓ Download timeout: {config.DOWNLOAD_TIMEOUT}s")
     
     # Check cookie folders
     if os.path.exists(config.YT_COOKIES_FOLDER):
