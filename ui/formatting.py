@@ -8,6 +8,7 @@ Design principles:
   - Quote original message on every reply
   - Mention user on delivery
   - All parse_mode = HTML
+  - Unified font for headings (Unicode bold/small-caps style)
 """
 from __future__ import annotations
 from typing import List
@@ -97,59 +98,53 @@ def code_panel(lines: List[str], width: int = 32) -> str:
 
 def format_welcome(user: User, user_id: int) -> str:
     """
-    👋 Welcome to Nagu Downloader
-
-    Send a link from:
-    • YouTube
-    • Instagram
-    • Spotify
-    • Pinterest
-
-    Fast. Clean. Delivered.
+    Welcome message with unified font heading and special footer lines.
     """
     return (
-        "👋 <b>Welcome to Nagu Downloader</b>\n\n"
-        "Send a link from:\n"
+        "👋 <b>𝐖𝐞𝐥𝐜𝐨𝐦𝐞 𝐭𝐨 𝐍𝐚𝐠𝐮 𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐞𝐫</b>\n\n"
+        "ꜱᴇɴᴅ ᴀ ʟɪɴᴋ ꜰʀᴏᴍ:\n"
         "• YouTube\n"
         "• Instagram\n"
         "• Spotify\n"
         "• Pinterest\n\n"
-        "Fast. Clean. Delivered."
+        "𝟦𝟢–𝟧𝟢 ᴍɪɴᴜᴛᴇꜱ+ ꜰᴀꜱᴛᴇʀ ᴅᴏᴡɴʟᴏᴀᴅꜱ\n"
+        "ꜱᴍᴏᴏᴛʜ ᴇxᴘᴇʀɪᴇɴᴄᴇ"
     )
 
 
 # ─── /help ────────────────────────────────────────────────────────────────────
 
-def format_help_video() -> str:
+def format_help() -> str:
+    """Single unified help message"""
     return (
-        "🎬 <b>Video Download</b>\n\n"
-        "Instagram  — Reels / Posts\n"
-        "YouTube    — Videos / Shorts\n"
-        "Pinterest  — Video Pins\n\n"
-        "Just send the link."
+        "𝐇𝐞𝐥𝐩 — 𝐂𝐨𝐦𝐦𝐚𝐧𝐝𝐬 &amp; 𝐅𝐞𝐚𝐭𝐮𝐫𝐞𝐬\n\n"
+        "/start — Start the bot\n"
+        "/help — Show commands\n"
+        "/id — Get your user ID\n"
+        "/chatid — Get chat ID\n"
+        "/myinfo — Account details\n"
+        "/broadcast — Admin broadcast\n"
+        "/mp3 — Extract audio from video\n\n"
+        "<b>Features:</b>\n\n"
+        "• YouTube — Video / Audio download\n"
+        "• Spotify — Track &amp; playlist support\n"
+        "• Instagram — Reels &amp; posts\n"
+        "• Pinterest — Video pins\n"
+        "• Fast progress bar system"
     )
+
+
+# Legacy compat — keep old functions pointing to new single help
+def format_help_video() -> str:
+    return format_help()
 
 
 def format_help_music() -> str:
-    return (
-        "🎵 <b>Music Download</b>\n\n"
-        "Spotify   — Single track\n"
-        "Spotify   — Playlist (sent to DM)\n"
-        "YT Music  — 320kbps audio\n\n"
-        "Playlist songs are delivered to your DM."
-    )
+    return ""
 
 
 def format_help_info() -> str:
-    return (
-        "ℹ <b>Bot Commands</b>\n\n"
-        "/ping     — health check\n"
-        "/status   — bot status\n"
-        "/id       — your user ID\n"
-        "/chatid   — current chat ID\n"
-        "/myinfo   — account details\n"
-        "/broadcast — admin only"
-    )
+    return ""
 
 
 # ─── /myinfo ──────────────────────────────────────────────────────────────────
@@ -159,7 +154,7 @@ def format_myinfo(user: User, chat_title: str = None) -> str:
     username = f"@{user.username}" if user.username else "—"
     chat_type = "private" if not chat_title else "group"
     text = (
-        "👤 <b>Account Info</b>\n\n"
+        "👤 <b>𝐀𝐜𝐜𝐨𝐮𝐧𝐭 𝐈𝐧𝐟𝐨</b>\n\n"
         f"Name: {(user.first_name or '—')[:32]}\n"
         f"Last Name: {(user.last_name or '—')[:32]}\n"
         f"Username: {username}\n"
@@ -176,7 +171,7 @@ def format_id(user: User, label: str = "YOUR  ID") -> str:
     """Clean plain HTML — no ASCII borders"""
     username = f"@{user.username}" if user.username else "—"
     is_other = "USER" in label.upper()
-    title = "🆔 User ID" if is_other else "🆔 Your ID"
+    title = "🆔 𝐔𝐬𝐞𝐫 𝐈𝐃" if is_other else "🆔 𝐘𝐨𝐮𝐫 𝐈𝐃"
     return (
         f"{title}\n\n"
         f"Name: {(user.first_name or '—')[:32]}\n"
@@ -190,7 +185,7 @@ def format_id(user: User, label: str = "YOUR  ID") -> str:
 def format_chatid(chat_id: int, chat_title: str, chat_type: str) -> str:
     """Clean plain HTML — no ASCII borders"""
     return (
-        "💬 <b>Chat ID</b>\n\n"
+        "💬 <b>𝐂𝐡𝐚𝐭 𝐈𝐃</b>\n\n"
         f"Chat: {chat_title[:32]}\n"
         f"Type: {chat_type}\n"
         f"ID: <code>{chat_id}</code>"
@@ -202,7 +197,7 @@ def format_chatid(chat_id: int, chat_title: str, chat_type: str) -> str:
 def format_admin_panel(stats: dict = None) -> str:
     """Clean plain HTML admin panel"""
     text = (
-        "🔧 <b>Admin Panel</b>\n\n"
+        "🔧 <b>𝐀𝐝𝐦𝐢𝐧 𝐏𝐚𝐧𝐞𝐥</b>\n\n"
         "/broadcast &lt;msg&gt; — send to all\n"
         "/broadcast_media — reply to media\n"
         "/stats — user/group counts\n"
@@ -219,7 +214,7 @@ def format_admin_panel(stats: dict = None) -> str:
 
 def format_status(active_jobs: int = 0, queue: int = 0, uptime: str = "—") -> str:
     return (
-        f"📊 <b>Bot Status</b>\n\n"
+        f"📊 <b>𝐁𝐨𝐭 𝐒𝐭𝐚𝐭𝐮𝐬</b>\n\n"
         f"Active Jobs: {active_jobs}\n"
         f"Queue: {queue}\n"
         f"Uptime: {uptime}"
@@ -271,15 +266,15 @@ def format_error(message: str | None = None) -> str:
 # ─── Spotify progress ─────────────────────────────────────────────────────────
 
 def format_playlist_detected() -> str:
-    return "🎵 <b>Playlist Detected</b>\n\nStarting download..."
+    return "🎵 <b>𝐏𝐥𝐚𝐲𝐥𝐢𝐬𝐭 𝐃𝐞𝐭𝐞𝐜𝐭𝐞𝐝</b>\n\nStarting download..."
 
 
 def format_playlist_progress(name: str, done: int, total: int) -> str:
     """
-    Playlist: {name}
+    𝐏ʟᴀʏʟɪꜱᴛ: {name}
 
     [██████░░░░] 60%
-    420 / 700 completed
+    420 / 700
     """
     if total > 0:
         pct = min(100, int(done * 100 / total))
@@ -290,15 +285,15 @@ def format_playlist_progress(name: str, done: int, total: int) -> str:
     bar = "█" * filled + "░" * (width - filled)
     name_short = (name or "Playlist")[:30]
     return (
-        f"Playlist: {name_short}\n\n"
+        f"𝐏ʟᴀʏʟɪꜱᴛ: {name_short}\n\n"
         f"[{bar}] {pct}%\n"
-        f"{done} / {total} completed"
+        f"{done} / {total}"
     )
 
 
 def format_playlist_final(user: User, name: str, total: int, sent: int, failed: int) -> str:
     """
-    🎉 Playlist Completed — mention
+    𝐏ʟᴀʏʟɪꜱᴛ 𝐂ᴏᴍᴘʟᴇᴛᴇᴅ
 
     Total: 700
     Sent: 692
@@ -307,7 +302,7 @@ def format_playlist_final(user: User, name: str, total: int, sent: int, failed: 
     safe_name = (user.first_name or "User")[:32].replace("<", "").replace(">", "")
     user_link = f'<a href="tg://user?id={user.id}">{safe_name}</a>'
     return (
-        f"🎉 <b>Playlist Completed</b>\n\n"
+        f"𝐏ʟᴀʏʟɪꜱᴛ 𝐂ᴏᴍᴘʟᴇᴛᴇᴅ\n\n"
         f"Total: {total}\n"
         f"Sent: {sent}\n"
         f"Failed: {failed}\n\n"
@@ -317,10 +312,7 @@ def format_playlist_final(user: User, name: str, total: int, sent: int, failed: 
 
 def format_playlist_dm_complete(name: str) -> str:
     """Final DM message after playlist delivery"""
-    return (
-        "🎵 <b>Playlist Delivered</b>\n\n"
-        "Thank you for using Nagu Downloader."
-    )
+    return "𝐏ʟᴀʏʟɪꜱᴛ 𝐃𝐞𝐥𝐢𝐯𝐞𝐫𝐞𝐝."
 
 
 def format_spotify_complete(user: User, total: int, sent: int) -> str:
@@ -328,15 +320,61 @@ def format_spotify_complete(user: User, total: int, sent: int) -> str:
     return format_playlist_final(user, "", total, sent, total - sent)
 
 
+# ─── YouTube playlist ─────────────────────────────────────────────────────────
+
+def format_yt_playlist_mode(playlist_name: str) -> str:
+    """Mode selection for YouTube playlist"""
+    name_short = (playlist_name or "Playlist")[:40]
+    return f"𝐏ʟᴀʏʟɪꜱᴛ: {name_short}\n\nChoose Download Mode:"
+
+
+def format_yt_audio_quality() -> str:
+    """Audio quality selection"""
+    return "𝐀ᴜᴅɪᴏ 𝐐ᴜᴀʟɪᴛʏ"
+
+
+def format_yt_video_quality() -> str:
+    """Video quality selection"""
+    return "𝐕ɪᴅᴇᴏ 𝐐ᴜᴀʟɪᴛʏ"
+
+
+def format_yt_playlist_progress(name: str, done: int, total: int) -> str:
+    """YouTube playlist progress bar"""
+    if total > 0:
+        pct = min(100, int(done * 100 / total))
+    else:
+        pct = 0
+    width = 10
+    filled = int(width * pct / 100)
+    bar = "█" * filled + "░" * (width - filled)
+    name_short = (name or "Playlist")[:30]
+    return (
+        f"𝐏ʟᴀʏʟɪꜱᴛ: {name_short}\n\n"
+        f"[{bar}] {pct}%\n"
+        f"{done} / {total}"
+    )
+
+
+def format_yt_playlist_final(name: str, total: int, sent: int, failed: int) -> str:
+    """YouTube playlist completion message"""
+    name_short = (name or "Playlist")[:30]
+    return (
+        f"𝐏ʟᴀʏʟɪꜱᴛ 𝐂ᴏᴍᴘʟᴇᴛᴇᴅ\n\n"
+        f"Total: {total}\n"
+        f"Sent: {sent}\n"
+        f"Failed: {failed}"
+    )
+
+
 # ─── Broadcast ────────────────────────────────────────────────────────────────
 
 def format_broadcast_started() -> str:
-    return "📢 <b>Broadcast Started</b>"
+    return "📢 <b>𝐁𝐫𝐨𝐚𝐝𝐜𝐚𝐬𝐭 𝐒𝐭𝐚𝐫𝐭𝐞𝐝</b>"
 
 
 def format_broadcast_report(total_users: int, total_groups: int, success: int, failed: int) -> str:
     return (
-        f"📢 <b>Broadcast Report</b>\n\n"
+        f"📢 <b>𝐁𝐫𝐨𝐚𝐝𝐜𝐚𝐬𝐭 𝐑𝐞𝐩𝐨𝐫𝐭</b>\n\n"
         f"Users: {total_users:,}\n"
         f"Groups: {total_groups:,}\n"
         f"Success: {success:,}\n"

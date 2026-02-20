@@ -36,6 +36,7 @@ from downloaders.youtube import handle_youtube
 from downloaders.spotify import handle_spotify_playlist
 from ui.formatting import (
     format_welcome,
+    format_help,
     format_help_video,
     format_help_music,
     format_help_info,
@@ -128,11 +129,50 @@ async def start_command(m: Message):
     logger.info(f"START: User {m.from_user.id}")
 
     from utils.user_state import user_state_manager
+
+    # Check if this is a first-time start
+    is_first_time = not await user_state_manager.has_started_bot(m.from_user.id)
+
     await user_state_manager.mark_user_started(m.from_user.id)
     await user_state_manager.mark_user_unblocked(m.from_user.id)
 
     if m.chat.type == "private":
         await register_user(m.from_user.id)
+
+    # First-time welcome — extra warm greeting
+    if is_first_time:
+        first_name = (m.from_user.first_name or "there")[:32]
+        safe_name = first_name.replace("<", "").replace(">", "")
+        first_time_msg = (
+            f"👋 <b>Hey {safe_name}, welcome to Nagu Downloader!</b>\n\n"
+            "𝐓𝐡𝐚𝐧𝐤𝐬 𝐟𝐨𝐫 𝐬𝐭𝐚𝐫𝐭𝐢𝐧𝐠 𝐭𝐡𝐞 𝐛𝐨𝐭! 🎉\n\n"
+            "You're all set to receive music, videos and playlists directly here.\n\n"
+            "ꜱᴇɴᴅ ᴀɴʏ ʟɪɴᴋ ꜰʀᴏᴍ:\n"
+            "• YouTube — Videos, Shorts, Music\n"
+            "• Spotify — Tracks &amp; Playlists\n"
+            "• Instagram — Reels &amp; Posts\n"
+            "• Pinterest — Video Pins\n\n"
+            "𝟦𝟢–𝟧𝟢 ᴍɪɴᴜᴛᴇꜱ+ ꜰᴀꜱᴛᴇʀ ᴅᴏᴡɴʟᴏᴀᴅꜱ\n"
+            "ꜱᴍᴏᴏᴛʜ ᴇxᴘᴇʀɪᴇɴᴄᴇ"
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="➕ Add to Group", url=f"https://t.me/{(await bot.get_me()).username}?startgroup=true"),
+            InlineKeyboardButton(text="📊 Status", callback_data="status"),
+        ]])
+        picture_path = Path("assets/picture.png")
+        if picture_path.exists():
+            try:
+                await m.reply_photo(
+                    FSInputFile(picture_path),
+                    caption=first_time_msg,
+                    parse_mode="HTML",
+                    reply_markup=keyboard,
+                )
+                return
+            except Exception as e:
+                logger.error(f"Failed to send start image: {e}")
+        await _safe_reply(m, first_time_msg, parse_mode="HTML", reply_markup=keyboard)
+        return
 
     caption = format_welcome(m.from_user, m.from_user.id)
 
@@ -161,13 +201,109 @@ async def start_command(m: Message):
 
 @dp.message(Command("help"))
 async def help_command(m: Message):
-    """Help — three sections"""
+    """Help — single unified message"""
     logger.info(f"HELP: User {m.from_user.id}")
-    await _safe_reply(m, format_help_video(), parse_mode="HTML")
-    await asyncio.sleep(0.15)
-    await _safe_reply(m, format_help_music(), parse_mode="HTML")
-    await asyncio.sleep(0.15)
-    await _safe_reply(m, format_help_info(), parse_mode="HTML")
+    await _safe_reply(m, format_help(), parse_mode="HTML")
+
+
+# ─── /mp3 ────────────────────────────────────────────────────────────────────
+
+@dp.message(Command("mp3"))
+async def cmd_mp3(m: Message):
+    """Extract audio from replied video as 192k MP3"""
+    logger.info(f"MP3: User {m.from_user.id}")
+
+    # Must reply to a video
+    reply = m.reply_to_message
+    if not reply or not reply.video:
+        await _safe_reply(m, "Reply to a video with /mp3", parse_mode="HTML")
+        return
+
+    import tempfile
+    from pathlib import Path
+    from aiogram.types import FSInputFile
+    from utils.media_processor import _run_ffmpeg
+
+    user_id = m.from_user.id
+    first_name = m.from_user.first_name or "User"
+
+    # Progress bar helper
+    def _bar(pct: int) -> str:
+        width = 10
+        filled = int(width * pct / 100)
+        return f"[{'█' * filled}{'░' * (width - filled)}] {pct}%"
+
+    progress = await _safe_reply(m, _bar(20), parse_mode="HTML")
+
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp = Path(tmp_dir)
+            video_path = tmp / "input_video"
+
+            # Download the video file
+            try:
+                await progress.edit_text(_bar(40), parse_mode="HTML")
+            except Exception:
+                pass
+
+            file_info = await bot.get_file(reply.video.file_id)
+            await bot.download_file(file_info.file_path, destination=str(video_path))
+
+            try:
+                await progress.edit_text(_bar(60), parse_mode="HTML")
+            except Exception:
+                pass
+
+            # Extract audio as 192k MP3
+            audio_path = tmp / "output_audio.mp3"
+            args = [
+                "-y", "-i", str(video_path),
+                "-vn",
+                "-acodec", "libmp3lame",
+                "-b:a", "192k",
+                "-threads", "4",
+                str(audio_path),
+            ]
+            rc, err = await _run_ffmpeg(args)
+
+            if rc != 0 or not audio_path.exists():
+                try:
+                    await progress.delete()
+                except Exception:
+                    pass
+                await _safe_reply(m, "⚠ Unable to extract audio.\n\nPlease try again.", parse_mode="HTML")
+                return
+
+            try:
+                await progress.edit_text(_bar(90), parse_mode="HTML")
+            except Exception:
+                pass
+
+            # Send audio
+            safe_name = first_name[:32].replace("<", "").replace(">", "")
+            caption = f'✓ Delivered — <a href="tg://user?id={user_id}">{safe_name}</a>'
+            await bot.send_audio(
+                m.chat.id,
+                FSInputFile(audio_path),
+                caption=caption,
+                parse_mode="HTML",
+            )
+
+            # Delete progress
+            try:
+                await progress.delete()
+            except Exception:
+                pass
+
+            logger.info(f"MP3: Sent to {user_id}")
+
+    except Exception as e:
+        logger.error(f"MP3 ERROR: {e}", exc_info=True)
+        try:
+            await progress.delete()
+        except Exception:
+            pass
+        await _safe_reply(m, "⚠ Unable to extract audio.\n\nPlease try again.", parse_mode="HTML")
 
 
 # ─── /ping ────────────────────────────────────────────────────────────────────
