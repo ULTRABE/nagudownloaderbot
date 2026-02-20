@@ -32,6 +32,7 @@ from utils.media_processor import (
 from utils.watchdog import acquire_user_slot, release_user_slot
 from ui.formatting import format_delivered_with_mention
 from ui.stickers import send_sticker, delete_sticker
+from ui.emoji_config import get_emoji_async
 from utils.log_channel import log_download
 
 # ─── Layered extraction ───────────────────────────────────────────────────────
@@ -144,13 +145,14 @@ async def handle_instagram(m: Message, url: str):
     Reply to original message with ✓ Delivered — <mention>.
     """
     if not await acquire_user_slot(m.from_user.id, config.MAX_CONCURRENT_PER_USER):
-        await _safe_reply_text(m, "⏳ You have downloads in progress. Please wait.", parse_mode="HTML")
+        _proc = await get_emoji_async("PROCESS")
+        await _safe_reply_text(m, f"{_proc} You have downloads in progress. Please wait.", parse_mode="HTML")
         return
 
     import time as _time_mod
     user_id = m.from_user.id
     first_name = m.from_user.first_name or "User"
-    delivered_caption = format_delivered_with_mention(user_id, first_name)
+    delivered_caption = await format_delivered_with_mention(user_id, first_name)
     _t_start = _time_mod.monotonic()
 
     sticker_msg_id = None
@@ -187,9 +189,10 @@ async def handle_instagram(m: Message, url: str):
                     if not video_file or not video_file.exists():
                         await delete_sticker(bot, m.chat.id, sticker_msg_id)
                         sticker_msg_id = None
+                        _err = await get_emoji_async("ERROR")
                         await _safe_reply_text(
                             m,
-                            "⚠ Unable to process this link.\n\nPlease try again.",
+                            f"{_err} Unable to process this link.\n\nPlease try again.",
                             parse_mode="HTML",
                         )
                         return
@@ -234,11 +237,10 @@ async def handle_instagram(m: Message, url: str):
 
                     # Log to channel
                     _elapsed = _time_mod.monotonic() - _t_start
-                    _chat_type = "Group" if m.chat.type in ("group", "supergroup") else "Private"
                     asyncio.create_task(log_download(
                         user=m.from_user,
                         link=url,
-                        chat_type=_chat_type,
+                        chat=m.chat,
                         media_type="Video (Instagram)",
                         time_taken=_elapsed,
                     ))
@@ -249,9 +251,10 @@ async def handle_instagram(m: Message, url: str):
                 logger.error(f"INSTAGRAM ERROR: {e}", exc_info=True)
                 await delete_sticker(bot, m.chat.id, sticker_msg_id)
                 sticker_msg_id = None
+                _err = await get_emoji_async("ERROR")
                 await _safe_reply_text(
                     m,
-                    "⚠ Unable to process this link.\n\nPlease try again.",
+                    f"{_err} Unable to process this link.\n\nPlease try again.",
                     parse_mode="HTML",
                 )
 
