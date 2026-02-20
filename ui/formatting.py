@@ -155,65 +155,64 @@ def format_help_info() -> str:
 # ─── /myinfo ──────────────────────────────────────────────────────────────────
 
 def format_myinfo(user: User, chat_title: str = None) -> str:
+    """Clean plain HTML — no ASCII borders"""
     username = f"@{user.username}" if user.username else "—"
-    lines = [
-        "  MY  INFO",
-        "---",
-        f"  Name  ·  {(user.first_name or '')[:20]}",
-        f"  Last  ·  {(user.last_name or '—')[:20]}",
-        f"  User  ·  {username[:20]}",
-        f"  ID    ·  {user.id}",
-        f"  Lang  ·  {user.language_code or '—'}",
-    ]
-    if chat_title:
-        lines += ["---", f"  Chat  ·  {chat_title[:20]}"]
-    return code_panel(lines, width=32)
+    chat_type = "private" if not chat_title else "group"
+    text = (
+        "👤 <b>Account Info</b>\n\n"
+        f"Name: {(user.first_name or '—')[:32]}\n"
+        f"Last Name: {(user.last_name or '—')[:32]}\n"
+        f"Username: {username}\n"
+        f"User ID: <code>{user.id}</code>\n"
+        f"Language: {user.language_code or '—'}\n"
+        f"Chat Type: {chat_type}"
+    )
+    return text
 
 
 # ─── /id ──────────────────────────────────────────────────────────────────────
 
 def format_id(user: User, label: str = "YOUR  ID") -> str:
+    """Clean plain HTML — no ASCII borders"""
     username = f"@{user.username}" if user.username else "—"
-    lines = [
-        f"  {label}",
-        "---",
-        f"  Name  ·  {(user.first_name or '')[:20]}",
-        f"  User  ·  {username}",
-        f"  ID    ·  {user.id}",
-    ]
-    return code_panel(lines, width=32)
+    is_other = "USER" in label.upper()
+    title = "🆔 User ID" if is_other else "🆔 Your ID"
+    return (
+        f"{title}\n\n"
+        f"Name: {(user.first_name or '—')[:32]}\n"
+        f"Username: {username}\n"
+        f"User ID: <code>{user.id}</code>"
+    )
 
 
 # ─── /chatid ──────────────────────────────────────────────────────────────────
 
 def format_chatid(chat_id: int, chat_title: str, chat_type: str) -> str:
-    lines = [
-        "  CHAT  ID",
-        "---",
-        f"  Chat  ·  {chat_title[:20]}",
-        f"  Type  ·  {chat_type}",
-        f"  ID    ·  {chat_id}",
-    ]
-    return code_panel(lines, width=32)
+    """Clean plain HTML — no ASCII borders"""
+    return (
+        "💬 <b>Chat ID</b>\n\n"
+        f"Chat: {chat_title[:32]}\n"
+        f"Type: {chat_type}\n"
+        f"ID: <code>{chat_id}</code>"
+    )
 
 
 # ─── Admin panel ──────────────────────────────────────────────────────────────
 
 def format_admin_panel(stats: dict = None) -> str:
-    lines = [
-        "  ADMIN  PANEL",
-        "---",
-        "  /broadcast <msg>",
-        "  /broadcast_media",
-        "  /stats",
-        "---",
-    ]
+    """Clean plain HTML admin panel"""
+    text = (
+        "🔧 <b>Admin Panel</b>\n\n"
+        "/broadcast &lt;msg&gt; — send to all\n"
+        "/broadcast_media — reply to media\n"
+        "/stats — user/group counts\n"
+    )
     if stats:
-        lines += [
-            f"  Users   ·  {stats.get('users', 0)}",
-            f"  Groups  ·  {stats.get('groups', 0)}",
-        ]
-    return code_panel(lines, width=32)
+        text += (
+            f"\nUsers: {stats.get('users', 0)}\n"
+            f"Groups: {stats.get('groups', 0)}"
+        )
+    return text
 
 
 # ─── /status ──────────────────────────────────────────────────────────────────
