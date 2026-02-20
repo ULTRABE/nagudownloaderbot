@@ -8,17 +8,35 @@ Design principles:
   - Quote original message on every reply
   - Mention user on delivery
   - All parse_mode = HTML
-  - Unified Unicode bold/small-caps font for ALL static headings
+  - Unified Unicode bold/small-caps font for ALL static headings via ui_title()
   - Dynamic values (numbers, percentages, mentions, URLs) stay plain
 
-Font style reference:
-  𝐒ᴛʏʟᴇᴅ 𝐇𝐞𝐚𝐝𝐢𝐧𝐠
-  𝟦𝟢–𝟧𝟢 ᴍɪɴᴜᴛᴇꜱ+ ꜰᴀꜱᴛᴇʀ ᴅᴏᴡɴʟᴏᴀᴅꜱ
-  ꜱᴍᴏᴏᴛʜ ᴇxᴘᴇʀɪᴇɴᴄᴇ
+STRICT RULES:
+  - Do NOT stylize: progress bars, percentages, dynamic numbers, file sizes,
+    mentions, URLs, inline buttons
+  - No duplicate stylizing, no double wrapping
 """
 from __future__ import annotations
 from typing import List
 from aiogram.types import User
+
+
+# ─── Centralized UI title helper ──────────────────────────────────────────────
+
+def ui_title(text: str) -> str:
+    """
+    Return a stylized heading string.
+
+    Apply to: all headings, section headers, broadcast titles, error titles,
+    playlist headers, completion headers, help header, start header.
+
+    Do NOT apply to: progress bars, percentages, dynamic numbers, file sizes,
+    mentions, URLs, inline buttons.
+
+    The text is wrapped in <b> for Telegram HTML bold.
+    Callers that already embed Unicode bold characters may pass them directly.
+    """
+    return f"<b>{text}</b>"
 
 
 # ─── Core primitives ──────────────────────────────────────────────────────────
@@ -104,7 +122,8 @@ def code_panel(lines: List[str], width: int = 32) -> str:
 
 def format_welcome(user: User, user_id: int) -> str:
     """
-    Welcome message with unified font heading and special footer lines.
+    Welcome message with unified font heading.
+    No promotional/marketing text.
     """
     return (
         "👋 <b>𝐖𝐞𝐥𝐜𝐨𝐦𝐞 𝐭𝐨 𝐍𝐚𝐠𝐮 𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐞𝐫</b>\n\n"
@@ -112,9 +131,7 @@ def format_welcome(user: User, user_id: int) -> str:
         "• YouTube\n"
         "• Instagram\n"
         "• Spotify\n"
-        "• Pinterest\n\n"
-        "𝟦𝟢–𝟧𝟢 ᴍɪɴᴜᴛᴇꜱ+ ꜰᴀꜱᴛᴇʀ ᴅᴏᴡɴʟᴏᴀᴅꜱ\n"
-        "ꜱᴍᴏᴏᴛʜ ᴇxᴘᴇʀɪᴇɴᴄᴇ"
+        "• Pinterest"
     )
 
 
@@ -444,11 +461,13 @@ def format_assign_menu(configured_keys: set) -> str:
 
 
 def format_assign_prompt(label: str) -> str:
-    """Prompt admin to send sticker for a position"""
+    """Prompt admin to send a premium emoji or unicode emoji for a position"""
     return (
         f"𝐒𝐞𝐭 𝐄ᴍᴏᴊɪ\n\n"
-        f"Send the sticker to use for:\n"
-        f"<b>{label}</b>"
+        f"Send a premium emoji (custom emoji) or a standard emoji for:\n"
+        f"<b>{label}</b>\n\n"
+        f"<i>Tip: Send a message containing a Telegram premium custom emoji, "
+        f"or just type a regular emoji like 🎵</i>"
     )
 
 
