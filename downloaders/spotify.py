@@ -475,7 +475,7 @@ async def handle_spotify_playlist(m: Message, url: str):
             _proc = await get_emoji_async("PROCESS")
             await _safe_reply(
                 m,
-                f"{_proc} Cooldown active — {minutes_left} min remaining",
+                f"{_proc} 𝐂ᴏᴏʟᴅᴏᴡɴ ᴀᴄᴛɪᴠᴇ — {minutes_left} ᴍɪɴ ʀᴇᴍᴀɪɴɪɴɢ",
                 parse_mode="HTML",
             )
             return
@@ -484,16 +484,17 @@ async def handle_spotify_playlist(m: Message, url: str):
         has_started = await user_state_manager.has_started_bot(m.from_user.id)
         if not has_started:
             bot_me = await bot.get_me()
+            sp = await get_emoji_async("SPOTIFY")
             keyboard = InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(
-                    text="🎧 Start Bot",
+                    text=f"{sp} Start Bot",
                     url=f"https://t.me/{bot_me.username}?start=spotify",
                 )
             ]])
-            _err = await get_emoji_async("ERROR")
+            _info = await get_emoji_async("INFO")
             await _safe_reply(
                 m,
-                f"{_err} Start the bot first to receive songs in DM.\n\nTap below, then resend the playlist link 👇",
+                f"{_info} 𝐒ᴛᴀʀᴛ 𝐁ᴏᴛ 𝐅ɪʀꜱᴛ\n\n𝐒ᴛᴀʀᴛ ᴛʜᴇ ʙᴏᴛ ᴛᴏ ʀᴇᴄᴇɪᴠᴇ ꜱᴏɴɢꜱ ɪɴ 𝐃𝐌.\n\n𝐓ᴀᴘ ʙᴇʟᴏᴡ, ᴛʜᴇɴ ʀᴇꜱᴇɴᴅ ᴛʜᴇ ʟɪɴᴋ.",
                 reply_markup=keyboard,
                 parse_mode="HTML",
             )
@@ -504,7 +505,7 @@ async def handle_spotify_playlist(m: Message, url: str):
             _err = await get_emoji_async("ERROR")
             await _safe_reply(
                 m,
-                f"{_err} <b>𝐁𝐨𝐭 𝐁𝐥𝐨𝐜𝐤𝐞𝐝</b>\n\nYou have blocked the bot — unblock and try again.",
+                f"{_err} 𝐅ᴀɪʟᴇᴅ\n𝐔ɴʙʟᴏᴄᴋ ᴛʜᴇ ʙᴏᴛ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ.",
                 parse_mode="HTML",
             )
             return
