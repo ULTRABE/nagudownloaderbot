@@ -8,7 +8,13 @@ Design principles:
   - Quote original message on every reply
   - Mention user on delivery
   - All parse_mode = HTML
-  - Unified font for headings (Unicode bold/small-caps style)
+  - Unified Unicode bold/small-caps font for ALL static headings
+  - Dynamic values (numbers, percentages, mentions, URLs) stay plain
+
+Font style reference:
+  𝐒ᴛʏʟᴇᴅ 𝐇𝐞𝐚𝐝𝐢𝐧𝐠
+  𝟦𝟢–𝟧𝟢 ᴍɪɴᴜᴛᴇꜱ+ ꜰᴀꜱᴛᴇʀ ᴅᴏᴡɴʟᴏᴀᴅꜱ
+  ꜱᴍᴏᴏᴛʜ ᴇxᴘᴇʀɪᴇɴᴄᴇ
 """
 from __future__ import annotations
 from typing import List
@@ -115,7 +121,7 @@ def format_welcome(user: User, user_id: int) -> str:
 # ─── /help ────────────────────────────────────────────────────────────────────
 
 def format_help() -> str:
-    """Single unified help message"""
+    """Single unified help message with stylized heading"""
     return (
         "𝐇𝐞𝐥𝐩 — 𝐂𝐨𝐦𝐦𝐚𝐧𝐝𝐬 &amp; 𝐅𝐞𝐚𝐭𝐮𝐫𝐞𝐬\n\n"
         "/start — Start the bot\n"
@@ -125,7 +131,7 @@ def format_help() -> str:
         "/myinfo — Account details\n"
         "/broadcast — Admin broadcast\n"
         "/mp3 — Extract audio from video\n\n"
-        "<b>Features:</b>\n\n"
+        "<b>𝐅𝐞𝐚𝐭𝐮𝐫𝐞𝐬:</b>\n\n"
         "• YouTube — Video / Audio download\n"
         "• Spotify — Track &amp; playlist support\n"
         "• Instagram — Reels &amp; posts\n"
@@ -150,7 +156,7 @@ def format_help_info() -> str:
 # ─── /myinfo ──────────────────────────────────────────────────────────────────
 
 def format_myinfo(user: User, chat_title: str = None) -> str:
-    """Clean plain HTML — no ASCII borders"""
+    """Clean plain HTML — stylized heading"""
     username = f"@{user.username}" if user.username else "—"
     chat_type = "private" if not chat_title else "group"
     text = (
@@ -168,7 +174,7 @@ def format_myinfo(user: User, chat_title: str = None) -> str:
 # ─── /id ──────────────────────────────────────────────────────────────────────
 
 def format_id(user: User, label: str = "YOUR  ID") -> str:
-    """Clean plain HTML — no ASCII borders"""
+    """Clean plain HTML — stylized heading"""
     username = f"@{user.username}" if user.username else "—"
     is_other = "USER" in label.upper()
     title = "🆔 𝐔𝐬𝐞𝐫 𝐈𝐃" if is_other else "🆔 𝐘𝐨𝐮𝐫 𝐈𝐃"
@@ -183,7 +189,7 @@ def format_id(user: User, label: str = "YOUR  ID") -> str:
 # ─── /chatid ──────────────────────────────────────────────────────────────────
 
 def format_chatid(chat_id: int, chat_title: str, chat_type: str) -> str:
-    """Clean plain HTML — no ASCII borders"""
+    """Clean plain HTML — stylized heading"""
     return (
         "💬 <b>𝐂𝐡𝐚𝐭 𝐈𝐃</b>\n\n"
         f"Chat: {chat_title[:32]}\n"
@@ -195,11 +201,12 @@ def format_chatid(chat_id: int, chat_title: str, chat_type: str) -> str:
 # ─── Admin panel ──────────────────────────────────────────────────────────────
 
 def format_admin_panel(stats: dict = None) -> str:
-    """Clean plain HTML admin panel"""
+    """Clean plain HTML admin panel — stylized heading"""
     text = (
         "🔧 <b>𝐀𝐝𝐦𝐢𝐧 𝐏𝐚𝐧𝐞𝐥</b>\n\n"
         "/broadcast &lt;msg&gt; — send to all\n"
         "/broadcast_media — reply to media\n"
+        "/assign — configure emoji/stickers\n"
         "/stats — user/group counts\n"
     )
     if stats:
@@ -242,7 +249,7 @@ def format_processing(platform: str = "") -> str:
 
 def format_progress(pct: int, label: str = "Preparing media...") -> str:
     """
-    📥 Downloading
+    📥 𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐢𝐧𝐠
 
     [████░░░░░░] 40%
     Preparing media...
@@ -250,7 +257,7 @@ def format_progress(pct: int, label: str = "Preparing media...") -> str:
     width = 10
     filled = int(width * pct / 100)
     bar = "█" * filled + "░" * (width - filled)
-    return f"📥 <b>Downloading</b>\n\n[{bar}] {pct}%\n{label}"
+    return f"📥 <b>𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐢𝐧𝐠</b>\n\n[{bar}] {pct}%\n{label}"
 
 
 def format_delivered() -> str:
@@ -266,7 +273,7 @@ def format_error(message: str | None = None) -> str:
 # ─── Spotify progress ─────────────────────────────────────────────────────────
 
 def format_playlist_detected() -> str:
-    return "🎵 <b>𝐏𝐥𝐚𝐲𝐥𝐢𝐬𝐭 𝐃𝐞𝐭𝐞𝐜𝐭𝐞𝐝</b>\n\nStarting download..."
+    return "🎵 <b>𝐏ʟᴀʏʟɪꜱᴛ 𝐃𝐞𝐭𝐞𝐜𝐭𝐞𝐝</b>\n\nStarting download..."
 
 
 def format_playlist_progress(name: str, done: int, total: int) -> str:
@@ -369,16 +376,93 @@ def format_yt_playlist_final(name: str, total: int, sent: int, failed: int) -> s
 # ─── Broadcast ────────────────────────────────────────────────────────────────
 
 def format_broadcast_started() -> str:
-    return "📢 <b>𝐁𝐫𝐨𝐚𝐝𝐜𝐚𝐬𝐭 𝐒𝐭𝐚𝐫𝐭𝐞𝐝</b>"
+    return "📢 <b>𝐁ʀᴏᴀᴅᴄᴀꜱᴛ 𝐒𝐭𝐚𝐫𝐭𝐞𝐝</b>"
 
 
 def format_broadcast_report(total_users: int, total_groups: int, success: int, failed: int) -> str:
     return (
-        f"📢 <b>𝐁𝐫𝐨𝐚𝐝𝐜𝐚𝐬𝐭 𝐑𝐞𝐩𝐨𝐫𝐭</b>\n\n"
+        f"📢 <b>𝐁ʀᴏᴀᴅᴄᴀꜱᴛ 𝐑𝐞𝐩𝐨𝐫𝐭</b>\n\n"
         f"Users: {total_users:,}\n"
         f"Groups: {total_groups:,}\n"
         f"Success: {success:,}\n"
         f"Failed: {failed:,}"
+    )
+
+
+# ─── Emoji assign system ──────────────────────────────────────────────────────
+
+# Emoji position definitions: internal_key → display_label
+# Covers ALL keys from core/emoji_config.py and ui/emoji_config.py
+EMOJI_POSITIONS = {
+    # Platform stickers
+    "YOUTUBE":    "🎬 YouTube",
+    "INSTAGRAM":  "📸 Instagram",
+    "PINTEREST":  "📌 Pinterest",
+    "MUSIC":      "🎵 Music",
+    "VIDEO":      "🎥 Video",
+    "SPOTIFY":    "🎧 Spotify",
+    "PLAYLIST":   "🎶 Playlist",
+    # Status indicators
+    "DELIVERED":  "✓ Delivered",
+    "SUCCESS":    "✅ Success",
+    "ERROR":      "⚠ Error",
+    "PROCESS":    "⏳ Processing",
+    "FAST":       "⚡ Fast",
+    "DOWNLOAD":   "📥 Download",
+    "COMPLETE":   "🎉 Complete",
+    "LOADING":    "⏳ Loading",
+    "CHECK":      "✅ Check",
+    # Commands / UI
+    "BROADCAST":  "📢 Broadcast",
+    "INFO":       "ℹ Info",
+    "ID":         "🆔 ID",
+    "USER":       "👤 User",
+    "PING":       "🏓 Ping",
+    "PIN":        "📌 Pin",
+    # Decorative
+    "STAR":       "⭐ Star",
+    "FIRE":       "🔥 Fire",
+    "ROCKET":     "🚀 Rocket",
+    "CROWN":      "👑 Crown",
+    "DIAMOND":    "💎 Diamond",
+    "ZAP":        "⚡ Zap",
+    "WAVE":       "👋 Wave",
+}
+
+
+def format_assign_menu(configured_keys: set) -> str:
+    """
+    𝐄ᴍᴏᴊɪ 𝐒𝐞𝐭𝐮𝐩
+
+    Display rows with configured/not-configured status.
+    """
+    lines = ["𝐄ᴍᴏᴊɪ 𝐒𝐞𝐭𝐮𝐩\n"]
+    for key, label in EMOJI_POSITIONS.items():
+        status = "[Configured]" if key in configured_keys else "[Not set]"
+        lines.append(f"{label}  →  {status}")
+    return "\n".join(lines)
+
+
+def format_assign_prompt(label: str) -> str:
+    """Prompt admin to send sticker for a position"""
+    return (
+        f"𝐒𝐞𝐭 𝐄ᴍᴏᴊɪ\n\n"
+        f"Send the sticker to use for:\n"
+        f"<b>{label}</b>"
+    )
+
+
+def format_assign_updated() -> str:
+    return "𝐄ᴍᴏᴊɪ 𝐔ᴘᴅᴀᴛᴇᴅ ✓"
+
+
+# ─── Stats ────────────────────────────────────────────────────────────────────
+
+def format_stats(users: int, groups: int) -> str:
+    return (
+        f"📊 <b>𝐁𝐨𝐭 𝐒𝐭𝐚𝐭𝐬</b>\n\n"
+        f"Users: {users}\n"
+        f"Groups: {groups}"
     )
 
 
