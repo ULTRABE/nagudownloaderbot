@@ -1,33 +1,35 @@
 """
-Spotify Downloader — Single track + Large playlist (600–700 songs).
+Spotify Downloader — Single track + Large playlist (stream track-by-track).
 
-Single track (group):
-  🎵 Processing Track... → 📥 Downloading... [progress] → audio to DM → ✓ Sent to your DM
+Single track:
+  Progress bar only (no text):
+  [████░░░░░░] 20% → [████████░░] 80% → [██████████] 100%
+  Delete progress → ✓ Delivered — <mention>
 
-Single track (DM):
-  🎵 Processing Track... → 📥 Downloading... [progress] → audio → ✓ Delivered — <mention>
+Playlist (group → DM):
+  Fetch tracks via Spotify API (page-by-page, limit=100)
+  Download each track individually with spotdl
+  Send to DM immediately after each track
+  Update progress every 5 tracks
+  Final summary in group
 
-Playlist (group-only):
-  🎵 Playlist Detected → Starting download...
-  Progress: Playlist: {name} [██░░░░] 60% / 420 / 700 completed
-  Final: 🎉 Playlist Completed — mention
-  DM: 🎵 Playlist Delivered
+CRITICAL: Never run spotdl on full playlist URL.
+Always call spotdl on individual track URLs.
 
-URL detection:
-  https://open.spotify.com/track/
-  https://open.spotify.com/playlist/
-  https://open.spotify.com/album/
-  spotify:track:
+Performance:
+  192k bitrate, ultrafast preset, 4 threads
+  Target: ≤ 5 seconds per single track
 """
 import asyncio
-import os
+import base64
 import re
 import time
 import tempfile
 import traceback
 from pathlib import Path
-from typing import Set, Tuple, Optional
+from typing import Optional, List, Tuple, Set
 
+import aiohttp
 from aiogram.types import Message, FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramForbiddenError
 
@@ -41,6 +43,9 @@ from ui.formatting import (
 from utils.helpers import extract_song_metadata
 from utils.logger import logger
 from utils.user_state import user_state_manager
+
+# ─── Separate semaphore for single tracks (don't wait behind playlists) ───────
+_single_semaphore = asyncio.Semaphore(4)
 
 # ─── URL detection ────────────────────────────────────────────────────────────
 
@@ -59,16 +64,129 @@ def is_spotify_track(url: str) -> bool:
 def is_spotify_url(url: str) -> bool:
     return "spotify.com" in url.lower() or url.lower().startswith("spotify:")
 
-# ─── Progress bar helper ──────────────────────────────────────────────────────
+def _extract_playlist_id(url: str) -> Optional[str]:
+    """Extract playlist/album ID from Spotify URL"""
+    m = re.search(r"/(?:playlist|album)/([A-Za-z0-9]+)", url)
+    return m.group(1) if m else None
 
-def _progress_bar(pct: int, label: str = "") -> str:
+# ─── Progress bar ─────────────────────────────────────────────────────────────
+
+def _bar(pct: int) -> str:
+    """Clean progress bar — no text, no emojis"""
     width = 10
     filled = int(width * pct / 100)
     bar = "█" * filled + "░" * (width - filled)
-    text = f"📥 <b>Downloading</b>\n\n[{bar}] {pct}%"
-    if label:
-        text += f"\n{label}"
-    return text
+    return f"[{bar}] {pct}%"
+
+# ─── Spotify API (client credentials) ────────────────────────────────────────
+
+_spotify_token: Optional[str] = None
+_spotify_token_expires: float = 0.0
+
+async def _get_spotify_token() -> Optional[str]:
+    """
+    Get Spotify access token using client credentials flow.
+    Auto-refreshes when expired.
+    Returns None if credentials not configured.
+    """
+    global _spotify_token, _spotify_token_expires
+
+    if not config.SPOTIFY_CLIENT_ID or not config.SPOTIFY_CLIENT_SECRET:
+        return None
+
+    # Return cached token if still valid (with 60s buffer)
+    if _spotify_token and time.time() < _spotify_token_expires - 60:
+        return _spotify_token
+
+    # Fetch new token
+    try:
+        credentials = f"{config.SPOTIFY_CLIENT_ID}:{config.SPOTIFY_CLIENT_SECRET}"
+        encoded = base64.b64encode(credentials.encode()).decode()
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://accounts.spotify.com/api/token",
+                headers={
+                    "Authorization": f"Basic {encoded}",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+                data={"grant_type": "client_credentials"},
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    _spotify_token = data.get("access_token")
+                    expires_in = data.get("expires_in", 3600)
+                    _spotify_token_expires = time.time() + expires_in
+                    logger.debug(f"Spotify token refreshed, expires in {expires_in}s")
+                    return _spotify_token
+                else:
+                    text = await resp.text()
+                    logger.error(f"Spotify token fetch failed: {resp.status} {text[:200]}")
+                    return None
+    except Exception as e:
+        logger.error(f"Spotify token fetch error: {e}", exc_info=True)
+        return None
+
+async def _fetch_playlist_tracks(playlist_id: str, is_album: bool = False) -> List[str]:
+    """
+    Fetch all track URLs from a Spotify playlist or album using the API.
+    Returns list of track URLs (https://open.spotify.com/track/ID).
+    Uses pagination (limit=100 per page).
+    """
+    token = await _get_spotify_token()
+    if not token:
+        logger.error("Spotify: no token available for playlist fetch")
+        return []
+
+    track_urls: List[str] = []
+    endpoint = "albums" if is_album else "playlists"
+    url = f"https://api.spotify.com/v1/{endpoint}/{playlist_id}/tracks?limit=100&offset=0"
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            while url:
+                async with session.get(
+                    url,
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    if resp.status == 401:
+                        # Token expired — refresh and retry once
+                        logger.warning("Spotify: 401 on playlist fetch, refreshing token")
+                        global _spotify_token, _spotify_token_expires
+                        _spotify_token = None
+                        _spotify_token_expires = 0.0
+                        token = await _get_spotify_token()
+                        if not token:
+                            break
+                        continue
+
+                    if resp.status != 200:
+                        text = await resp.text()
+                        logger.error(f"Spotify playlist fetch failed: {resp.status} {text[:200]}")
+                        break
+
+                    data = await resp.json()
+                    items = data.get("items", [])
+
+                    for item in items:
+                        # Playlist items have item["track"], album items are direct
+                        track = item.get("track") if not is_album else item
+                        if not track:
+                            continue
+                        track_id = track.get("id")
+                        if track_id:
+                            track_urls.append(f"https://open.spotify.com/track/{track_id}")
+
+                    # Pagination
+                    url = data.get("next")
+                    logger.debug(f"Spotify: fetched {len(track_urls)} tracks so far")
+
+    except Exception as e:
+        logger.error(f"Spotify playlist fetch error: {e}", exc_info=True)
+
+    return track_urls
 
 # ─── Safe reply helpers ───────────────────────────────────────────────────────
 
@@ -105,18 +223,70 @@ async def _safe_delete(msg: Optional[Message]) -> None:
     except Exception:
         pass
 
-# ─── Single track ─────────────────────────────────────────────────────────────
+# ─── Download single track via spotdl ────────────────────────────────────────
+
+async def _download_track(url: str, tmp: Path) -> Optional[Path]:
+    """
+    Download a single Spotify track using spotdl.
+    Returns path to MP3 file or None on failure.
+    Uses 192k bitrate, ultrafast preset.
+    """
+    cmd = [
+        "spotdl", "download", url,
+        "--client-id", config.SPOTIFY_CLIENT_ID,
+        "--client-secret", config.SPOTIFY_CLIENT_SECRET,
+        "--output", str(tmp),
+        "--format", "mp3",
+        "--bitrate", "192k",
+        "--threads", "4",
+        "--no-cache",
+    ]
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=120,  # 2 minutes max per track
+            )
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+                await asyncio.wait_for(proc.communicate(), timeout=5)
+            except Exception:
+                pass
+            logger.warning(f"spotdl timeout for {url}")
+            return None
+
+        mp3_files = sorted(tmp.glob("*.mp3"))
+        if mp3_files:
+            return mp3_files[0]
+
+        stderr_text = stderr.decode(errors="replace")[:300] if stderr else ""
+        logger.warning(f"spotdl no MP3: returncode={proc.returncode}, stderr={stderr_text}")
+        return None
+
+    except Exception as e:
+        logger.error(f"spotdl error for {url}: {e}", exc_info=True)
+        return None
+
+# ─── Single track handler ─────────────────────────────────────────────────────
 
 async def handle_spotify_single(m: Message, url: str):
     """
     Download single Spotify track.
     Works in private + group chats.
 
-    Group: 🎵 Processing Track... → 📥 Downloading... → audio to DM → ✓ Sent to your DM
-    DM:    🎵 Processing Track... → 📥 Downloading... → audio → ✓ Delivered — <mention>
+    UI: Progress bar only (no text).
+    [████░░░░░░] 20% → ... → [██████████] 100%
+    Delete progress → ✓ Delivered — <mention>
 
-    Uses 192k bitrate for speed.
-    Total target: < 5 seconds.
+    Target: ≤ 5 seconds total.
     """
     if not config.SPOTIFY_CLIENT_ID or not config.SPOTIFY_CLIENT_SECRET:
         logger.warning("Spotify: CLIENT_ID or CLIENT_SECRET not configured")
@@ -132,299 +302,107 @@ async def handle_spotify_single(m: Message, url: str):
     first_name = m.from_user.first_name or "User"
     delivered_caption = format_delivered_with_mention(user_id, first_name)
 
-    status = await _safe_reply(m, "🎵 Processing Track...", parse_mode="HTML")
+    # Send initial progress bar immediately
+    progress = await _safe_reply(m, _bar(20), parse_mode="HTML")
 
     try:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp = Path(tmp_dir)
+        async with _single_semaphore:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp = Path(tmp_dir)
 
-            # Animate progress while downloading
-            async def _animate():
-                steps = [
-                    (20, "Fetching audio..."),
-                    (40, "Fetching audio..."),
-                    (60, "Encoding..."),
-                    (80, "Encoding..."),
-                ]
-                for pct, label in steps:
-                    await asyncio.sleep(1.5)
-                    await _safe_edit(status, _progress_bar(pct, label), parse_mode="HTML")
+                # Animate progress while downloading
+                async def _animate():
+                    steps = [40, 60, 80]
+                    for pct in steps:
+                        await asyncio.sleep(1.2)
+                        await _safe_edit(progress, _bar(pct), parse_mode="HTML")
 
-            anim_task = asyncio.create_task(_animate())
+                anim_task = asyncio.create_task(_animate())
 
-            cmd = [
-                "spotdl", "download", url,
-                "--client-id", config.SPOTIFY_CLIENT_ID,
-                "--client-secret", config.SPOTIFY_CLIENT_SECRET,
-                "--output", str(tmp),
-                "--format", "mp3",
-                "--bitrate", "192k",   # 192k is fast enough, 320k is too slow
-                "--threads", "2",
-                "--no-cache",
-            ]
-
-            logger.info(f"SPOTIFY SINGLE: Starting download for {url}")
-
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-
-            try:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(),
-                    timeout=config.DOWNLOAD_TIMEOUT,
-                )
-            except asyncio.TimeoutError:
+                mp3_file = await _download_track(url, tmp)
                 anim_task.cancel()
-                try:
-                    proc.kill()
-                    await asyncio.wait_for(proc.communicate(), timeout=5)
-                except Exception:
-                    pass
-                await _safe_delete(status)
-                await _safe_reply(
-                    m,
-                    "⚠ Unable to process this link.\n\nPlease try again.",
-                    parse_mode="HTML",
-                )
-                return
 
-            anim_task.cancel()
+                if not mp3_file or not mp3_file.exists():
+                    await _safe_delete(progress)
+                    await _safe_reply(
+                        m,
+                        "⚠ Unable to process this link.\n\nPlease try again.",
+                        parse_mode="HTML",
+                    )
+                    return
 
-            if proc.returncode is None:
-                try:
-                    proc.kill()
-                    await asyncio.wait_for(proc.communicate(), timeout=5)
-                except Exception:
-                    pass
+                # Show 100% before sending
+                await _safe_edit(progress, _bar(100), parse_mode="HTML")
 
-            mp3_files = sorted(tmp.glob("*.mp3"))
+                artist, title = extract_song_metadata(mp3_file.stem)
+                logger.info(f"SPOTIFY SINGLE: Downloaded '{title}' by '{artist}'")
 
-            if not mp3_files:
-                stderr_text = stderr.decode(errors="replace")[:500] if stderr else ""
-                logger.warning(f"SPOTIFY SINGLE: No MP3 found. returncode={proc.returncode}, stderr={stderr_text}")
-                await _safe_delete(status)
-                await _safe_reply(
-                    m,
-                    "⚠ Unable to process this link.\n\nPlease try again.",
-                    parse_mode="HTML",
-                )
-                return
+                # Delete progress before sending
+                await _safe_delete(progress)
+                progress = None
 
-            mp3_file = mp3_files[0]
-            artist, title = extract_song_metadata(mp3_file.stem)
-
-            logger.info(f"SPOTIFY SINGLE: Downloaded '{title}' by '{artist}'")
-
-            await _safe_delete(status)
-
-            if is_group:
-                # Send to DM
-                try:
+                if is_group:
+                    # Send to DM
+                    try:
+                        await bot.send_audio(
+                            m.from_user.id,
+                            FSInputFile(mp3_file),
+                            title=title,
+                            performer=artist,
+                            caption=delivered_caption,
+                            parse_mode="HTML",
+                        )
+                        # Reply in group
+                        await _safe_reply(m, "✓ Sent to your DM", parse_mode="HTML")
+                    except TelegramForbiddenError:
+                        bot_me = await bot.get_me()
+                        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                            InlineKeyboardButton(
+                                text="🎧 Start Bot",
+                                url=f"https://t.me/{bot_me.username}?start=spotify",
+                            )
+                        ]])
+                        await _safe_reply(
+                            m,
+                            "⚠ Start the bot first to receive songs in DM.\n\nTap below, then resend the link 👇",
+                            reply_markup=keyboard,
+                            parse_mode="HTML",
+                        )
+                        return
+                else:
+                    # DM: send directly
                     await bot.send_audio(
-                        m.from_user.id,
+                        m.chat.id,
                         FSInputFile(mp3_file),
                         title=title,
                         performer=artist,
                         caption=delivered_caption,
                         parse_mode="HTML",
                     )
-                    # Reply in group
-                    await _safe_reply(m, "✓ Sent to your DM", parse_mode="HTML")
-                except TelegramForbiddenError:
-                    # User hasn't started bot
-                    bot_me = await bot.get_me()
-                    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-                        InlineKeyboardButton(
-                            text="🎧 Start Bot",
-                            url=f"https://t.me/{bot_me.username}?start=spotify",
-                        )
-                    ]])
-                    await _safe_reply(
-                        m,
-                        "⚠ Start the bot first to receive songs in DM.\n\nTap below, then resend the link 👇",
-                        reply_markup=keyboard,
-                        parse_mode="HTML",
-                    )
-                    return
-            else:
-                # DM: send directly
-                await bot.send_audio(
-                    m.chat.id,
-                    FSInputFile(mp3_file),
-                    title=title,
-                    performer=artist,
-                    caption=delivered_caption,
-                    parse_mode="HTML",
-                )
 
-            logger.info(f"SPOTIFY SINGLE: '{title}' by '{artist}' → {user_id}")
+                logger.info(f"SPOTIFY SINGLE: '{title}' by '{artist}' → {user_id}")
 
     except asyncio.CancelledError:
         raise
     except Exception as e:
         logger.error(f"SPOTIFY SINGLE ERROR: {e}", exc_info=True)
-        await _safe_delete(status)
+        await _safe_delete(progress)
         await _safe_reply(
             m,
             "⚠ Unable to process this link.\n\nPlease try again.",
             parse_mode="HTML",
         )
 
-# ─── Playlist watcher ─────────────────────────────────────────────────────────
-
-async def _send_mp3_to_dm(
-    user_id: int,
-    fpath: Path,
-    retry: bool = True,
-) -> bool:
-    """
-    Send one MP3 to user DM.
-    Returns True on success.
-    Retries once on failure (except blocked).
-    """
-    artist, title = extract_song_metadata(fpath.stem)
-    for attempt in range(2 if retry else 1):
-        try:
-            await bot.send_audio(
-                user_id,
-                FSInputFile(fpath),
-                title=title,
-                performer=artist,
-            )
-            return True
-        except TelegramForbiddenError:
-            raise
-        except Exception as e:
-            if attempt == 0:
-                logger.debug(f"Send retry for '{fpath.name}': {e}")
-                await asyncio.sleep(1)
-            else:
-                logger.error(f"Send failed for '{fpath.name}': {e}")
-    return False
-
-
-async def _watch_and_send(
-    tmp: Path,
-    proc: asyncio.subprocess.Process,
-    m: Message,
-    progress_msg: Message,
-    playlist_name: str,
-    total_hint: int,
-) -> Tuple[int, int, bool]:
-    """
-    Watch tmp dir for new MP3s while spotdl runs.
-    Send each to user DM immediately.
-    Update GC progress every 5 tracks.
-    Returns (sent_count, failed_count, blocked).
-    """
-    sent_count = 0
-    failed_count = 0
-    seen: Set[str] = set()
-    last_progress_update = 0
-    PROGRESS_INTERVAL = 5
-
-    while True:
-        try:
-            new_files = {
-                f.name: f
-                for f in tmp.glob("*.mp3")
-                if f.name not in seen
-            }
-        except Exception:
-            new_files = {}
-
-        for fname, fpath in new_files.items():
-            seen.add(fname)
-
-            await asyncio.sleep(0.5)
-
-            try:
-                size1 = fpath.stat().st_size
-                await asyncio.sleep(0.3)
-                size2 = fpath.stat().st_size
-                if size1 != size2:
-                    await asyncio.sleep(0.5)
-            except Exception:
-                pass
-
-            try:
-                ok = await _send_mp3_to_dm(m.from_user.id, fpath)
-                if ok:
-                    sent_count += 1
-                    logger.info(f"SPOTIFY PLAYLIST: Sent {sent_count}: '{fname}'")
-                else:
-                    failed_count += 1
-            except TelegramForbiddenError:
-                logger.error(f"User {m.from_user.id} blocked bot")
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-                return sent_count, failed_count, True
-            except Exception as e:
-                logger.error(f"SPOTIFY PLAYLIST: Failed '{fname}': {e}")
-                failed_count += 1
-
-            try:
-                fpath.unlink(missing_ok=True)
-            except Exception:
-                pass
-
-            total_done = sent_count + failed_count
-            if total_done - last_progress_update >= PROGRESS_INTERVAL:
-                last_progress_update = total_done
-                display_total = max(total_hint, total_done)
-                asyncio.create_task(_safe_edit(
-                    progress_msg,
-                    format_playlist_progress(playlist_name, total_done, display_total),
-                    parse_mode="HTML",
-                ))
-
-        if proc.returncode is not None:
-            await asyncio.sleep(1.0)
-            try:
-                final_files = {
-                    f.name: f
-                    for f in tmp.glob("*.mp3")
-                    if f.name not in seen
-                }
-            except Exception:
-                final_files = {}
-
-            for fname, fpath in final_files.items():
-                seen.add(fname)
-                await asyncio.sleep(0.3)
-                try:
-                    ok = await _send_mp3_to_dm(m.from_user.id, fpath)
-                    if ok:
-                        sent_count += 1
-                    else:
-                        failed_count += 1
-                except TelegramForbiddenError:
-                    return sent_count, failed_count, True
-                except Exception as e:
-                    logger.error(f"SPOTIFY PLAYLIST: Final scan failed '{fname}': {e}")
-                    failed_count += 1
-                try:
-                    fpath.unlink(missing_ok=True)
-                except Exception:
-                    pass
-            break
-
-        await asyncio.sleep(1.0)
-
-    return sent_count, failed_count, False
-
-# ─── Main playlist handler ────────────────────────────────────────────────────
+# ─── Playlist handler ─────────────────────────────────────────────────────────
 
 async def handle_spotify_playlist(m: Message, url: str):
     """
     Route Spotify URL:
     - Single track → handle_spotify_single
-    - Playlist/album → streaming group download
+    - Playlist/album → stream track-by-track via Spotify API
+
+    CRITICAL: Never run spotdl on full playlist URL.
+    Always fetch track list via API, then call spotdl per track.
 
     Wrapped in full try/except — never shows internal errors to user.
     """
@@ -508,7 +486,10 @@ async def handle_spotify_playlist(m: Message, url: str):
 
 async def _run_playlist_download(m: Message, url: str):
     """
-    Inner playlist download — wrapped separately for clean error handling.
+    Inner playlist download.
+    Fetches tracks via Spotify API (page-by-page).
+    Downloads each track individually with spotdl.
+    Sends to DM immediately after each track.
     """
     async with spotify_semaphore:
         # Delete user's link after 4 seconds
@@ -520,137 +501,148 @@ async def _run_playlist_download(m: Message, url: str):
                 pass
         asyncio.create_task(_delete_link())
 
-        # Initial message
+        # Determine if album or playlist
+        is_album = "/album/" in url.lower()
+        playlist_id = _extract_playlist_id(url)
+
+        if not playlist_id:
+            logger.error(f"SPOTIFY PLAYLIST: Could not extract ID from {url}")
+            await _safe_reply(
+                m,
+                "⚠ Unable to process this link.\n\nPlease try again.",
+                parse_mode="HTML",
+            )
+            return
+
+        # Initial progress message
         progress_msg = await m.answer(
-            "🎵 <b>Playlist Detected</b>\n\nStarting download...",
+            f"Playlist: Loading...\n\n{_bar(0)}\n0 / ?",
             parse_mode="HTML",
         )
 
-        start_time = time.perf_counter()
-
         try:
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                tmp = Path(tmp_dir)
+            # Fetch track list via Spotify API
+            logger.info(f"SPOTIFY PLAYLIST: Fetching tracks for {playlist_id}")
+            track_urls = await _fetch_playlist_tracks(playlist_id, is_album=is_album)
 
-                cmd = [
-                    "spotdl", "download", url,
-                    "--client-id", config.SPOTIFY_CLIENT_ID,
-                    "--client-secret", config.SPOTIFY_CLIENT_SECRET,
-                    "--output", str(tmp),
-                    "--format", "mp3",
-                    "--bitrate", "192k",   # 192k for speed
-                    "--threads", "2",
-                    "--no-cache",
-                    "--print-errors",
-                ]
-
-                logger.info(f"SPOTIFY PLAYLIST: Starting spotdl for {url}")
-
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-
-                playlist_name = "Playlist"
-                total_hint = 0
-
-                async def _read_stdout():
-                    nonlocal playlist_name, total_hint
-                    try:
-                        async for line in proc.stdout:
-                            text = line.decode(errors="replace").strip()
-                            if not text:
-                                continue
-                            logger.debug(f"spotdl: {text}")
-                            m2 = re.search(
-                                r"Found (\d+) songs? in .+?[:\s]+(.+?)$",
-                                text, re.IGNORECASE
-                            )
-                            if m2:
-                                total_hint = int(m2.group(1))
-                                playlist_name = m2.group(2).strip()[:40]
-                                asyncio.create_task(_safe_edit(
-                                    progress_msg,
-                                    format_playlist_progress(playlist_name, 0, total_hint),
-                                    parse_mode="HTML",
-                                ))
-                            m3 = re.search(r"Fetching (\d+) songs?", text, re.IGNORECASE)
-                            if m3 and total_hint == 0:
-                                total_hint = int(m3.group(1))
-                    except Exception as e:
-                        logger.debug(f"stdout reader error: {e}")
-
-                stdout_task = asyncio.create_task(_read_stdout())
-
-                sent_count, failed_count, blocked = await _watch_and_send(
-                    tmp, proc, m, progress_msg, playlist_name, total_hint
-                )
-
-                stdout_task.cancel()
-                try:
-                    await asyncio.wait_for(stdout_task, timeout=3)
-                except (asyncio.CancelledError, asyncio.TimeoutError):
-                    pass
-
-                if proc.returncode is None:
-                    try:
-                        await asyncio.wait_for(proc.wait(), timeout=10)
-                    except asyncio.TimeoutError:
-                        try:
-                            proc.kill()
-                            await asyncio.wait_for(proc.communicate(), timeout=5)
-                        except Exception:
-                            pass
-
-                elapsed = time.perf_counter() - start_time
-                total_songs = sent_count + failed_count
-
-                if blocked:
-                    await user_state_manager.mark_user_blocked(m.from_user.id)
-                    await user_state_manager.apply_cooldown(m.from_user.id)
-                    await _safe_edit(
-                        progress_msg,
-                        "🚫 Blocked — cooldown applied.",
-                        parse_mode="HTML",
-                    )
-                    return
-
-                if total_songs == 0:
-                    logger.warning(f"SPOTIFY PLAYLIST: No songs sent. returncode={proc.returncode}")
-                    await _safe_edit(
-                        progress_msg,
-                        "⚠ Unable to process this link.\n\nPlease try again.",
-                        parse_mode="HTML",
-                    )
-                    return
-
-                # Delete progress message
-                await _safe_delete(progress_msg)
-
-                # GC final summary — mention user
-                await m.answer(
-                    format_playlist_final(
-                        m.from_user, playlist_name,
-                        total_songs, sent_count, failed_count
-                    ),
+            if not track_urls:
+                await _safe_edit(
+                    progress_msg,
+                    "⚠ Unable to process this link.\n\nPlease try again.",
                     parse_mode="HTML",
                 )
+                return
 
-                # DM completion message
+            total = len(track_urls)
+            playlist_name = "Playlist"
+            logger.info(f"SPOTIFY PLAYLIST: {total} tracks to download")
+
+            # Update progress with total
+            await _safe_edit(
+                progress_msg,
+                f"Playlist: {playlist_name}\n\n{_bar(0)}\n0 / {total}",
+                parse_mode="HTML",
+            )
+
+            sent_count = 0
+            failed_count = 0
+            blocked = False
+            start_time = time.perf_counter()
+
+            # Download and send each track individually
+            for i, track_url in enumerate(track_urls):
+                if blocked:
+                    break
+
                 try:
-                    await bot.send_message(
-                        m.from_user.id,
-                        format_playlist_dm_complete(playlist_name),
+                    with tempfile.TemporaryDirectory() as tmp_dir:
+                        tmp = Path(tmp_dir)
+                        mp3_file = await _download_track(track_url, tmp)
+
+                        if not mp3_file or not mp3_file.exists():
+                            failed_count += 1
+                            logger.warning(f"SPOTIFY PLAYLIST: Track {i+1}/{total} failed: {track_url}")
+                        else:
+                            artist, title = extract_song_metadata(mp3_file.stem)
+                            try:
+                                await bot.send_audio(
+                                    m.from_user.id,
+                                    FSInputFile(mp3_file),
+                                    title=title,
+                                    performer=artist,
+                                )
+                                sent_count += 1
+                                logger.info(f"SPOTIFY PLAYLIST: Sent {sent_count}/{total}: '{title}'")
+                            except TelegramForbiddenError:
+                                logger.error(f"User {m.from_user.id} blocked bot")
+                                blocked = True
+                                break
+                            except Exception as e:
+                                logger.error(f"SPOTIFY PLAYLIST: Send failed for '{title}': {e}")
+                                failed_count += 1
+
+                except Exception as e:
+                    logger.error(f"SPOTIFY PLAYLIST: Track {i+1} error: {e}", exc_info=True)
+                    failed_count += 1
+
+                # Update progress every 5 tracks
+                total_done = sent_count + failed_count
+                if total_done % 5 == 0 or total_done == total:
+                    pct = min(100, int(total_done * 100 / total)) if total > 0 else 0
+                    await _safe_edit(
+                        progress_msg,
+                        f"Playlist: {playlist_name}\n\n{_bar(pct)}\n{total_done} / {total}",
                         parse_mode="HTML",
                     )
-                except Exception:
-                    pass
 
-                logger.info(
-                    f"SPOTIFY PLAYLIST: Done — {sent_count} sent, "
-                    f"{failed_count} failed in {elapsed:.1f}s"
+            elapsed = time.perf_counter() - start_time
+
+            if blocked:
+                await user_state_manager.mark_user_blocked(m.from_user.id)
+                await user_state_manager.apply_cooldown(m.from_user.id)
+                await _safe_edit(
+                    progress_msg,
+                    "🚫 Blocked — cooldown applied.",
+                    parse_mode="HTML",
                 )
+                return
+
+            # Show 100% completion
+            await _safe_edit(
+                progress_msg,
+                f"Playlist: {playlist_name}\n\n{_bar(100)}\n{total} / {total}",
+                parse_mode="HTML",
+            )
+
+            # Delete progress after 5 seconds
+            async def _delete_progress():
+                await asyncio.sleep(5)
+                await _safe_delete(progress_msg)
+            asyncio.create_task(_delete_progress())
+
+            # Final summary in group
+            await m.answer(
+                format_playlist_final(
+                    m.from_user, playlist_name,
+                    total, sent_count, failed_count
+                ),
+                parse_mode="HTML",
+            )
+
+            # DM completion message
+            try:
+                await bot.send_message(
+                    m.from_user.id,
+                    format_playlist_dm_complete(playlist_name),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+
+            logger.info(
+                f"SPOTIFY PLAYLIST: Done — {sent_count} sent, "
+                f"{failed_count} failed in {elapsed:.1f}s"
+            )
 
         except asyncio.CancelledError:
             raise
