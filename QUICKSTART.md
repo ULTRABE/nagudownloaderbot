@@ -1,326 +1,165 @@
-# ⚡ Quick Start Guide - NAGU ULTRA DOWNLOADER
+# Quick Start — Nagu Downloader Bot
 
-Get your bot running in 5 minutes!
-
----
-
-## 🚀 Railway Deployment (Recommended)
-
-### Step 1: Prepare Your Repository
-
-1. **Fork this repository** or clone it:
-   ```bash
-   git clone https://github.com/yourusername/nagu-ultra-downloader.git
-   cd nagu-ultra-downloader
-   ```
-
-2. **Configure environment variables**:
-   - Set `BOT_TOKEN` environment variable (get from @BotFather)
-   - Or update in [`core/config.py`](core/config.py)
-
-3. **Add cookie files** (IMPORTANT!):
-   - Export cookies from your browser using "Get cookies.txt LOCALLY" extension
-   - Save as `cookies_youtube.txt` and `cookies_instagram.txt`
-   - Place in the root directory
-
-4. **Push to GitHub:**
-   ```bash
-   git add .
-   git commit -m "Configure bot"
-   git push origin main
-   ```
-
-### Step 2: Deploy on Railway
-
-1. Go to [railway.app](https://railway.app)
-2. Click **"New Project"**
-3. Select **"Deploy from GitHub repo"**
-4. Choose your repository
-5. Click **"Deploy"**
-6. Wait 2-3 minutes for deployment
-
-### Step 3: Verify
-
-Check logs in Railway dashboard:
-```
-✅ Cookie files detected
-✅ Bot starting
-✅ Polling mode active
-```
-
-### Step 4: Test
-
-1. Open Telegram
-2. Search for your bot
-3. Send `/start`
-4. Send a video URL
-
-**Done! 🎉**
+Get your bot running in minutes.
 
 ---
 
-## 🐳 Docker Deployment (Alternative)
+## Prerequisites
 
-### Quick Docker Run
-
-```bash
-# 1. Set environment variables (BOT_TOKEN, etc.)
-# 2. Add cookie files
-# 3. Build and run:
-
-docker build -t nagu-bot .
-docker run -d --name nagu-downloader \
-  -e BOT_TOKEN="your_token_here" \
-  --restart unless-stopped nagu-bot
-
-# View logs:
-docker logs -f nagu-downloader
-```
+- Python 3.10+
+- FFmpeg installed (`ffmpeg -version` to verify)
+- Redis instance (Upstash free tier works)
+- Telegram Bot Token (from [@BotFather](https://t.me/BotFather))
+- Spotify API credentials (from [developer.spotify.com](https://developer.spotify.com))
 
 ---
 
-## 💻 Local Development
+## 1. Clone & Install
 
-### Prerequisites
 ```bash
-# Install Python 3.11+
-python --version
-
-# Install FFmpeg
-# Ubuntu/Debian:
-sudo apt install ffmpeg
-
-# macOS:
-brew install ffmpeg
-
-# Windows: Download from ffmpeg.org
-```
-
-### Run Locally
-```bash
-# 1. Clone repository
-git clone https://github.com/yourusername/nagu-ultra-downloader.git
-cd nagu-ultra-downloader
-
-# 2. Install dependencies
+git clone https://github.com/ULTRABE/nagudownloaderbot.git
+cd nagudownloaderbot
 pip install -r requirements.txt
+```
 
-# 3. Set environment variables
-export BOT_TOKEN="your_token_here"
+---
 
-# 4. Add cookie files
+## 2. Configure Environment Variables
 
-# 5. Run bot
+Create a `.env` file or set environment variables in your deployment platform:
+
+```env
+# Required
+BOT_TOKEN=your_telegram_bot_token
+
+# Spotify (https://developer.spotify.com/dashboard)
+SPOTIFY_CLIENT_ID=your_spotify_client_id
+SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
+
+# Redis (Upstash: https://upstash.com)
+REDIS_URL=https://your-redis.upstash.io
+REDIS_TOKEN=your_redis_token
+
+# Admin IDs — comma-separated Telegram user IDs
+ADMIN_IDS=123456789
+
+# Optional
+PROXIES=http://proxy1:port,http://proxy2:port
+```
+
+---
+
+## 3. Add Cookie Files (Recommended)
+
+Cookie files improve download reliability and bypass rate limits.
+
+**Export cookies** using the [Get cookies.txt LOCALLY](https://chrome.google.com/webstore/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc) browser extension.
+
+Place files here:
+```
+yt cookies/
+  ├── cookie1.txt
+  └── cookie2.txt
+
+yt music cookies/
+  ├── music_cookie1.txt
+  └── music_cookie2.txt
+
+cookies_instagram.txt   (optional)
+```
+
+---
+
+## 4. Add Welcome Image (Optional)
+
+Place a `picture.png` in the `assets/` folder. It will be sent with `/start`.
+
+---
+
+## 5. Run
+
+```bash
 python bot.py
 ```
 
----
-
-## 🍪 Getting Cookie Files
-
-### Method 1: Browser Extension (Recommended)
-
-1. **Install Extension:**
-   - Chrome/Edge: [Get cookies.txt LOCALLY](https://chrome.google.com/webstore/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)
-   - Firefox: [cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/)
-
-2. **Export Cookies:**
-   - Visit instagram.com (logged in)
-   - Click extension icon
-   - Click "Export" → Save as `cookies_instagram.txt`
-   - Repeat for youtube.com → `cookies_youtube.txt`
-
-3. **Place Files:**
-   ```
-   nagu-ultra-downloader/
-   ├── cookies_instagram.txt  ← Here
-   ├── cookies_youtube.txt    ← Here
-   └── bot.py
-   ```
-
-### Method 2: Manual Export
-
-1. Open browser DevTools (F12)
-2. Go to Application → Cookies
-3. Copy all cookies
-4. Format as Netscape cookie file
-5. Save to respective files
+Expected startup output:
+```
+✓ Configuration validated
+✓ ffmpeg available
+✓ ffprobe available
+✓ All handlers registered
+Bot started
+```
 
 ---
 
-## 🔍 Troubleshooting
+## Docker
 
-### Bot Not Starting
-
-**Check logs for:**
-```
-❌ Cookie files missing
-```
-
-**Solution:**
-- Ensure cookie files exist in root directory
-- Check file names are exact: `cookies_youtube.txt`, `cookies_instagram.txt`
-
-### Downloads Failing
-
-**Instagram:**
-```
-❌ Empty media response
-```
-**Solution:** Update Instagram cookies (they expire every 2-4 weeks)
-
-**YouTube:**
-```
-❌ Video unavailable
-```
-**Solution:** 
-- Check video ID is 11 characters
-- Update YouTube cookies
-- Try different proxy
-
-**Pinterest:**
-```
-❌ Unsupported URL
-```
-**Solution:** Use complete pin URL with pin ID
-
-### FFmpeg Not Found
-
-**Error:**
-```
-ffmpeg: command not found
-```
-
-**Solution:**
 ```bash
-# Ubuntu/Debian
-sudo apt install ffmpeg
-
-# macOS
-brew install ffmpeg
-
-# Verify
-ffmpeg -version
+docker build -t nagu-bot .
+docker run -d --env-file .env nagu-bot
 ```
 
 ---
 
-## 📝 Testing URLs
+## Railway Deployment
 
-### Valid URL Examples
-
-**Instagram:**
-```
-✅ https://www.instagram.com/p/ABC123xyz/
-✅ https://www.instagram.com/reel/ABC123xyz/
-❌ https://www.instagram.com/
-```
-
-**YouTube:**
-```
-✅ https://www.youtube.com/watch?v=dQw4w9WgXcQ
-✅ https://youtu.be/dQw4w9WgXcQ
-❌ https://www.youtube.com/watch?v=invalid
-```
-
-**Pinterest:**
-```
-✅ https://www.pinterest.com/pin/123456789/
-✅ https://pin.it/abc123
-❌ https://www.pinterest.com/
-```
+1. Fork this repository
+2. Go to [railway.app](https://railway.app) → New Project → Deploy from GitHub
+3. Add environment variables in the Railway dashboard
+4. Deploy
 
 ---
 
-## ⚙️ Configuration
+## Testing
 
-### Adjust Concurrent Downloads
+Send these to your bot to verify everything works:
 
-Edit [`core/config.py`](core/config.py):
-```python
-MAX_CONCURRENT_DOWNLOADS = 8  # Change to 4 for slower servers
-MAX_CONCURRENT_MUSIC = 5
-MAX_CONCURRENT_SPOTIFY = 3
-```
-
-### Change Video Quality
-
-Edit downloader settings in respective files under [`downloaders/`](downloaders/):
-```python
-# For better quality (larger files):
-"format": "bestvideo[height<=1440]+bestaudio/best"
-
-# For smaller files (lower quality):
-"format": "bestvideo[height<=720]+bestaudio/best"
-```
+| Test | Expected |
+|------|----------|
+| `/start` | Welcome message with image |
+| `/ping` | Pong with latency |
+| `/help` | Feature list |
+| YouTube Short URL | Video delivered |
+| Spotify track URL | Audio delivered |
+| Instagram reel URL | Video delivered |
+| Pinterest pin URL | Video delivered |
 
 ---
 
-## 📊 Expected Performance
+## Admin Setup
 
-### Processing Times
-- Instagram: 10-15 seconds
-- YouTube: 15-30 seconds
-- Pinterest: 5-10 seconds
-
-### File Sizes
-- Instagram: 5-15 MB (1080p)
-- YouTube: 10-25 MB (1080p)
-- Pinterest: 5-15 MB
-
-### Success Rates
-- Instagram: 95%
-- YouTube: 95%
-- Pinterest: 90%
+1. Set your Telegram user ID in `ADMIN_IDS` env var
+2. Use `/assign` to configure custom emojis for UI positions
+3. Use `/broadcast` to send messages to all users and groups
+4. Use `/stats` to see user/group counts
 
 ---
 
-## 🎯 Next Steps
+## Troubleshooting
 
-1. ✅ Deploy bot
-2. ✅ Test with sample URLs
-3. ✅ Update cookies regularly
-4. ✅ Monitor logs
-5. ✅ Read full [README.md](README.md) for advanced features
+**Bot not starting**
+- Check `BOT_TOKEN` is valid
+- Verify Redis connection (`REDIS_URL` + `REDIS_TOKEN`)
 
----
+**Downloads failing**
+- Run `ffmpeg -version` — must be installed
+- Update yt-dlp: `pip install -U yt-dlp`
+- Refresh cookie files (they expire every 2–4 weeks)
 
-## 📚 Additional Resources
+**Spotify not working**
+- Verify `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET`
+- Install spotdl: `pip install spotdl`
 
-- **Full Documentation:** [README.md](README.md)
-- **Deployment Guide:** [DEPLOYMENT.md](DEPLOYMENT.md)
-- **Changelog:** [CHANGELOG.md](CHANGELOG.md)
-- **Cookie Setup:** [COOKIE_SETUP.md](COOKIE_SETUP.md)
-
----
-
-## 🆘 Need Help?
-
-1. Check [DEPLOYMENT.md](DEPLOYMENT.md) troubleshooting section
-2. Review logs for error messages
-3. Verify cookie files are up to date
-4. Contact: [@bhosadih](https://t.me/bhosadih)
+**Admin commands not working**
+- Verify your user ID is in `ADMIN_IDS`
+- Use `/id` to get your Telegram user ID
 
 ---
 
-## ✅ Checklist
+## Additional Resources
 
-Before deploying, ensure:
-
-- [ ] BOT_TOKEN environment variable set
-- [ ] Cookie files added (cookies_youtube.txt, cookies_instagram.txt)
-- [ ] FFmpeg installed (for local/VPS deployment)
-- [ ] Repository pushed to GitHub (for Railway)
-- [ ] Tested locally (optional but recommended)
-
----
-
-<div align="center">
-
-**⟣—◈ NAGU ULTRA TECHNOLOGY ◈—⟢**
-
-Ready to download! 🚀
-
-[Deploy Now](https://railway.app) • [Get Support](https://t.me/bhosadih)
-
-</div>
+- [README.md](README.md) — Full documentation
+- [DEPLOYMENT.md](DEPLOYMENT.md) — Deployment guide
+- [COOKIE_SETUP.md](COOKIE_SETUP.md) — Cookie setup guide
+- [CHANGELOG.md](CHANGELOG.md) — Version history
