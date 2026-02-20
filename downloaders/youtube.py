@@ -1,21 +1,19 @@
 """
-YouTube Downloader — Clean UI with sticker support.
+YouTube Downloader — Silent delivery with sticker support.
 
 Flow (normal video):
   1. Send sticker
-  2. Show: ⏳ Processing link...
-  3. Edit with progress bar as download proceeds
-  4. Show inline [🎥 Video] [🎧 Audio] buttons
-  5. Both streams download in background simultaneously
-  6. User taps → send instantly if ready, else wait
-  7. Delete sticker + progress message after send
-  8. Reply to original with ✓ Delivered — <mention>
+  2. Show inline [🎥 Video] [🎧 Audio] buttons (minimal status)
+  3. Both streams download in background simultaneously
+  4. User taps → send when ready
+  5. Delete sticker + status message after send
+  6. Reply to original with ✓ Delivered — <mention>
 
 Shorts:
-  ⚡ Processing Short... → send → ✓ Delivered — <mention>
+  Send sticker → silent download → delete sticker → send → ✓ Delivered — <mention>
 
 YT Music:
-  🎵 Processing Audio... → send → ✓ Delivered — <mention>
+  Send sticker → silent download → delete sticker → send → ✓ Delivered — <mention>
 
 Cache:
   SHA256(url+format) → Telegram file_id
@@ -61,14 +59,6 @@ def is_youtube_short(url: str) -> bool:
 
 def is_youtube_music(url: str) -> bool:
     return "music.youtube.com" in url.lower()
-
-# ─── Progress bar helper ──────────────────────────────────────────────────────
-
-def _progress_msg(pct: int, label: str = "Preparing media...") -> str:
-    width = 10
-    filled = int(width * pct / 100)
-    bar = "█" * filled + "░" * (width - filled)
-    return f"📥 <b>Downloading</b>\n\n[{bar}] {pct}%\n{label}"
 
 # ─── yt-dlp option builders ───────────────────────────────────────────────────
 
@@ -170,6 +160,67 @@ async def download_youtube_audio(url: str, tmp: Path, is_music: bool = False) ->
 
     return None
 
+# ─── Safe reply helpers ───────────────────────────────────────────────────────
+
+async def _safe_send_video(chat_id: int, reply_to_msg_id: Optional[int], **kwargs) -> Optional[Message]:
+    """
+    Try to send video with reply. If message not found, send without reply.
+    """
+    try:
+        return await bot.send_video(
+            chat_id,
+            reply_to_message_id=reply_to_msg_id,
+            **kwargs,
+        )
+    except Exception as e:
+        err_str = str(e).lower()
+        if "message to be replied not found" in err_str or "bad request" in err_str:
+            try:
+                return await bot.send_video(chat_id, **kwargs)
+            except Exception as e2:
+                logger.error(f"YT send_video fallback failed: {e2}")
+                return None
+        logger.error(f"YT send_video failed: {e}")
+        return None
+
+async def _safe_send_audio(chat_id: int, reply_to_msg_id: Optional[int], **kwargs) -> Optional[Message]:
+    """
+    Try to send audio with reply. If message not found, send without reply.
+    """
+    try:
+        return await bot.send_audio(
+            chat_id,
+            reply_to_message_id=reply_to_msg_id,
+            **kwargs,
+        )
+    except Exception as e:
+        err_str = str(e).lower()
+        if "message to be replied not found" in err_str or "bad request" in err_str:
+            try:
+                return await bot.send_audio(chat_id, **kwargs)
+            except Exception as e2:
+                logger.error(f"YT send_audio fallback failed: {e2}")
+                return None
+        logger.error(f"YT send_audio failed: {e}")
+        return None
+
+async def _safe_reply_text(m: Message, text: str, **kwargs) -> Optional[Message]:
+    """
+    Try to reply to original message. If message not found, send normally.
+    """
+    try:
+        return await m.reply(text, **kwargs)
+    except Exception as e:
+        err_str = str(e).lower()
+        if "message to be replied not found" in err_str or "bad request" in err_str:
+            try:
+                return await bot.send_message(m.chat.id, text, **kwargs)
+            except Exception as e2:
+                logger.error(f"YT send_message fallback failed: {e2}")
+                return None
+        logger.error(f"YT reply failed: {e}")
+        return None
+
 # ─── Pending job store (for inline button flow) ───────────────────────────────
 _pending: dict = {}
 
@@ -178,7 +229,7 @@ _pending: dict = {}
 async def handle_youtube_music(m: Message, url: str):
     """
     YT Music → 320kbps MP3.
-    🎵 Processing Audio... → send → ✓ Delivered — <mention>
+    Silent: sticker → download → delete sticker → send → ✓ Delivered — <mention>
     """
     user_id = m.from_user.id
     first_name = m.from_user.first_name or "User"
@@ -188,60 +239,45 @@ async def handle_youtube_music(m: Message, url: str):
     cached = await url_cache.get(url, "audio")
     if cached:
         try:
-            await bot.send_audio(
+            sent = await _safe_send_audio(
                 m.chat.id,
-                cached,
+                m.message_id,
+                audio=cached,
                 caption=delivered_caption,
                 parse_mode="HTML",
-                reply_to_message_id=m.message_id,
             )
-            return
+            if sent:
+                return
         except Exception:
             pass
 
-    # Send sticker
+    # Send sticker — no progress text message
     sticker_msg_id = await send_sticker(bot, m.chat.id, "music")
-
-    status = await m.reply("🎵 Processing Audio...", parse_mode="HTML")
 
     try:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp = Path(tmp_dir)
 
-            async def _animate():
-                for pct in (20, 50, 80):
-                    await asyncio.sleep(2)
-                    try:
-                        await status.edit_text(
-                            _progress_msg(pct, "Downloading audio..."),
-                            parse_mode="HTML",
-                        )
-                    except Exception:
-                        pass
-
-            anim_task = asyncio.create_task(_animate())
-
             audio_file = await download_youtube_audio(url, tmp, is_music=True)
-            anim_task.cancel()
 
-            if not audio_file:
+            if not audio_file or not audio_file.exists():
                 await delete_sticker(bot, m.chat.id, sticker_msg_id)
-                await status.delete()
-                await m.reply(
+                await _safe_reply_text(
+                    m,
                     "⚠ Unable to process this link.\n\nPlease try again.",
                     parse_mode="HTML",
                 )
                 return
 
             await delete_sticker(bot, m.chat.id, sticker_msg_id)
-            await status.delete()
+            sticker_msg_id = None
 
-            sent = await bot.send_audio(
+            sent = await _safe_send_audio(
                 m.chat.id,
-                FSInputFile(audio_file),
+                m.message_id,
+                audio=FSInputFile(audio_file),
                 caption=delivered_caption,
                 parse_mode="HTML",
-                reply_to_message_id=m.message_id,
             )
 
             if sent and sent.audio:
@@ -252,13 +288,10 @@ async def handle_youtube_music(m: Message, url: str):
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        logger.error(f"YT MUSIC ERROR: {e}")
+        logger.error(f"YT MUSIC ERROR: {e}", exc_info=True)
         await delete_sticker(bot, m.chat.id, sticker_msg_id)
-        try:
-            await status.delete()
-        except Exception:
-            pass
-        await m.reply(
+        await _safe_reply_text(
+            m,
             "⚠ Unable to process this link.\n\nPlease try again.",
             parse_mode="HTML",
         )
@@ -267,7 +300,8 @@ async def handle_youtube_music(m: Message, url: str):
 
 async def handle_youtube_short(m: Message, url: str):
     """
-    YouTube Shorts — ⚡ Processing Short... → send → ✓ Delivered — <mention>
+    YouTube Shorts — Silent: sticker → download → delete sticker → send → ✓ Delivered — <mention>
+    No progress messages.
     """
     user_id = m.from_user.id
     first_name = m.from_user.first_name or "User"
@@ -277,62 +311,39 @@ async def handle_youtube_short(m: Message, url: str):
     cached = await url_cache.get(url, "video")
     if cached:
         try:
-            await bot.send_video(
+            sent = await _safe_send_video(
                 m.chat.id,
-                cached,
+                m.message_id,
+                video=cached,
                 caption=delivered_caption,
                 parse_mode="HTML",
-                reply_to_message_id=m.message_id,
                 supports_streaming=True,
             )
-            return
+            if sent:
+                return
         except Exception:
             pass
 
-    # Send sticker
+    # Send sticker — no progress text message
     sticker_msg_id = await send_sticker(bot, m.chat.id, "youtube")
-
-    status = await m.reply("⚡ Processing Short...", parse_mode="HTML")
 
     try:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp = Path(tmp_dir)
 
-            async def _animate():
-                for pct in (15, 40, 70, 90):
-                    await asyncio.sleep(1.5)
-                    try:
-                        await status.edit_text(
-                            _progress_msg(pct, "Downloading..."),
-                            parse_mode="HTML",
-                        )
-                    except Exception:
-                        pass
-
-            anim_task = asyncio.create_task(_animate())
-
             video_file = await download_youtube_video(
                 url, tmp,
                 fmt="bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
             )
-            anim_task.cancel()
 
-            if not video_file:
+            if not video_file or not video_file.exists():
                 await delete_sticker(bot, m.chat.id, sticker_msg_id)
-                await status.delete()
-                await m.reply(
+                await _safe_reply_text(
+                    m,
                     "⚠ Unable to process this link.\n\nPlease try again.",
                     parse_mode="HTML",
                 )
                 return
-
-            try:
-                await status.edit_text(
-                    _progress_msg(90, "Encoding..."),
-                    parse_mode="HTML",
-                )
-            except Exception:
-                pass
 
             encoded = tmp / "short_enc.mp4"
             ok = await reencode_shorts(video_file, encoded)
@@ -342,17 +353,20 @@ async def handle_youtube_short(m: Message, url: str):
             parts = await ensure_fits_telegram(final, tmp)
 
             await delete_sticker(bot, m.chat.id, sticker_msg_id)
-            await status.delete()
+            sticker_msg_id = None
 
             for i, part in enumerate(parts):
+                if not part.exists():
+                    logger.warning(f"YT SHORT: Part {i} does not exist, skipping")
+                    continue
                 pi = await get_video_info(part)
                 cap = delivered_caption if i == len(parts) - 1 else f"Part {i+1}/{len(parts)}"
-                sent = await bot.send_video(
+                sent = await _safe_send_video(
                     m.chat.id,
-                    FSInputFile(part),
+                    m.message_id,
+                    video=FSInputFile(part),
                     caption=cap,
                     parse_mode="HTML",
-                    reply_to_message_id=m.message_id,
                     supports_streaming=True,
                     width=pi.get("width") or info.get("width") or None,
                     height=pi.get("height") or info.get("height") or None,
@@ -366,13 +380,10 @@ async def handle_youtube_short(m: Message, url: str):
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        logger.error(f"SHORTS ERROR: {e}")
+        logger.error(f"SHORTS ERROR: {e}", exc_info=True)
         await delete_sticker(bot, m.chat.id, sticker_msg_id)
-        try:
-            await status.delete()
-        except Exception:
-            pass
-        await m.reply(
+        await _safe_reply_text(
+            m,
             "⚠ Unable to process this link.\n\nPlease try again.",
             parse_mode="HTML",
         )
@@ -383,12 +394,11 @@ async def handle_youtube_normal(m: Message, url: str):
     """
     Normal YouTube video:
     1. Send sticker
-    2. Show: ⏳ Processing link...
-    3. Edit with progress bar
-    4. Show inline [🎥 Video] [🎧 Audio] buttons
-    5. User taps → send when ready
-    6. Delete sticker + progress message after send
-    7. Caption: ✓ Delivered — <mention>
+    2. Show inline [🎥 Video] [🎧 Audio] buttons (minimal status — no progress bar)
+    3. Both streams download in background simultaneously
+    4. User taps → send when ready
+    5. Delete sticker + status message after send
+    6. Caption: ✓ Delivered — <mention>
     """
     user_id = m.from_user.id
     first_name = m.from_user.first_name or "User"
@@ -402,11 +412,31 @@ async def handle_youtube_normal(m: Message, url: str):
         InlineKeyboardButton(text="🎧 Audio", callback_data=f"yt_audio:{job_key}"),
     ]])
 
-    status = await m.reply(
-        "⏳ Processing link...\n\n<i>Choose format below</i>",
-        reply_markup=keyboard,
-        parse_mode="HTML",
-    )
+    # Minimal status — just the format picker, no progress bar
+    try:
+        status = await m.reply(
+            "Choose format:",
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        err_str = str(e).lower()
+        if "message to be replied not found" in err_str or "bad request" in err_str:
+            try:
+                status = await bot.send_message(
+                    m.chat.id,
+                    "Choose format:",
+                    reply_markup=keyboard,
+                    parse_mode="HTML",
+                )
+            except Exception as e2:
+                logger.error(f"YT NORMAL: Could not send format picker: {e2}")
+                await delete_sticker(bot, m.chat.id, sticker_msg_id)
+                return
+        else:
+            logger.error(f"YT NORMAL: Could not send format picker: {e}")
+            await delete_sticker(bot, m.chat.id, sticker_msg_id)
+            return
 
     tmp_dir_obj = tempfile.TemporaryDirectory()
     tmp = Path(tmp_dir_obj.name)
@@ -432,37 +462,7 @@ async def handle_youtube_normal(m: Message, url: str):
 
     asyncio.create_task(_bg_download_video(job_key, url, tmp, video_future))
     asyncio.create_task(_bg_download_audio(job_key, url, tmp, audio_future))
-    asyncio.create_task(_animate_progress(job_key, status))
     asyncio.create_task(_cleanup_pending(job_key, delay=600))
-
-async def _animate_progress(job_key: str, status: Message):
-    """Animate progress bar while downloads run"""
-    steps = [10, 20, 35, 50, 65, 80, 90]
-    for pct in steps:
-        await asyncio.sleep(3)
-        job = _pending.get(job_key)
-        if not job:
-            return
-        vf = job.get("video_future")
-        af = job.get("audio_future")
-        if vf and af and vf.done() and af.done():
-            try:
-                await status.edit_text(
-                    _progress_msg(100, "Ready — choose format below") + "\n\n<i>Choose format below</i>",
-                    reply_markup=status.reply_markup,
-                    parse_mode="HTML",
-                )
-            except Exception:
-                pass
-            return
-        try:
-            await status.edit_text(
-                _progress_msg(pct, "Downloading...") + "\n\n<i>Choose format below</i>",
-                reply_markup=status.reply_markup,
-                parse_mode="HTML",
-            )
-        except Exception:
-            pass
 
 async def _bg_download_video(job_key: str, url: str, tmp: Path, future: asyncio.Future):
     """Background video download"""
@@ -520,61 +520,43 @@ async def cb_yt_video(callback: CallbackQuery):
     sticker_msg_id = job.get("sticker_msg_id")
     delivered_caption = format_delivered_with_mention(user_id, first_name)
 
+    # Delete status message and sticker immediately
+    try:
+        await bot.delete_message(chat_id, job["status_id"])
+    except Exception:
+        pass
+    await delete_sticker(bot, chat_id, sticker_msg_id)
+
     # Cache check
     cached = await url_cache.get(url, "video")
     if cached:
         try:
-            await bot.delete_message(chat_id, job["status_id"])
-        except Exception:
-            pass
-        await delete_sticker(bot, chat_id, sticker_msg_id)
-        try:
-            await bot.send_video(
+            sent = await _safe_send_video(
                 chat_id,
-                cached,
+                original_msg_id,
+                video=cached,
                 caption=delivered_caption,
                 parse_mode="HTML",
-                reply_to_message_id=original_msg_id,
                 supports_streaming=True,
             )
-            return
+            if sent:
+                return
         except Exception:
             pass
 
     try:
-        try:
-            await bot.delete_message(chat_id, job["status_id"])
-        except Exception:
-            pass
-        await delete_sticker(bot, chat_id, sticker_msg_id)
-
-        wait_msg = await bot.send_message(
-            chat_id,
-            _progress_msg(90, "Encoding..."),
-            parse_mode="HTML",
-        )
-
         try:
             video_file = await asyncio.wait_for(
                 asyncio.shield(job["video_future"]),
                 timeout=config.DOWNLOAD_TIMEOUT,
             )
         except asyncio.TimeoutError:
-            try:
-                await bot.delete_message(chat_id, wait_msg.message_id)
-            except Exception:
-                pass
             await bot.send_message(
                 chat_id,
                 "⚠ Unable to process this link.\n\nPlease try again.",
                 parse_mode="HTML",
             )
             return
-
-        try:
-            await bot.delete_message(chat_id, wait_msg.message_id)
-        except Exception:
-            pass
 
         if not video_file or not video_file.exists():
             await bot.send_message(
@@ -588,14 +570,17 @@ async def cb_yt_video(callback: CallbackQuery):
         parts = await ensure_fits_telegram(video_file, tmp)
 
         for i, part in enumerate(parts):
+            if not part.exists():
+                logger.warning(f"YT VIDEO: Part {i} does not exist, skipping")
+                continue
             info = await get_video_info(part)
             cap = delivered_caption if i == len(parts) - 1 else f"Part {i+1}/{len(parts)}"
-            sent = await bot.send_video(
+            sent = await _safe_send_video(
                 chat_id,
-                FSInputFile(part),
+                original_msg_id,
+                video=FSInputFile(part),
                 caption=cap,
                 parse_mode="HTML",
-                reply_to_message_id=original_msg_id,
                 supports_streaming=True,
                 width=info.get("width") or None,
                 height=info.get("height") or None,
@@ -607,7 +592,7 @@ async def cb_yt_video(callback: CallbackQuery):
         logger.info(f"YT VIDEO: Sent {len(parts)} part(s) to {user_id}")
 
     except Exception as e:
-        logger.error(f"YT VIDEO CALLBACK ERROR: {e}")
+        logger.error(f"YT VIDEO CALLBACK ERROR: {e}", exc_info=True)
         try:
             await bot.send_message(
                 chat_id,
@@ -638,60 +623,42 @@ async def cb_yt_audio(callback: CallbackQuery):
     sticker_msg_id = job.get("sticker_msg_id")
     delivered_caption = format_delivered_with_mention(user_id, first_name)
 
+    # Delete status message and sticker immediately
+    try:
+        await bot.delete_message(chat_id, job["status_id"])
+    except Exception:
+        pass
+    await delete_sticker(bot, chat_id, sticker_msg_id)
+
     # Cache check
     cached = await url_cache.get(url, "audio")
     if cached:
         try:
-            await bot.delete_message(chat_id, job["status_id"])
-        except Exception:
-            pass
-        await delete_sticker(bot, chat_id, sticker_msg_id)
-        try:
-            await bot.send_audio(
+            sent = await _safe_send_audio(
                 chat_id,
-                cached,
+                original_msg_id,
+                audio=cached,
                 caption=delivered_caption,
                 parse_mode="HTML",
-                reply_to_message_id=original_msg_id,
             )
-            return
+            if sent:
+                return
         except Exception:
             pass
 
     try:
-        try:
-            await bot.delete_message(chat_id, job["status_id"])
-        except Exception:
-            pass
-        await delete_sticker(bot, chat_id, sticker_msg_id)
-
-        wait_msg = await bot.send_message(
-            chat_id,
-            _progress_msg(90, "Processing audio..."),
-            parse_mode="HTML",
-        )
-
         try:
             audio_file = await asyncio.wait_for(
                 asyncio.shield(job["audio_future"]),
                 timeout=config.DOWNLOAD_TIMEOUT,
             )
         except asyncio.TimeoutError:
-            try:
-                await bot.delete_message(chat_id, wait_msg.message_id)
-            except Exception:
-                pass
             await bot.send_message(
                 chat_id,
                 "⚠ Unable to process this link.\n\nPlease try again.",
                 parse_mode="HTML",
             )
             return
-
-        try:
-            await bot.delete_message(chat_id, wait_msg.message_id)
-        except Exception:
-            pass
 
         if not audio_file or not audio_file.exists():
             await bot.send_message(
@@ -701,12 +668,12 @@ async def cb_yt_audio(callback: CallbackQuery):
             )
             return
 
-        sent = await bot.send_audio(
+        sent = await _safe_send_audio(
             chat_id,
-            FSInputFile(audio_file),
+            original_msg_id,
+            audio=FSInputFile(audio_file),
             caption=delivered_caption,
             parse_mode="HTML",
-            reply_to_message_id=original_msg_id,
         )
 
         if sent and sent.audio:
@@ -715,7 +682,7 @@ async def cb_yt_audio(callback: CallbackQuery):
         logger.info(f"YT AUDIO: Sent to {user_id}")
 
     except Exception as e:
-        logger.error(f"YT AUDIO CALLBACK ERROR: {e}")
+        logger.error(f"YT AUDIO CALLBACK ERROR: {e}", exc_info=True)
         try:
             await bot.send_message(
                 chat_id,
@@ -730,7 +697,14 @@ async def cb_yt_audio(callback: CallbackQuery):
 async def handle_youtube(m: Message, url: str):
     """Route YouTube URL to appropriate handler"""
     if not await acquire_user_slot(m.from_user.id, config.MAX_CONCURRENT_PER_USER):
-        await m.reply("⏳ You have downloads in progress. Please wait.", parse_mode="HTML")
+        try:
+            await m.reply("⏳ You have downloads in progress. Please wait.", parse_mode="HTML")
+        except Exception:
+            await bot.send_message(
+                m.chat.id,
+                "⏳ You have downloads in progress. Please wait.",
+                parse_mode="HTML",
+            )
         return
 
     try:
