@@ -143,6 +143,8 @@ def format_help_music() -> str:
 def format_help_info() -> str:
     return (
         "ℹ <b>Bot Commands</b>\n\n"
+        "/ping     — health check\n"
+        "/status   — bot status\n"
         "/id       — your user ID\n"
         "/chatid   — current chat ID\n"
         "/myinfo   — account details\n"

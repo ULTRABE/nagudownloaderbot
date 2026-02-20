@@ -3,14 +3,16 @@ Download router — Routes URLs to handlers, admin commands.
 
 Design:
   - All media replies quote the original message (reply_to_message_id)
-  - Progress messages deleted after send
+  - Fallback to plain send if original message was deleted
   - Caption: ✓ Delivered — <mention>
   - Group registration on bot join
   - Broadcast: admin-only, background, with pin
+  - Global error handler middleware — never crash polling
 """
 import asyncio
 import re
 import time
+import traceback
 from pathlib import Path
 
 from aiogram import F
@@ -19,6 +21,12 @@ from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton,
 )
 from aiogram.filters import CommandStart, Command
+
+# ErrorEvent is available in aiogram 3.x for the @dp.errors() handler
+try:
+    from aiogram.types import ErrorEvent
+except ImportError:
+    ErrorEvent = None  # type: ignore
 
 from core.bot import dp, bot
 from core.config import config
@@ -50,11 +58,67 @@ from utils.broadcast import (
     run_broadcast,
 )
 
-# Link regex
-LINK_RE = re.compile(r"https?://\S+")
+# Link regex — improved to catch more URL formats
+LINK_RE = re.compile(r"https?://[^\s<>\"']+")
 
 # Bot start time for uptime calculation
 _BOT_START_TIME = time.time()
+
+# ─── Global error handler middleware ─────────────────────────────────────────
+
+@dp.errors()
+async def global_error_handler(event: ErrorEvent) -> bool:
+    """
+    Global error handler — catches all unhandled exceptions.
+    Logs full traceback. Never crashes polling.
+    Returns True to suppress the exception.
+    """
+    exception = event.exception
+    update = event.update
+    tb = traceback.format_exc()
+    logger.error(
+        f"Unhandled exception in update {getattr(update, 'update_id', '?')}: "
+        f"{type(exception).__name__}: {exception}\n{tb}"
+    )
+    # Try to notify user if possible
+    try:
+        msg = getattr(update, "message", None)
+        cb = getattr(update, "callback_query", None)
+        if msg:
+            try:
+                await msg.reply(
+                    "⚠ Unable to process this link.\n\nPlease try again.",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+        elif cb:
+            try:
+                await cb.answer(
+                    "Something went wrong. Please try again.",
+                    show_alert=True,
+                )
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return True  # Suppress exception — keep polling alive
+
+# ─── Safe reply helper ────────────────────────────────────────────────────────
+
+async def _safe_reply(m: Message, text: str, **kwargs) -> None:
+    """Reply with fallback to plain send if original message was deleted."""
+    try:
+        await m.reply(text, **kwargs)
+    except Exception as e:
+        err_str = str(e).lower()
+        if "message to be replied not found" in err_str or "bad request" in err_str:
+            try:
+                await bot.send_message(m.chat.id, text, **kwargs)
+            except Exception:
+                pass
+        else:
+            logger.error(f"Reply failed: {e}")
 
 # ─── /start ───────────────────────────────────────────────────────────────────
 
@@ -90,7 +154,7 @@ async def start_command(m: Message):
         except Exception as e:
             logger.error(f"Failed to send start image: {e}")
 
-    await m.reply(caption, parse_mode="HTML", reply_markup=keyboard)
+    await _safe_reply(m, caption, parse_mode="HTML", reply_markup=keyboard)
 
 
 # ─── /help ────────────────────────────────────────────────────────────────────
@@ -99,11 +163,32 @@ async def start_command(m: Message):
 async def help_command(m: Message):
     """Help — three sections"""
     logger.info(f"HELP: User {m.from_user.id}")
-    await m.reply(format_help_video(), parse_mode="HTML")
+    await _safe_reply(m, format_help_video(), parse_mode="HTML")
     await asyncio.sleep(0.15)
-    await m.reply(format_help_music(), parse_mode="HTML")
+    await _safe_reply(m, format_help_music(), parse_mode="HTML")
     await asyncio.sleep(0.15)
-    await m.reply(format_help_info(), parse_mode="HTML")
+    await _safe_reply(m, format_help_info(), parse_mode="HTML")
+
+
+# ─── /ping ────────────────────────────────────────────────────────────────────
+
+@dp.message(Command("ping"))
+async def cmd_ping(m: Message):
+    """Health check — anyone can use"""
+    t0 = time.monotonic()
+    try:
+        sent = await m.reply("🏓 Pong!", parse_mode="HTML")
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        try:
+            await sent.edit_text(f"🏓 Pong! <code>{elapsed_ms}ms</code>", parse_mode="HTML")
+        except Exception:
+            pass
+    except Exception:
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        try:
+            await bot.send_message(m.chat.id, f"🏓 Pong! <code>{elapsed_ms}ms</code>", parse_mode="HTML")
+        except Exception:
+            pass
 
 
 # ─── /id ──────────────────────────────────────────────────────────────────────
@@ -116,7 +201,7 @@ async def cmd_id(m: Message):
     else:
         user = m.from_user
         label = "YOUR  ID"
-    await m.reply(format_id(user, label), parse_mode="HTML")
+    await _safe_reply(m, format_id(user, label), parse_mode="HTML")
 
 
 # ─── /chatid ──────────────────────────────────────────────────────────────────
@@ -124,7 +209,8 @@ async def cmd_id(m: Message):
 @dp.message(Command("chatid"))
 async def cmd_chatid(m: Message):
     chat_title = (m.chat.title or "Private Chat")[:20]
-    await m.reply(
+    await _safe_reply(
+        m,
         format_chatid(m.chat.id, chat_title, m.chat.type),
         parse_mode="HTML",
     )
@@ -135,7 +221,8 @@ async def cmd_chatid(m: Message):
 @dp.message(Command("myinfo"))
 async def cmd_myinfo(m: Message):
     chat_title = (m.chat.title or "Private")[:20]
-    await m.reply(
+    await _safe_reply(
+        m,
         format_myinfo(m.from_user, chat_title),
         parse_mode="HTML",
     )
@@ -149,7 +236,8 @@ async def cmd_status(m: Message):
     days = uptime_secs // 86400
     hours = (uptime_secs % 86400) // 3600
     uptime_str = f"{days}d {hours}h"
-    await m.reply(
+    await _safe_reply(
+        m,
         format_status(active_jobs=0, queue=0, uptime=uptime_str),
         parse_mode="HTML",
     )
@@ -162,10 +250,20 @@ async def cb_status(callback):
     hours = (uptime_secs % 86400) // 3600
     uptime_str = f"{days}d {hours}h"
     await callback.answer()
-    await callback.message.reply(
-        format_status(active_jobs=0, queue=0, uptime=uptime_str),
-        parse_mode="HTML",
-    )
+    try:
+        await callback.message.reply(
+            format_status(active_jobs=0, queue=0, uptime=uptime_str),
+            parse_mode="HTML",
+        )
+    except Exception:
+        try:
+            await bot.send_message(
+                callback.message.chat.id,
+                format_status(active_jobs=0, queue=0, uptime=uptime_str),
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
 
 
 # ─── Admin commands ───────────────────────────────────────────────────────────
@@ -181,13 +279,24 @@ async def cmd_admin(m: Message):
     users  = await get_all_users()
     groups = await get_all_groups()
     stats  = {"users": len(users), "groups": len(groups)}
-    await m.reply(format_admin_panel(stats), parse_mode="HTML")
+    await _safe_reply(m, format_admin_panel(stats), parse_mode="HTML")
 
 
 @dp.message(Command("stats"))
 async def cmd_stats(m: Message):
+    """Stats — admin only for full details"""
     if not _is_admin(m.from_user.id):
+        # Non-admin: show minimal public stats
+        uptime_secs = int(time.time() - _BOT_START_TIME)
+        days = uptime_secs // 86400
+        hours = (uptime_secs % 86400) // 3600
+        await _safe_reply(
+            m,
+            format_status(active_jobs=0, queue=0, uptime=f"{days}d {hours}h"),
+            parse_mode="HTML",
+        )
         return
+
     users  = await get_all_users()
     groups = await get_all_groups()
     lines = [
@@ -196,7 +305,7 @@ async def cmd_stats(m: Message):
         f"  Users   ·  {len(users)}",
         f"  Groups  ·  {len(groups)}",
     ]
-    await m.reply(code_panel(lines, width=32), parse_mode="HTML")
+    await _safe_reply(m, code_panel(lines, width=32), parse_mode="HTML")
 
 
 @dp.message(Command("broadcast"))
@@ -207,17 +316,16 @@ async def cmd_broadcast(m: Message):
 
     parts = m.text.split(None, 1)
     if len(parts) < 2 or not parts[1].strip():
-        await m.reply(
+        await _safe_reply(
+            m,
             mono("  Usage: /broadcast Your message here"),
             parse_mode="HTML",
         )
         return
 
     broadcast_text = parts[1].strip()
-    users  = await get_all_users()
-    groups = await get_all_groups()
 
-    await m.reply(format_broadcast_started(), parse_mode="HTML")
+    await _safe_reply(m, format_broadcast_started(), parse_mode="HTML")
 
     asyncio.create_task(
         run_broadcast(bot, m.from_user.id, text=broadcast_text)
@@ -231,7 +339,7 @@ async def cmd_broadcast_media(m: Message):
         return
 
     if not m.reply_to_message:
-        await m.reply(mono("  Reply to a media message to broadcast it."), parse_mode="HTML")
+        await _safe_reply(m, mono("  Reply to a media message to broadcast it."), parse_mode="HTML")
         return
 
     reply = m.reply_to_message
@@ -241,14 +349,10 @@ async def cmd_broadcast_media(m: Message):
     ])
 
     if not has_media and not reply.text:
-        await m.reply(mono("  Reply to a message with media or text."), parse_mode="HTML")
+        await _safe_reply(m, mono("  Reply to a message with media or text."), parse_mode="HTML")
         return
 
-    users  = await get_all_users()
-    groups = await get_all_groups()
-    total  = len(users) + len(groups)
-
-    await m.reply(format_broadcast_started(), parse_mode="HTML")
+    await _safe_reply(m, format_broadcast_started(), parse_mode="HTML")
 
     asyncio.create_task(
         run_broadcast(bot, m.from_user.id, reply_to_msg=reply)
@@ -260,12 +364,15 @@ async def cmd_broadcast_media(m: Message):
 @dp.message(F.new_chat_members)
 async def on_bot_added_to_group(m: Message):
     """Register group when bot is added"""
-    bot_me = await bot.get_me()
-    for member in m.new_chat_members:
-        if member.id == bot_me.id:
-            await register_group(m.chat.id)
-            logger.info(f"Registered group: {m.chat.id} ({m.chat.title})")
-            break
+    try:
+        bot_me = await bot.get_me()
+        for member in m.new_chat_members:
+            if member.id == bot_me.id:
+                await register_group(m.chat.id)
+                logger.info(f"Registered group: {m.chat.id} ({m.chat.title})")
+                break
+    except Exception as e:
+        logger.error(f"Group registration error: {e}")
 
 
 # ─── Link handler ─────────────────────────────────────────────────────────────
@@ -273,7 +380,11 @@ async def on_bot_added_to_group(m: Message):
 @dp.message(F.text.regexp(LINK_RE))
 async def handle_link(m: Message):
     """Route incoming links to appropriate downloader"""
-    url = m.text.strip()
+    # Extract first URL from message
+    match = LINK_RE.search(m.text or "")
+    if not match:
+        return
+    url = match.group(0).strip()
     logger.info(f"LINK: {url[:60]} from {m.from_user.id}")
 
     # Register group
@@ -309,13 +420,21 @@ async def handle_link(m: Message):
         elif "spotify.com" in url_lower:
             await handle_spotify_playlist(m, url)
         else:
-            await m.reply("⚠ Unable to process this link.\n\nPlease try again.", parse_mode="HTML")
+            await _safe_reply(
+                m,
+                "⚠ Unable to process this link.\n\nPlease try again.",
+                parse_mode="HTML",
+            )
     except asyncio.CancelledError:
         pass
     except Exception as e:
-        logger.error(f"Error handling link: {e}")
+        logger.error(f"Error handling link: {e}", exc_info=True)
         try:
-            await m.reply("⚠ Unable to process this link.\n\nPlease try again.", parse_mode="HTML")
+            await _safe_reply(
+                m,
+                "⚠ Unable to process this link.\n\nPlease try again.",
+                parse_mode="HTML",
+            )
         except Exception:
             pass
 

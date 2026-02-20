@@ -15,9 +15,10 @@ Features:
 import asyncio
 import glob
 import os
+import shutil
 import signal
 import tempfile
-import shutil
+import traceback
 from pathlib import Path
 
 from aiohttp import web
@@ -92,6 +93,15 @@ def _handle_signal(sig):
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
+def _check_ffmpeg() -> bool:
+    """Check if ffmpeg is available on PATH"""
+    return shutil.which("ffmpeg") is not None
+
+def _check_ffprobe() -> bool:
+    """Check if ffprobe is available on PATH"""
+    return shutil.which("ffprobe") is not None
+
+
 async def main():
     """Main entry point"""
     logger.info("=" * 60)
@@ -105,6 +115,17 @@ async def main():
     except ValueError as e:
         logger.error(f"✗ Configuration error: {e}")
         return
+
+    # Check ffmpeg availability
+    if _check_ffmpeg():
+        logger.info("✓ ffmpeg available")
+    else:
+        logger.warning("⚠ ffmpeg NOT found — video encoding/splitting will fail")
+
+    if _check_ffprobe():
+        logger.info("✓ ffprobe available")
+    else:
+        logger.warning("⚠ ffprobe NOT found — video info detection will fail")
     
     # Initialize Redis
     redis_client.initialize()
@@ -156,9 +177,23 @@ async def main():
     logger.info("=" * 60)
     logger.info("BOT IS READY - Starting polling...")
     logger.info("=" * 60)
-    
+
+    async def _polling_with_restart():
+        """Polling wrapper — restarts on unexpected errors, never crashes"""
+        while not _shutdown_event.is_set():
+            try:
+                await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                tb = traceback.format_exc()
+                logger.error(f"Polling crashed: {e}\n{tb}")
+                if not _shutdown_event.is_set():
+                    logger.info("Restarting polling in 5 seconds...")
+                    await asyncio.sleep(5)
+
     # Start polling in background
-    polling_task = asyncio.create_task(dp.start_polling(bot))
+    polling_task = asyncio.create_task(_polling_with_restart())
     
     # Wait for shutdown signal
     try:
