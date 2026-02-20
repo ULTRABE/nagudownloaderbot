@@ -43,6 +43,7 @@ from ui.formatting import (
 from utils.helpers import extract_song_metadata
 from utils.logger import logger
 from utils.user_state import user_state_manager
+from utils.log_channel import log_download
 
 # ─── Separate semaphore for single tracks (don't wait behind playlists) ───────
 _single_semaphore = asyncio.Semaphore(4)
@@ -303,6 +304,7 @@ async def handle_spotify_single(m: Message, url: str):
     delivered_caption = format_delivered_with_mention(user_id, first_name)
     # Always send in same chat (group or private)
     target_chat = m.chat.id
+    _t_start = time.monotonic()
 
     # Send initial progress bar immediately
     progress = await _safe_reply(m, _bar(20), parse_mode="HTML")
@@ -354,6 +356,17 @@ async def handle_spotify_single(m: Message, url: str):
                 )
 
                 logger.info(f"SPOTIFY SINGLE: '{title}' by '{artist}' → chat {target_chat}")
+
+                # Log to channel
+                _elapsed = time.monotonic() - _t_start
+                _chat_type = "Group" if m.chat.type in ("group", "supergroup") else "Private"
+                asyncio.create_task(log_download(
+                    user=m.from_user,
+                    link=url,
+                    chat_type=_chat_type,
+                    media_type="Audio (Spotify)",
+                    time_taken=_elapsed,
+                ))
 
     except asyncio.CancelledError:
         raise
@@ -655,6 +668,16 @@ async def _run_playlist_download(m: Message, url: str):
                 f"SPOTIFY PLAYLIST: Done — {sent_count} sent, "
                 f"{failed_count} failed in {elapsed:.1f}s"
             )
+
+            # Log to channel
+            _chat_type = "Group" if m.chat.type in ("group", "supergroup") else "Private"
+            asyncio.create_task(log_download(
+                user=m.from_user,
+                link=url,
+                chat_type=_chat_type,
+                media_type=f"Playlist (Spotify, {sent_count}/{total})",
+                time_taken=elapsed,
+            ))
 
         except asyncio.CancelledError:
             raise

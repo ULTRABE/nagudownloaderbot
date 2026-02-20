@@ -69,6 +69,7 @@ from ui.formatting import (
 )
 from ui.stickers import send_sticker, delete_sticker
 from utils.user_state import user_state_manager
+from utils.log_channel import log_download
 
 # ─── URL detection ────────────────────────────────────────────────────────────
 
@@ -393,6 +394,7 @@ async def handle_youtube_music(m: Message, url: str):
     user_id = m.from_user.id
     first_name = m.from_user.first_name or "User"
     delivered_caption = format_delivered_with_mention(user_id, first_name)
+    _t_start = time.monotonic()
 
     # Cache check
     cached = await url_cache.get(url, "audio")
@@ -444,6 +446,17 @@ async def handle_youtube_music(m: Message, url: str):
 
             logger.info(f"YT MUSIC: Sent to {user_id}")
 
+            # Log to channel
+            _elapsed = time.monotonic() - _t_start
+            _chat_type = "Group" if m.chat.type in ("group", "supergroup") else "Private"
+            asyncio.create_task(log_download(
+                user=m.from_user,
+                link=url,
+                chat_type=_chat_type,
+                media_type="Audio (YT Music)",
+                time_taken=_elapsed,
+            ))
+
     except asyncio.CancelledError:
         raise
     except Exception as e:
@@ -465,6 +478,7 @@ async def handle_youtube_short(m: Message, url: str):
     user_id = m.from_user.id
     first_name = m.from_user.first_name or "User"
     delivered_caption = format_delivered_with_mention(user_id, first_name)
+    _t_start = time.monotonic()
 
     # Cache check
     cached = await url_cache.get(url, "video")
@@ -531,6 +545,17 @@ async def handle_youtube_short(m: Message, url: str):
                 await url_cache.set(url, "video", sent.video.file_id)
 
             logger.info(f"SHORTS: Sent to {user_id}")
+
+            # Log to channel
+            _elapsed = time.monotonic() - _t_start
+            _chat_type = "Group" if m.chat.type in ("group", "supergroup") else "Private"
+            asyncio.create_task(log_download(
+                user=m.from_user,
+                link=url,
+                chat_type=_chat_type,
+                media_type="Video (Short)",
+                time_taken=_elapsed,
+            ))
 
     except asyncio.CancelledError:
         raise
@@ -743,6 +768,15 @@ async def cb_yt_video(callback: CallbackQuery):
 
         logger.info(f"YT VIDEO: Sent to {user_id}")
 
+        # Log to channel
+        asyncio.create_task(log_download(
+            user=type("U", (), {"id": user_id, "first_name": first_name})(),
+            link=url,
+            chat_type="Group" if job.get("chat_type", "private") not in ("private",) else "Private",
+            media_type="Video",
+            time_taken=0.0,
+        ))
+
     except Exception as e:
         logger.error(f"YT VIDEO CALLBACK ERROR: {e}", exc_info=True)
         try:
@@ -832,6 +866,15 @@ async def cb_yt_audio(callback: CallbackQuery):
             await url_cache.set(url, "audio", sent.audio.file_id)
 
         logger.info(f"YT AUDIO: Sent to {user_id}")
+
+        # Log to channel
+        asyncio.create_task(log_download(
+            user=type("U", (), {"id": user_id, "first_name": first_name})(),
+            link=url,
+            chat_type="Private",
+            media_type="Audio",
+            time_taken=0.0,
+        ))
 
     except Exception as e:
         logger.error(f"YT AUDIO CALLBACK ERROR: {e}", exc_info=True)
@@ -1213,6 +1256,16 @@ async def _run_yt_playlist_audio(callback: CallbackQuery, job_key: str, job: dic
             pass
 
         logger.info(f"YT PLAYLIST AUDIO: Done — {sent_count} sent, {failed_count} failed")
+
+        # Log to channel
+        asyncio.create_task(log_download(
+            user=type("U", (), {"id": user_id, "first_name": job.get("first_name", "User")})(),
+            link=job.get("url", ""),
+            chat_type="Group" if chat_id != user_id else "Private",
+            media_type=f"Playlist (Audio, {sent_count}/{total})",
+            time_taken=0.0,
+        ))
+
         _playlist_pending.pop(job_key, None)
 
 
@@ -1329,6 +1382,16 @@ async def _run_yt_playlist_video(callback: CallbackQuery, job_key: str, job: dic
             pass
 
         logger.info(f"YT PLAYLIST VIDEO: Done — {sent_count} sent, {failed_count} failed")
+
+        # Log to channel
+        asyncio.create_task(log_download(
+            user=type("U", (), {"id": user_id, "first_name": job.get("first_name", "User")})(),
+            link=job.get("url", ""),
+            chat_type="Group" if chat_id != user_id else "Private",
+            media_type=f"Playlist (Video, {sent_count}/{total})",
+            time_taken=0.0,
+        ))
+
         _playlist_pending.pop(job_key, None)
 
 

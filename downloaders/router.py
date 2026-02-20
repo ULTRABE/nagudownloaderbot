@@ -55,6 +55,7 @@ from ui.formatting import (
     code_panel,
     mono,
 )
+from ui.emoji_config import get_emoji_async
 from utils.logger import logger
 from utils.broadcast import (
     register_user,
@@ -64,6 +65,7 @@ from utils.broadcast import (
     run_broadcast,
 )
 from utils.redis_client import redis_client
+from utils.log_channel import log_download
 
 # Link regex — improved to catch more URL formats
 LINK_RE = re.compile(r"https?://[^\s<>\"']+")
@@ -157,9 +159,7 @@ async def start_command(m: Message):
             "• YouTube — Videos, Shorts, Music\n"
             "• Spotify — Tracks &amp; Playlists\n"
             "• Instagram — Reels &amp; Posts\n"
-            "• Pinterest — Video Pins\n\n"
-            "𝟦𝟢–𝟧𝟢 ᴍɪɴᴜᴛᴇꜱ+ ꜰᴀꜱᴛᴇʀ ᴅᴏᴡɴʟᴏᴀᴅꜱ\n"
-            "ꜱᴍᴏᴏᴛʜ ᴇxᴘᴇʀɪᴇɴᴄᴇ"
+            "• Pinterest — Video Pins"
         )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="➕ Add to Group", url=f"https://t.me/{(await bot.get_me()).username}?startgroup=true"),
@@ -287,13 +287,16 @@ async def cmd_mp3(m: Message):
 
             # Send audio
             safe_name = first_name[:32].replace("<", "").replace(">", "")
-            caption = f'✓ Delivered — <a href="tg://user?id={user_id}">{safe_name}</a>'
+            success_emoji = await get_emoji_async("SUCCESS")
+            caption = f'{success_emoji} Delivered — <a href="tg://user?id={user_id}">{safe_name}</a>'
+            t_start = time.monotonic()
             await bot.send_audio(
                 m.chat.id,
                 FSInputFile(audio_path),
                 caption=caption,
                 parse_mode="HTML",
             )
+            elapsed = time.monotonic() - t_start
 
             # Delete progress
             try:
@@ -302,6 +305,16 @@ async def cmd_mp3(m: Message):
                 pass
 
             logger.info(f"MP3: Sent to {user_id}")
+
+            # Log to channel
+            chat_type = "Group" if m.chat.type in ("group", "supergroup") else "Private"
+            asyncio.create_task(log_download(
+                user=m.from_user,
+                link="[MP3 extraction]",
+                chat_type=chat_type,
+                media_type="Audio (MP3)",
+                time_taken=elapsed,
+            ))
 
     except Exception as e:
         logger.error(f"MP3 ERROR: {e}", exc_info=True)
@@ -385,11 +398,21 @@ async def cmd_status(m: Message):
     days = uptime_secs // 86400
     hours = (uptime_secs % 86400) // 3600
     uptime_str = f"{days}d {hours}h"
-    await _safe_reply(
-        m,
-        format_status(active_jobs=0, queue=0, uptime=uptime_str),
-        parse_mode="HTML",
-    )
+
+    if _is_admin(m.from_user.id):
+        # Admin: full system stats
+        await _safe_reply(
+            m,
+            format_status(active_jobs=0, queue=0, uptime=uptime_str),
+            parse_mode="HTML",
+        )
+    else:
+        # Normal user: uptime + active jobs only (no system internals)
+        await _safe_reply(
+            m,
+            f"📊 <b>𝐁𝐨𝐭 𝐒𝐭𝐚𝐭𝐮𝐬</b>\n\nUptime: {uptime_str}\nActive Jobs: 0",
+            parse_mode="HTML",
+        )
 
 
 @dp.callback_query(lambda c: c.data == "status")
@@ -573,18 +596,6 @@ async def cmd_assign(m: Message):
     configured = await _get_configured_emoji_keys()
     keyboard = await _build_assign_keyboard(configured)
     menu_text = format_assign_menu(configured)
-
-    # If any position is configured, show a sticker preview for the first one
-    for key in EMOJI_POSITIONS.keys():
-        if key in configured:
-            file_id = await redis_client.get(f"{_EMOJI_KEY_PREFIX}{key}")
-            if file_id:
-                try:
-                    await bot.send_sticker(m.chat.id, file_id)
-                except Exception:
-                    pass
-            break
-
     await _safe_reply(m, menu_text, reply_markup=keyboard, parse_mode="HTML")
 
 
@@ -622,22 +633,61 @@ async def cb_assign(callback):
             pass
 
 
-@dp.message(lambda m: m.sticker and m.from_user and m.from_user.id in _assign_pending)
-async def handle_assign_sticker(m: Message):
-    """Receive sticker for emoji assignment"""
+@dp.message(lambda m: m.from_user and m.from_user.id in _assign_pending)
+async def handle_assign_emoji(m: Message):
+    """
+    Receive emoji for assignment.
+
+    Accepts:
+    1. Message with custom_emoji entity (premium Telegram emoji)
+       → stores custom_emoji_id (numeric string) in Redis
+    2. Message with a plain unicode emoji in text
+       → stores the unicode character in Redis
+
+    Does NOT require stickers.
+    Does NOT use file_id.
+    """
     if not _is_admin(m.from_user.id):
+        return
+
+    # Only process if this user has a pending assignment
+    if m.from_user.id not in _assign_pending:
         return
 
     key = _assign_pending.pop(m.from_user.id, None)
     if not key or key not in EMOJI_POSITIONS:
         return
 
-    file_id = m.sticker.file_id
+    emoji_value: str | None = None
+
+    # Priority 1: custom_emoji entity (premium Telegram emoji)
+    if m.entities:
+        for entity in m.entities:
+            if entity.type == "custom_emoji" and entity.custom_emoji_id:
+                emoji_value = entity.custom_emoji_id  # numeric ID string
+                break
+
+    # Priority 2: plain unicode emoji in text
+    if not emoji_value and m.text:
+        text = m.text.strip()
+        if text:
+            emoji_value = text[:8]  # store first 8 chars (covers multi-char emoji)
+
+    if not emoji_value:
+        await _safe_reply(
+            m,
+            "⚠ No emoji detected. Send a premium emoji or a standard emoji character.",
+            parse_mode="HTML",
+        )
+        # Restore pending state so admin can try again
+        _assign_pending[m.from_user.id] = key
+        return
+
     redis_key = f"{_EMOJI_KEY_PREFIX}{key}"
-    await redis_client.set(redis_key, file_id)
+    await redis_client.set(redis_key, emoji_value)
 
     label = EMOJI_POSITIONS[key]
-    logger.info(f"ASSIGN: Admin {m.from_user.id} set {key} = {file_id[:20]}...")
+    logger.info(f"ASSIGN: Admin {m.from_user.id} set {key} = {emoji_value[:30]}")
 
     await _safe_reply(m, format_assign_updated(), parse_mode="HTML")
 
