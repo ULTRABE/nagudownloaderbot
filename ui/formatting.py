@@ -317,13 +317,13 @@ async def format_delivered() -> str:
     """Plain delivery confirmation"""
     emoji = await get_emoji_async("DELIVERED")
     complete = await get_emoji_async("COMPLETE")
-    return f"{emoji} {complete} <b>𝐃𝐞𝐥𝐢𝐯𝐞𝐫𝐞𝐝</b>"
+    return f"{emoji} {complete} Delivered"
 
 
 async def format_error(message: str | None = None) -> str:
     """Global error message — never show debug info"""
     emoji = await get_emoji_async("ERROR")
-    return f"{emoji} <b>𝐔𝐧𝐚𝐛𝐥𝐞 𝐭𝐨 𝐏𝐫𝐨𝐜𝐞𝐬𝐬</b>\n\nUnable to process this link.\n\nPlease try again."
+    return f"{emoji} Unable to process this link.\n\nPlease try again."
 
 
 # ─── Spotify progress ─────────────────────────────────────────────────────────
