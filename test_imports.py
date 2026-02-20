@@ -56,12 +56,11 @@ try:
     print("✓ Testing downloaders imports...")
     from downloaders import (
         handle_instagram, handle_pinterest, handle_youtube,
-        handle_mp3_search, handle_spotify_playlist, register_download_handlers
+        handle_spotify_playlist, register_download_handlers
     )
     print("  ✓ downloaders.handle_instagram")
     print("  ✓ downloaders.handle_pinterest")
     print("  ✓ downloaders.handle_youtube")
-    print("  ✓ downloaders.handle_mp3_search")
     print("  ✓ downloaders.handle_spotify_playlist")
     print("  ✓ downloaders.register_download_handlers")
 except ImportError as e:

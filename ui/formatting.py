@@ -530,6 +530,30 @@ async def format_stats(users: int, groups: int) -> str:
 
 # ─── Legacy compat ────────────────────────────────────────────────────────────
 
+async def format_user_info(user: User) -> str:
+    """Legacy compat — returns user info panel (same as format_myinfo)"""
+    return await format_myinfo(user)
+
+
+async def format_download_complete(user: User) -> str:
+    """Legacy compat — returns a delivered confirmation with mention"""
+    emoji = await get_emoji_async("DELIVERED")
+    safe_name = (user.first_name or "User")[:32].replace("<", "").replace(">", "")
+    return f'{emoji} Delivered — <a href="tg://user?id={user.id}">{safe_name}</a>'
+
+
+def format_audio_info(title: str = "", artist: str = "", duration: str = "") -> str:
+    """Legacy compat — returns basic audio info string"""
+    parts = []
+    if title:
+        parts.append(f"<b>{title[:64]}</b>")
+    if artist:
+        parts.append(artist[:64])
+    if duration:
+        parts.append(duration)
+    return " — ".join(parts) if parts else ""
+
+
 async def format_welcome_legacy(user: User, user_id: int) -> str:
     return await format_welcome(user, user_id)
 
