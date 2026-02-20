@@ -47,6 +47,11 @@ from ui.formatting import (
     format_status,
     format_broadcast_started,
     format_broadcast_report,
+    format_assign_menu,
+    format_assign_prompt,
+    format_assign_updated,
+    format_stats,
+    EMOJI_POSITIONS,
     code_panel,
     mono,
 )
@@ -58,6 +63,7 @@ from utils.broadcast import (
     get_all_groups,
     run_broadcast,
 )
+from utils.redis_client import redis_client
 
 # Link regex — improved to catch more URL formats
 LINK_RE = re.compile(r"https?://[^\s<>\"']+")
@@ -446,32 +452,46 @@ async def cmd_stats(m: Message):
 
     users  = await get_all_users()
     groups = await get_all_groups()
-    text = (
-        "📊 <b>Bot Stats</b>\n\n"
-        f"Users: {len(users)}\n"
-        f"Groups: {len(groups)}"
-    )
-    await _safe_reply(m, text, parse_mode="HTML")
+    await _safe_reply(m, format_stats(len(users), len(groups)), parse_mode="HTML")
 
 
 @dp.message(Command("broadcast"))
 async def cmd_broadcast(m: Message):
-    """Broadcast text to all users + groups. Admin only."""
+    """
+    Broadcast to all users + groups. Admin only.
+
+    Usage:
+      /broadcast <text>          — broadcast text message
+      /broadcast (reply to msg) — broadcast that exact message (any type)
+    """
     if not _is_admin(m.from_user.id):
         await _safe_reply(m, "⛔ You are not authorized.", parse_mode="HTML")
         return
 
-    parts = m.text.split(None, 1)
+    # If replying to a message — broadcast that message (any media type)
+    if m.reply_to_message:
+        reply = m.reply_to_message
+        logger.info(f"BROADCAST: Admin {m.from_user.id} broadcasting replied message")
+        await _safe_reply(m, format_broadcast_started(), parse_mode="HTML")
+        asyncio.create_task(
+            run_broadcast(bot, m.from_user.id, reply_to_msg=reply)
+        )
+        return
+
+    # Otherwise broadcast text from command
+    parts = (m.text or "").split(None, 1)
     if len(parts) < 2 or not parts[1].strip():
         await _safe_reply(
             m,
-            "Usage: /broadcast Your message here",
+            "Usage:\n"
+            "/broadcast Your message here\n\n"
+            "Or reply to any message with /broadcast to broadcast it.",
             parse_mode="HTML",
         )
         return
 
     broadcast_text = parts[1].strip()
-    logger.info(f"BROADCAST: Admin {m.from_user.id} starting broadcast: {broadcast_text[:50]}")
+    logger.info(f"BROADCAST: Admin {m.from_user.id} starting text broadcast: {broadcast_text[:50]}")
 
     await _safe_reply(m, format_broadcast_started(), parse_mode="HTML")
 
@@ -482,7 +502,7 @@ async def cmd_broadcast(m: Message):
 
 @dp.message(Command("broadcast_media"))
 async def cmd_broadcast_media(m: Message):
-    """Broadcast media (reply to media). Admin only."""
+    """Broadcast media (reply to media). Admin only. Legacy — use /broadcast instead."""
     if not _is_admin(m.from_user.id):
         await _safe_reply(m, "⛔ You are not authorized.", parse_mode="HTML")
         return
@@ -495,6 +515,7 @@ async def cmd_broadcast_media(m: Message):
     has_media = any([
         reply.photo, reply.video, reply.audio,
         reply.document, reply.animation, reply.voice,
+        reply.sticker,
     ])
 
     if not has_media and not reply.text:
@@ -506,6 +527,134 @@ async def cmd_broadcast_media(m: Message):
     asyncio.create_task(
         run_broadcast(bot, m.from_user.id, reply_to_msg=reply)
     )
+
+
+# ─── /assign — Visual emoji assignment system ─────────────────────────────────
+
+# Redis key prefix for emoji assignments
+_EMOJI_KEY_PREFIX = "emoji:"
+
+# In-memory pending assignment state: user_id → emoji_key
+_assign_pending: dict = {}
+
+
+async def _get_configured_emoji_keys() -> set:
+    """Get set of emoji keys that have been configured in Redis"""
+    configured = set()
+    for key in EMOJI_POSITIONS.keys():
+        redis_key = f"{_EMOJI_KEY_PREFIX}{key}"
+        val = await redis_client.get(redis_key)
+        if val:
+            configured.add(key)
+    return configured
+
+
+async def _build_assign_keyboard(configured_keys: set) -> InlineKeyboardMarkup:
+    """Build inline keyboard for emoji assignment menu"""
+    rows = []
+    for key, label in EMOJI_POSITIONS.items():
+        action = "Change" if key in configured_keys else "Set"
+        rows.append([
+            InlineKeyboardButton(
+                text=f"{action} {label}",
+                callback_data=f"assign:{key}",
+            )
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@dp.message(Command("assign"))
+async def cmd_assign(m: Message):
+    """Visual emoji assignment system — admin only"""
+    if not _is_admin(m.from_user.id):
+        await _safe_reply(m, "⛔ You are not authorized.", parse_mode="HTML")
+        return
+
+    configured = await _get_configured_emoji_keys()
+    keyboard = await _build_assign_keyboard(configured)
+    menu_text = format_assign_menu(configured)
+
+    # If any position is configured, show a sticker preview for the first one
+    for key in EMOJI_POSITIONS.keys():
+        if key in configured:
+            file_id = await redis_client.get(f"{_EMOJI_KEY_PREFIX}{key}")
+            if file_id:
+                try:
+                    await bot.send_sticker(m.chat.id, file_id)
+                except Exception:
+                    pass
+            break
+
+    await _safe_reply(m, menu_text, reply_markup=keyboard, parse_mode="HTML")
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("assign:"))
+async def cb_assign(callback):
+    """Handle emoji assignment button tap"""
+    if not _is_admin(callback.from_user.id):
+        await callback.answer("⛔ Unauthorized", show_alert=True)
+        return
+
+    key = callback.data.split(":", 1)[1]
+    if key not in EMOJI_POSITIONS:
+        await callback.answer("Invalid position.", show_alert=True)
+        return
+
+    label = EMOJI_POSITIONS[key]
+    await callback.answer()
+
+    # Store pending assignment
+    _assign_pending[callback.from_user.id] = key
+
+    try:
+        await callback.message.reply(
+            format_assign_prompt(label),
+            parse_mode="HTML",
+        )
+    except Exception:
+        try:
+            await bot.send_message(
+                callback.message.chat.id,
+                format_assign_prompt(label),
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+
+
+@dp.message(lambda m: m.sticker and m.from_user and m.from_user.id in _assign_pending)
+async def handle_assign_sticker(m: Message):
+    """Receive sticker for emoji assignment"""
+    if not _is_admin(m.from_user.id):
+        return
+
+    key = _assign_pending.pop(m.from_user.id, None)
+    if not key or key not in EMOJI_POSITIONS:
+        return
+
+    file_id = m.sticker.file_id
+    redis_key = f"{_EMOJI_KEY_PREFIX}{key}"
+    await redis_client.set(redis_key, file_id)
+
+    label = EMOJI_POSITIONS[key]
+    logger.info(f"ASSIGN: Admin {m.from_user.id} set {key} = {file_id[:20]}...")
+
+    await _safe_reply(m, format_assign_updated(), parse_mode="HTML")
+
+    # Refresh the assign menu
+    await asyncio.sleep(0.3)
+    configured = await _get_configured_emoji_keys()
+    keyboard = await _build_assign_keyboard(configured)
+    menu_text = format_assign_menu(configured)
+    try:
+        await bot.send_message(
+            m.chat.id,
+            menu_text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
 
 
 # ─── Group registration ───────────────────────────────────────────────────────
