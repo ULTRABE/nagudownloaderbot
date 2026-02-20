@@ -392,15 +392,41 @@ def format_broadcast_report(total_users: int, total_groups: int, success: int, f
 # ─── Emoji assign system ──────────────────────────────────────────────────────
 
 # Emoji position definitions: internal_key → display_label
+# Covers ALL keys from core/emoji_config.py and ui/emoji_config.py
 EMOJI_POSITIONS = {
-    "DELIVERED":  "✓ Delivered",
-    "ERROR":      "⚠ Error",
-    "MUSIC":      "🎵 Music",
-    "BROADCAST":  "📢 Broadcast",
-    "PINTEREST":  "📌 Pinterest",
+    # Platform stickers
     "YOUTUBE":    "🎬 YouTube",
     "INSTAGRAM":  "📸 Instagram",
+    "PINTEREST":  "📌 Pinterest",
+    "MUSIC":      "🎵 Music",
+    "VIDEO":      "🎥 Video",
     "SPOTIFY":    "🎧 Spotify",
+    "PLAYLIST":   "🎶 Playlist",
+    # Status indicators
+    "DELIVERED":  "✓ Delivered",
+    "SUCCESS":    "✅ Success",
+    "ERROR":      "⚠ Error",
+    "PROCESS":    "⏳ Processing",
+    "FAST":       "⚡ Fast",
+    "DOWNLOAD":   "📥 Download",
+    "COMPLETE":   "🎉 Complete",
+    "LOADING":    "⏳ Loading",
+    "CHECK":      "✅ Check",
+    # Commands / UI
+    "BROADCAST":  "📢 Broadcast",
+    "INFO":       "ℹ Info",
+    "ID":         "🆔 ID",
+    "USER":       "👤 User",
+    "PING":       "🏓 Ping",
+    "PIN":        "📌 Pin",
+    # Decorative
+    "STAR":       "⭐ Star",
+    "FIRE":       "🔥 Fire",
+    "ROCKET":     "🚀 Rocket",
+    "CROWN":      "👑 Crown",
+    "DIAMOND":    "💎 Diamond",
+    "ZAP":        "⚡ Zap",
+    "WAVE":       "👋 Wave",
 }
 
 
