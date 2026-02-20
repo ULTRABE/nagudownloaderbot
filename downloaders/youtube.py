@@ -596,9 +596,10 @@ async def handle_youtube_normal(m: Message, url: str):
     ]])
 
     # Minimal status — just the format picker, no progress bar
+    _yt = await get_emoji_async("YT")
     try:
         status = await m.reply(
-            "Choose format:",
+            f"{_yt} <b>𝐂𝐡𝐨𝐨𝐬𝐞 𝐅𝐨𝐫𝐦𝐚𝐭</b>",
             reply_markup=keyboard,
             parse_mode="HTML",
         )
@@ -608,7 +609,7 @@ async def handle_youtube_normal(m: Message, url: str):
             try:
                 status = await bot.send_message(
                     m.chat.id,
-                    "Choose format:",
+                    f"{_yt} <b>𝐂𝐡𝐨𝐨𝐬𝐞 𝐅𝐨𝐫𝐦𝐚𝐭</b>",
                     reply_markup=keyboard,
                     parse_mode="HTML",
                 )
@@ -957,17 +958,19 @@ async def handle_youtube_playlist(m: Message, url: str):
                 url=f"https://t.me/{bot_me.username}?start=playlist",
             )
         ]])
+        _info = await get_emoji_async("INFO")
         await _safe_reply_text(
             m,
-            "Start bot to receive playlist in DM",
+            f"{_info} <b>𝐒𝐭𝐚𝐫𝐭 𝐁𝐨𝐭 𝐅𝐢𝐫𝐬𝐭</b>\n\nStart the bot to receive playlist tracks in DM.\n\nTap below, then resend the playlist link 👇",
             reply_markup=keyboard,
             parse_mode="HTML",
         )
         return
 
     # Fetch playlist info
+    _proc = await get_emoji_async("PROCESS")
     try:
-        status_msg = await _safe_reply_text(m, "𝐋𝐨𝐚𝐝𝐢𝐧𝐠 𝐩𝐥𝐚𝐲𝐥𝐢𝐬𝐭...", parse_mode="HTML")
+        status_msg = await _safe_reply_text(m, f"{_proc} <b>𝐋𝐨𝐚𝐝𝐢𝐧𝐠 𝐏𝐥𝐚𝐲𝐥𝐢𝐬𝐭...</b>", parse_mode="HTML")
     except Exception:
         status_msg = None
 
@@ -1167,14 +1170,28 @@ async def _run_yt_playlist_audio(callback: CallbackQuery, job_key: str, job: dic
         total = len(entries)
 
         # Send progress message in original chat
+        _music = await get_emoji_async("MUSIC")
         try:
             progress_msg = await bot.send_message(
                 chat_id,
-                f"𝐏ʟᴀʏʟɪꜱᴛ: {playlist_name}\n\n{_bar(0)}\n0 / {total}",
+                f"{_music} <b>𝐏ʟᴀʏʟɪꜱᴛ:</b> {playlist_name}\n\n{_bar(0)}\n0 / {total}",
                 parse_mode="HTML",
             )
         except Exception:
             progress_msg = None
+
+        # DM start notification
+        try:
+            await bot.send_message(
+                user_id,
+                f"{_music} <b>𝐏ʟᴀʏʟɪꜱᴛ 𝐒𝐭𝐚𝐫𝐭𝐞𝐝</b>\n\n"
+                f"<b>{playlist_name}</b>\n"
+                f"Tracks: {total}\n\n"
+                f"Songs will appear here one by one.",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
 
         sent_count = 0
         failed_count = 0
@@ -1234,7 +1251,7 @@ async def _run_yt_playlist_audio(callback: CallbackQuery, job_key: str, job: dic
                 pct = min(100, int(total_done * 100 / total)) if total > 0 else 0
                 try:
                     await progress_msg.edit_text(
-                        f"𝐏ʟᴀʏʟɪꜱᴛ: {playlist_name}\n\n{_bar(pct)}\n{total_done} / {total}",
+                        f"{_music} <b>𝐏ʟᴀʏʟɪꜱᴛ:</b> {playlist_name}\n\n{_bar(pct)}\n{total_done} / {total}",
                         parse_mode="HTML",
                     )
                 except Exception:
@@ -1244,7 +1261,7 @@ async def _run_yt_playlist_audio(callback: CallbackQuery, job_key: str, job: dic
         if progress_msg:
             try:
                 await progress_msg.edit_text(
-                    format_yt_playlist_final(playlist_name, total, sent_count, failed_count),
+                    await format_yt_playlist_final(playlist_name, total, sent_count, failed_count),
                     parse_mode="HTML",
                 )
             except Exception:
@@ -1261,7 +1278,15 @@ async def _run_yt_playlist_audio(callback: CallbackQuery, job_key: str, job: dic
 
         # DM completion
         try:
-            await bot.send_message(user_id, "𝐏ʟᴀʏʟɪꜱᴛ 𝐃𝐞𝐥𝐢𝐯𝐞𝐫𝐞𝐝.", parse_mode="HTML")
+            _complete = await get_emoji_async("COMPLETE")
+            await bot.send_message(
+                user_id,
+                f"{_complete} <b>𝐏ʟᴀʏʟɪꜱᴛ 𝐃𝐞𝐥𝐢𝐯𝐞𝐫𝐞𝐝</b>\n\n"
+                f"<b>{playlist_name}</b>\n"
+                f"Sent: {sent_count} / {total}\n\n"
+                f"Enjoy your music! {_music}",
+                parse_mode="HTML",
+            )
         except Exception:
             pass
 
@@ -1291,14 +1316,28 @@ async def _run_yt_playlist_video(callback: CallbackQuery, job_key: str, job: dic
         total = len(entries)
 
         # Send progress message in original chat
+        _yt = await get_emoji_async("YT")
         try:
             progress_msg = await bot.send_message(
                 chat_id,
-                f"𝐏ʟᴀʏʟɪꜱᴛ: {playlist_name}\n\n{_bar(0)}\n0 / {total}",
+                f"{_yt} <b>𝐏ʟᴀʏʟɪꜱᴛ:</b> {playlist_name}\n\n{_bar(0)}\n0 / {total}",
                 parse_mode="HTML",
             )
         except Exception:
             progress_msg = None
+
+        # DM start notification
+        try:
+            await bot.send_message(
+                user_id,
+                f"{_yt} <b>𝐏ʟᴀʏʟɪꜱᴛ 𝐒𝐭𝐚𝐫𝐭𝐞𝐝</b>\n\n"
+                f"<b>{playlist_name}</b>\n"
+                f"Videos: {total}\n\n"
+                f"Videos will appear here one by one.",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
 
         sent_count = 0
         failed_count = 0
@@ -1360,7 +1399,7 @@ async def _run_yt_playlist_video(callback: CallbackQuery, job_key: str, job: dic
                 pct = min(100, int(total_done * 100 / total)) if total > 0 else 0
                 try:
                     await progress_msg.edit_text(
-                        f"𝐏ʟᴀʏʟɪꜱᴛ: {playlist_name}\n\n{_bar(pct)}\n{total_done} / {total}",
+                        f"{_yt} <b>𝐏ʟᴀʏʟɪꜱᴛ:</b> {playlist_name}\n\n{_bar(pct)}\n{total_done} / {total}",
                         parse_mode="HTML",
                     )
                 except Exception:
@@ -1387,7 +1426,15 @@ async def _run_yt_playlist_video(callback: CallbackQuery, job_key: str, job: dic
 
         # DM completion
         try:
-            await bot.send_message(user_id, "𝐏ʟᴀʏʟɪꜱᴛ 𝐃𝐞𝐥𝐢𝐯𝐞𝐫𝐞𝐝.", parse_mode="HTML")
+            _complete = await get_emoji_async("COMPLETE")
+            await bot.send_message(
+                user_id,
+                f"{_complete} <b>𝐏ʟᴀʏʟɪꜱᴛ 𝐃𝐞𝐥𝐢𝐯𝐞𝐫𝐞𝐝</b>\n\n"
+                f"<b>{playlist_name}</b>\n"
+                f"Sent: {sent_count} / {total}\n\n"
+                f"Enjoy your videos! {_yt}",
+                parse_mode="HTML",
+            )
         except Exception:
             pass
 
