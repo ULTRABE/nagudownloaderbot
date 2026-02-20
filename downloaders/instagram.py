@@ -1,13 +1,14 @@
 """
-Instagram Downloader — Fast delivery with cache + smart encode.
+Instagram Downloader — Silent delivery with cache + smart encode.
 
 Flow:
   1. Send sticker (if enabled)
-  2. Show: ⚡ Fetching Media...
-  3. Download with layered extraction
-  4. Delete sticker + progress message
-  5. Send video — reply to original
-  6. Caption: ✓ Delivered — <mention>
+  2. Download silently (no progress messages)
+  3. Delete sticker after delivery
+  4. Send video — reply to original (with fallback to plain send)
+  5. Caption: ✓ Delivered — <mention>
+
+No progress messages for Instagram.
 """
 import asyncio
 import glob
@@ -91,16 +92,58 @@ async def download_instagram(url: str, tmp: Path) -> Optional[Path]:
             return result
     return None
 
+# ─── Safe reply helper ────────────────────────────────────────────────────────
+
+async def _safe_reply_video(m: Message, **kwargs) -> Optional[Message]:
+    """
+    Try to reply to original message. If message not found, send normally.
+    Wraps every reply in try/except to prevent crashes.
+    """
+    try:
+        return await bot.send_video(
+            m.chat.id,
+            reply_to_message_id=m.message_id,
+            **kwargs,
+        )
+    except Exception as e:
+        err_str = str(e).lower()
+        if "message to be replied not found" in err_str or "bad request" in err_str:
+            try:
+                return await bot.send_video(m.chat.id, **kwargs)
+            except Exception as e2:
+                logger.error(f"IG send_video fallback failed: {e2}")
+                return None
+        logger.error(f"IG send_video failed: {e}")
+        return None
+
+async def _safe_reply_text(m: Message, text: str, **kwargs) -> Optional[Message]:
+    """
+    Try to reply to original message. If message not found, send normally.
+    """
+    try:
+        return await m.reply(text, **kwargs)
+    except Exception as e:
+        err_str = str(e).lower()
+        if "message to be replied not found" in err_str or "bad request" in err_str:
+            try:
+                return await bot.send_message(m.chat.id, text, **kwargs)
+            except Exception as e2:
+                logger.error(f"IG send_message fallback failed: {e2}")
+                return None
+        logger.error(f"IG reply failed: {e}")
+        return None
+
 # ─── Main handler ─────────────────────────────────────────────────────────────
 
 async def handle_instagram(m: Message, url: str):
     """
     Download Instagram posts, reels, stories.
     Cache-first → stream copy → adaptive encode.
+    Silent processing — no progress messages.
     Reply to original message with ✓ Delivered — <mention>.
     """
     if not await acquire_user_slot(m.from_user.id, config.MAX_CONCURRENT_PER_USER):
-        await m.reply("⏳ You have downloads in progress. Please wait.", parse_mode="HTML")
+        await _safe_reply_text(m, "⏳ You have downloads in progress. Please wait.", parse_mode="HTML")
         return
 
     user_id = m.from_user.id
@@ -114,51 +157,35 @@ async def handle_instagram(m: Message, url: str):
         cached = await url_cache.get(url, "video")
         if cached:
             try:
-                await bot.send_video(
-                    m.chat.id,
-                    cached,
+                sent = await _safe_reply_video(
+                    m,
+                    video=cached,
                     caption=delivered_caption,
                     parse_mode="HTML",
-                    reply_to_message_id=m.message_id,
                     supports_streaming=True,
                 )
-                return
+                if sent:
+                    return
             except Exception:
                 pass  # Stale cache — fall through
 
         async with download_semaphore:
             logger.info(f"INSTAGRAM: {url}")
 
-            # Send sticker
+            # Send sticker — no progress text message
             sticker_msg_id = await send_sticker(bot, m.chat.id, "instagram")
-
-            # Processing message
-            status = await m.reply("⚡ Fetching Media...", parse_mode="HTML")
 
             try:
                 with tempfile.TemporaryDirectory() as tmp_dir:
                     tmp = Path(tmp_dir)
 
-                    # Animate progress
-                    async def _animate():
-                        await asyncio.sleep(2)
-                        try:
-                            await status.edit_text(
-                                "Optimizing for fast delivery...",
-                                parse_mode="HTML",
-                            )
-                        except Exception:
-                            pass
-
-                    anim_task = asyncio.create_task(_animate())
-
                     video_file = await download_instagram(url, tmp)
-                    anim_task.cancel()
 
-                    if not video_file:
+                    if not video_file or not video_file.exists():
                         await delete_sticker(bot, m.chat.id, sticker_msg_id)
-                        await status.delete()
-                        await m.reply(
+                        sticker_msg_id = None
+                        await _safe_reply_text(
+                            m,
                             "⚠ Unable to process this link.\n\nPlease try again.",
                             parse_mode="HTML",
                         )
@@ -169,22 +196,28 @@ async def handle_instagram(m: Message, url: str):
                     ok = await instagram_smart_encode(video_file, encoded)
                     final = encoded if ok and encoded.exists() else video_file
 
+                    # File size check
+                    file_size_mb = final.stat().st_size / (1024 * 1024)
+                    if file_size_mb > config.TG_VIDEO_LIMIT_MB * 2:
+                        logger.warning(f"IG: File too large ({file_size_mb:.1f}MB), splitting")
+
                     parts = await ensure_fits_telegram(final, tmp)
 
-                    # Delete sticker + progress
+                    # Delete sticker before sending
                     await delete_sticker(bot, m.chat.id, sticker_msg_id)
                     sticker_msg_id = None
-                    await status.delete()
 
                     for i, part in enumerate(parts):
+                        if not part.exists():
+                            logger.warning(f"IG: Part {i} does not exist, skipping")
+                            continue
                         info = await get_video_info(part)
                         cap = delivered_caption if i == len(parts) - 1 else f"Part {i+1}/{len(parts)}"
-                        sent = await bot.send_video(
-                            m.chat.id,
-                            FSInputFile(part),
+                        sent = await _safe_reply_video(
+                            m,
+                            video=FSInputFile(part),
                             caption=cap,
                             parse_mode="HTML",
-                            reply_to_message_id=m.message_id,
                             supports_streaming=True,
                             width=info.get("width") or None,
                             height=info.get("height") or None,
@@ -199,14 +232,11 @@ async def handle_instagram(m: Message, url: str):
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.error(f"INSTAGRAM ERROR: {e}")
+                logger.error(f"INSTAGRAM ERROR: {e}", exc_info=True)
                 await delete_sticker(bot, m.chat.id, sticker_msg_id)
                 sticker_msg_id = None
-                try:
-                    await status.delete()
-                except Exception:
-                    pass
-                await m.reply(
+                await _safe_reply_text(
+                    m,
                     "⚠ Unable to process this link.\n\nPlease try again.",
                     parse_mode="HTML",
                 )

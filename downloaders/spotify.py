@@ -64,11 +64,17 @@ async def handle_spotify_single(m: Message, url: str):
     DM:    🎵 Processing Track... → audio → 🎵 Track Ready
     """
     if not config.SPOTIFY_CLIENT_ID or not config.SPOTIFY_CLIENT_SECRET:
-        await m.reply("⚠ Unable to process this link.\n\nPlease try again.", parse_mode="HTML")
+        try:
+            await m.reply("⚠ Unable to process this link.\n\nPlease try again.", parse_mode="HTML")
+        except Exception:
+            await bot.send_message(m.chat.id, "⚠ Unable to process this link.\n\nPlease try again.", parse_mode="HTML")
         return
 
     is_group = m.chat.type in ("group", "supergroup")
-    status = await m.reply("🎵 Processing Track...", parse_mode="HTML")
+    try:
+        status = await m.reply("🎵 Processing Track...", parse_mode="HTML")
+    except Exception:
+        status = await bot.send_message(m.chat.id, "🎵 Processing Track...", parse_mode="HTML")
 
     try:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -182,15 +188,22 @@ async def handle_spotify_single(m: Message, url: str):
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        logger.error(f"SPOTIFY SINGLE ERROR: {e}")
+        logger.error(f"SPOTIFY SINGLE ERROR: {e}", exc_info=True)
         try:
             await status.delete()
         except Exception:
             pass
-        await m.reply(
-            "⚠ Unable to process this link.\n\nPlease try again.",
-            parse_mode="HTML",
-        )
+        try:
+            await m.reply(
+                "⚠ Unable to process this link.\n\nPlease try again.",
+                parse_mode="HTML",
+            )
+        except Exception:
+            await bot.send_message(
+                m.chat.id,
+                "⚠ Unable to process this link.\n\nPlease try again.",
+                parse_mode="HTML",
+            )
 
 # ─── Playlist watcher ─────────────────────────────────────────────────────────
 
@@ -556,7 +569,7 @@ async def handle_spotify_playlist(m: Message, url: str):
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.error(f"SPOTIFY PLAYLIST ERROR: {e}", exc_info=True)
+            logger.error(f"SPOTIFY PLAYLIST ERROR: {e}", exc_info=True)  # noqa: already correct
             try:
                 await progress_msg.edit_text(
                     "⚠ Unable to process this link.\n\nPlease try again.",

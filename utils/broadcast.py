@@ -3,20 +3,23 @@ Broadcast system — admin-only mass messaging.
 
 Features:
   - Send to all private users + all groups
-  - Handle blocked users silently (remove from list)
-  - Rate limit: ~20 messages/sec
+  - Handle blocked/deactivated users silently (remove from list)
+  - Semaphore to avoid flood limits (max 20 msg/sec)
+  - TelegramRetryAfter: respect retry_after delay
   - Pin in groups (ignore failure silently)
-  - Delivery report sent to admin
+  - Delivery report sent to admin (total sent, failed, blocked removed)
   - Runs in background (non-blocking)
+  - Safe iteration — snapshot list before iterating
 """
 import asyncio
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 from aiogram import Bot
 from aiogram.types import Message
 from aiogram.exceptions import (
     TelegramForbiddenError,
     TelegramBadRequest,
     TelegramRetryAfter,
+    TelegramNotFound,
 )
 from utils.redis_client import redis_client
 from utils.logger import logger
@@ -28,39 +31,69 @@ from ui.formatting import format_broadcast_report
 USERS_SET_KEY  = "broadcast:users"
 GROUPS_SET_KEY = "broadcast:groups"
 
+# ─── Semaphore for flood control ──────────────────────────────────────────────
+# Telegram allows ~30 messages/sec globally; we use 20 to be safe
+_BROADCAST_SEMAPHORE = asyncio.Semaphore(20)
+
 # ─── Registration ─────────────────────────────────────────────────────────────
 
 async def register_user(user_id: int):
     """Register private user for broadcasts"""
-    await redis_client.sadd(USERS_SET_KEY, str(user_id))
+    try:
+        await redis_client.sadd(USERS_SET_KEY, str(user_id))
+    except Exception as e:
+        logger.debug(f"register_user failed: {e}")
 
 async def register_group(chat_id: int):
     """Register group for broadcasts"""
-    await redis_client.sadd(GROUPS_SET_KEY, str(chat_id))
+    try:
+        await redis_client.sadd(GROUPS_SET_KEY, str(chat_id))
+    except Exception as e:
+        logger.debug(f"register_group failed: {e}")
 
 async def unregister_user(user_id: int):
-    """Remove blocked user from broadcast list"""
-    await redis_client.srem(USERS_SET_KEY, str(user_id))
+    """Remove blocked/dead user from broadcast list"""
+    try:
+        await redis_client.srem(USERS_SET_KEY, str(user_id))
+    except Exception as e:
+        logger.debug(f"unregister_user failed: {e}")
 
-async def get_all_users() -> list:
-    members = await redis_client.smembers(USERS_SET_KEY)
-    result = []
-    for m in members:
-        try:
-            result.append(int(m))
-        except (ValueError, TypeError):
-            pass
-    return result
+async def unregister_group(chat_id: int):
+    """Remove dead group from broadcast list"""
+    try:
+        await redis_client.srem(GROUPS_SET_KEY, str(chat_id))
+    except Exception as e:
+        logger.debug(f"unregister_group failed: {e}")
 
-async def get_all_groups() -> list:
-    members = await redis_client.smembers(GROUPS_SET_KEY)
-    result = []
-    for m in members:
-        try:
-            result.append(int(m))
-        except (ValueError, TypeError):
-            pass
-    return result
+async def get_all_users() -> List[int]:
+    """Get snapshot of all registered user IDs"""
+    try:
+        members = await redis_client.smembers(USERS_SET_KEY)
+        result = []
+        for m in members:
+            try:
+                result.append(int(m))
+            except (ValueError, TypeError):
+                pass
+        return result
+    except Exception as e:
+        logger.error(f"get_all_users failed: {e}")
+        return []
+
+async def get_all_groups() -> List[int]:
+    """Get snapshot of all registered group IDs"""
+    try:
+        members = await redis_client.smembers(GROUPS_SET_KEY)
+        result = []
+        for m in members:
+            try:
+                result.append(int(m))
+            except (ValueError, TypeError):
+                pass
+        return result
+    except Exception as e:
+        logger.error(f"get_all_groups failed: {e}")
+        return []
 
 # ─── Send one message ─────────────────────────────────────────────────────────
 
@@ -72,46 +105,67 @@ async def _send_one(
     pin: bool = False,
 ) -> Tuple[bool, Optional[str]]:
     """
-    Send one broadcast message.
+    Send one broadcast message with flood control.
     Returns (success, error_reason).
     """
-    try:
-        if reply_to_msg:
-            sent = await bot.copy_message(
-                chat_id=chat_id,
-                from_chat_id=reply_to_msg.chat.id,
-                message_id=reply_to_msg.message_id,
-            )
-        else:
-            sent = await bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                parse_mode="HTML",
-            )
-
-        # Pin in groups — ignore failure silently
-        if pin and sent:
-            try:
-                await bot.pin_chat_message(
+    async with _BROADCAST_SEMAPHORE:
+        try:
+            if reply_to_msg:
+                sent = await bot.copy_message(
                     chat_id=chat_id,
-                    message_id=sent.message_id,
-                    disable_notification=True,
+                    from_chat_id=reply_to_msg.chat.id,
+                    message_id=reply_to_msg.message_id,
                 )
-            except Exception:
-                pass
+            else:
+                sent = await bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    parse_mode="HTML",
+                )
 
-        return True, None
+            # Pin in groups — ignore failure silently
+            if pin and sent:
+                try:
+                    await bot.pin_chat_message(
+                        chat_id=chat_id,
+                        message_id=sent.message_id,
+                        disable_notification=True,
+                    )
+                except Exception:
+                    pass
 
-    except TelegramForbiddenError:
-        return False, "blocked"
-    except TelegramBadRequest as e:
-        return False, f"bad_request:{str(e)[:50]}"
-    except TelegramRetryAfter as e:
-        # Respect flood control
-        await asyncio.sleep(e.retry_after + 1)
-        return False, f"retry_after:{e.retry_after}"
-    except Exception as e:
-        return False, str(e)[:80]
+            return True, None
+
+        except TelegramRetryAfter as e:
+            # Respect flood control — wait and retry once
+            wait_time = e.retry_after + 1
+            logger.warning(f"Broadcast flood control: waiting {wait_time}s for chat {chat_id}")
+            await asyncio.sleep(wait_time)
+            try:
+                if reply_to_msg:
+                    await bot.copy_message(
+                        chat_id=chat_id,
+                        from_chat_id=reply_to_msg.chat.id,
+                        message_id=reply_to_msg.message_id,
+                    )
+                else:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=text,
+                        parse_mode="HTML",
+                    )
+                return True, None
+            except Exception as retry_e:
+                return False, f"retry_failed:{str(retry_e)[:50]}"
+
+        except TelegramForbiddenError:
+            return False, "blocked"
+        except TelegramNotFound:
+            return False, "not_found"
+        except TelegramBadRequest as e:
+            return False, f"bad_request:{str(e)[:50]}"
+        except Exception as e:
+            return False, str(e)[:80]
 
 # ─── Broadcast engine ─────────────────────────────────────────────────────────
 
@@ -124,7 +178,14 @@ async def run_broadcast(
     """
     Run full broadcast to all users and groups.
     Runs in background — sends delivery report to admin when done.
+
+    Safety:
+    - Snapshot user/group lists before iterating (safe iteration)
+    - Remove blocked/dead users automatically
+    - Semaphore prevents flood
+    - Rate limit between messages
     """
+    # Snapshot lists before iterating — safe against concurrent modifications
     users  = await get_all_users()
     groups = await get_all_groups()
 
@@ -132,45 +193,68 @@ async def run_broadcast(
     total_groups = len(groups)
     success = 0
     failed  = 0
-    blocked_users = []
+    blocked_users: List[int] = []
+    dead_groups: List[int] = []
 
     logger.info(f"Broadcast started: {total_users} users, {total_groups} groups")
 
     # Send to private users
     for user_id in users:
-        ok, reason = await _send_one(bot, user_id, text=text, reply_to_msg=reply_to_msg)
-        if ok:
-            success += 1
-        else:
+        try:
+            ok, reason = await _send_one(bot, user_id, text=text, reply_to_msg=reply_to_msg)
+            if ok:
+                success += 1
+            else:
+                failed += 1
+                if reason in ("blocked", "not_found"):
+                    blocked_users.append(user_id)
+                    logger.debug(f"Broadcast: removing dead user {user_id} ({reason})")
+        except Exception as e:
             failed += 1
-            if reason == "blocked":
-                blocked_users.append(user_id)
+            logger.error(f"Broadcast user {user_id} error: {e}")
         await asyncio.sleep(config.BROADCAST_RATE_LIMIT)
 
-    # Remove blocked users
+    # Remove blocked/dead users automatically
     for uid in blocked_users:
         await unregister_user(uid)
 
+    if blocked_users:
+        logger.info(f"Broadcast: removed {len(blocked_users)} dead users")
+
     # Send to groups (with pin attempt)
     for chat_id in groups:
-        ok, reason = await _send_one(
-            bot, chat_id,
-            text=text,
-            reply_to_msg=reply_to_msg,
-            pin=True,
-        )
-        if ok:
-            success += 1
-        else:
+        try:
+            ok, reason = await _send_one(
+                bot, chat_id,
+                text=text,
+                reply_to_msg=reply_to_msg,
+                pin=True,
+            )
+            if ok:
+                success += 1
+            else:
+                failed += 1
+                if reason in ("blocked", "not_found"):
+                    dead_groups.append(chat_id)
+                    logger.debug(f"Broadcast: removing dead group {chat_id} ({reason})")
+        except Exception as e:
             failed += 1
+            logger.error(f"Broadcast group {chat_id} error: {e}")
         await asyncio.sleep(config.BROADCAST_RATE_LIMIT)
+
+    # Remove dead groups automatically
+    for gid in dead_groups:
+        await unregister_group(gid)
+
+    if dead_groups:
+        logger.info(f"Broadcast: removed {len(dead_groups)} dead groups")
 
     stats = {
         "total_users":  total_users,
         "total_groups": total_groups,
         "success":      success,
         "failed":       failed,
-        "blocked_removed": len(blocked_users),
+        "blocked_removed": len(blocked_users) + len(dead_groups),
     }
 
     logger.info(f"Broadcast complete: {stats}")
