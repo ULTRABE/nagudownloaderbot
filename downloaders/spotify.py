@@ -130,11 +130,12 @@ async def _get_spotify_token() -> Optional[str]:
         logger.error(f"Spotify token fetch error: {e}", exc_info=True)
         return None
 
-async def _fetch_playlist_tracks(playlist_id: str, is_album: bool = False) -> List[str]:
+async def _fetch_playlist_tracks_api(playlist_id: str, is_album: bool = False) -> List[str]:
     """
     Fetch all track URLs from a Spotify playlist or album using the API.
     Returns list of track URLs (https://open.spotify.com/track/ID).
     Uses pagination (limit=100 per page).
+    NOTE: Does NOT work for Spotify-curated playlists (Daily Mix, Discover Weekly, etc.)
     """
     token = await _get_spotify_token()
     if not token:
@@ -190,6 +191,64 @@ async def _fetch_playlist_tracks(playlist_id: str, is_album: bool = False) -> Li
 
     return track_urls
 
+
+async def _fetch_playlist_tracks_spotdl(playlist_url: str) -> List[str]:
+    """
+    Fetch track URLs from a Spotify playlist using spotdl --print-errors.
+    Works for ALL playlist types including Spotify-curated playlists.
+    Returns list of track URLs.
+    """
+    try:
+        cmd = [
+            "spotdl", "url", playlist_url,
+            "--client-id", config.SPOTIFY_CLIENT_ID,
+            "--client-secret", config.SPOTIFY_CLIENT_SECRET,
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+                await asyncio.wait_for(proc.communicate(), timeout=5)
+            except Exception:
+                pass
+            logger.warning("spotdl url timeout")
+            return []
+
+        if stdout:
+            lines = stdout.decode(errors="replace").strip().splitlines()
+            urls = [line.strip() for line in lines if line.strip().startswith("https://open.spotify.com/track/")]
+            logger.info(f"Spotify: spotdl url found {len(urls)} tracks")
+            return urls
+
+        return []
+    except Exception as e:
+        logger.error(f"spotdl url error: {e}", exc_info=True)
+        return []
+
+
+async def _fetch_playlist_tracks(playlist_id: str, is_album: bool = False, playlist_url: str = "") -> List[str]:
+    """
+    Fetch all track URLs from a Spotify playlist or album.
+    Tries Spotify API first, falls back to spotdl for curated playlists.
+    """
+    # Try API first
+    track_urls = await _fetch_playlist_tracks_api(playlist_id, is_album=is_album)
+    if track_urls:
+        return track_urls
+
+    # Fallback: use spotdl to get track URLs (works for curated playlists)
+    if playlist_url:
+        logger.info("Spotify: API returned no tracks, trying spotdl fallback")
+        track_urls = await _fetch_playlist_tracks_spotdl(playlist_url)
+
+    return track_urls
+
 # ─── Safe reply helpers ───────────────────────────────────────────────────────
 
 async def _safe_reply(m: Message, text: str, **kwargs) -> Optional[Message]:
@@ -198,7 +257,7 @@ async def _safe_reply(m: Message, text: str, **kwargs) -> Optional[Message]:
         return await m.reply(text, **kwargs)
     except Exception as e:
         err_str = str(e).lower()
-        if "message to be replied not found" in err_str or "bad request" in err_str:
+        if "message to be replied not found" in err_str or "replied message not found" in err_str:
             try:
                 return await bot.send_message(m.chat.id, text, **kwargs)
             except Exception as e2:
@@ -231,16 +290,15 @@ async def _download_track(url: str, tmp: Path) -> Optional[Path]:
     """
     Download a single Spotify track using spotdl.
     Returns path to MP3 file or None on failure.
-    Uses 192k bitrate, ultrafast preset.
+    Uses 192k bitrate.
     """
     cmd = [
         "spotdl", "download", url,
         "--client-id", config.SPOTIFY_CLIENT_ID,
         "--client-secret", config.SPOTIFY_CLIENT_SECRET,
-        "--output", str(tmp),
+        "--output", "{title} - {artists}",
         "--format", "mp3",
         "--bitrate", "192k",
-        "--threads", "4",
         "--no-cache",
     ]
 
@@ -249,6 +307,7 @@ async def _download_track(url: str, tmp: Path) -> Optional[Path]:
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            cwd=str(tmp),  # Run in tmp dir so files are created there
         )
 
         try:
@@ -265,12 +324,20 @@ async def _download_track(url: str, tmp: Path) -> Optional[Path]:
             logger.warning(f"spotdl timeout for {url}")
             return None
 
-        mp3_files = sorted(tmp.glob("*.mp3"))
-        if mp3_files:
-            return mp3_files[0]
+        # Check for any audio files (spotdl may produce mp3, m4a, ogg, etc.)
+        audio_files = (
+            sorted(tmp.glob("*.mp3")) +
+            sorted(tmp.glob("*.m4a")) +
+            sorted(tmp.glob("*.ogg")) +
+            sorted(tmp.glob("*.opus")) +
+            sorted(tmp.glob("*.flac"))
+        )
+        if audio_files:
+            return audio_files[0]
 
+        stdout_text = stdout.decode(errors="replace")[:500] if stdout else ""
         stderr_text = stderr.decode(errors="replace")[:300] if stderr else ""
-        logger.warning(f"spotdl no MP3: returncode={proc.returncode}, stderr={stderr_text}")
+        logger.warning(f"spotdl no audio file: returncode={proc.returncode}, stdout={stdout_text[:200]}, stderr={stderr_text}")
         return None
 
     except Exception as e:
@@ -408,7 +475,7 @@ async def handle_spotify_playlist(m: Message, url: str):
             _proc = await get_emoji_async("PROCESS")
             await _safe_reply(
                 m,
-                f"{_proc} Cooldown active — {minutes_left} min remaining",
+                f"{_proc} 𝐂ᴏᴏʟᴅᴏᴡɴ ᴀᴄᴛɪᴠᴇ — {minutes_left} ᴍɪɴ ʀᴇᴍᴀɪɴɪɴɢ",
                 parse_mode="HTML",
             )
             return
@@ -417,16 +484,17 @@ async def handle_spotify_playlist(m: Message, url: str):
         has_started = await user_state_manager.has_started_bot(m.from_user.id)
         if not has_started:
             bot_me = await bot.get_me()
+            sp = await get_emoji_async("SPOTIFY")
             keyboard = InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(
-                    text="🎧 Start Bot",
+                    text=f"{sp} Start Bot",
                     url=f"https://t.me/{bot_me.username}?start=spotify",
                 )
             ]])
-            _err = await get_emoji_async("ERROR")
+            _info = await get_emoji_async("INFO")
             await _safe_reply(
                 m,
-                f"{_err} Start the bot first to receive songs in DM.\n\nTap below, then resend the playlist link 👇",
+                f"{_info} 𝐒ᴛᴀʀᴛ 𝐁ᴏᴛ 𝐅ɪʀꜱᴛ\n\n𝐒ᴛᴀʀᴛ ᴛʜᴇ ʙᴏᴛ ᴛᴏ ʀᴇᴄᴇɪᴠᴇ ꜱᴏɴɢꜱ ɪɴ 𝐃𝐌.\n\n𝐓ᴀᴘ ʙᴇʟᴏᴡ, ᴛʜᴇɴ ʀᴇꜱᴇɴᴅ ᴛʜᴇ ʟɪɴᴋ.",
                 reply_markup=keyboard,
                 parse_mode="HTML",
             )
@@ -437,7 +505,7 @@ async def handle_spotify_playlist(m: Message, url: str):
             _err = await get_emoji_async("ERROR")
             await _safe_reply(
                 m,
-                f"{_err} <b>𝐁𝐨𝐭 𝐁𝐥𝐨𝐜𝐤𝐞𝐝</b>\n\nYou have blocked the bot — unblock and try again.",
+                f"{_err} 𝐅ᴀɪʟᴇᴅ\n𝐔ɴʙʟᴏᴄᴋ ᴛʜᴇ ʙᴏᴛ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ.",
                 parse_mode="HTML",
             )
             return
@@ -514,9 +582,9 @@ async def _run_playlist_download(m: Message, url: str):
         )
 
         try:
-            # Fetch track list via Spotify API
+            # Fetch track list via Spotify API (with spotdl fallback for curated playlists)
             logger.info(f"SPOTIFY PLAYLIST: Fetching tracks for {playlist_id}")
-            track_urls = await _fetch_playlist_tracks(playlist_id, is_album=is_album)
+            track_urls = await _fetch_playlist_tracks(playlist_id, is_album=is_album, playlist_url=url)
 
             if not track_urls:
                 _err = await get_emoji_async("ERROR")

@@ -78,13 +78,20 @@ def is_youtube_short(url: str) -> bool:
     return "/shorts/" in url.lower()
 
 def is_youtube_music(url: str) -> bool:
-    return "music.youtube.com" in url.lower()
+    """YT Music single track — NOT a playlist"""
+    url_lower = url.lower()
+    if "music.youtube.com" not in url_lower:
+        return False
+    # If it's a playlist URL, don't treat as music
+    if "playlist" in url_lower or ("list=" in url_lower and "watch" not in url_lower):
+        return False
+    return True
 
 def is_youtube_playlist(url: str) -> bool:
-    """Detect YouTube playlist URLs"""
+    """Detect YouTube playlist URLs (including YT Music playlists)"""
     url_lower = url.lower()
-    # youtube.com/playlist?list=
-    if "youtube.com/playlist" in url_lower and "list=" in url_lower:
+    # youtube.com/playlist?list= or music.youtube.com/playlist?list=
+    if "playlist" in url_lower and "list=" in url_lower:
         return True
     # youtube.com/watch?v=...&list= (only if list= is present and it's a real playlist)
     if ("youtube.com/watch" in url_lower or "youtu.be/" in url_lower) and "list=" in url_lower:
@@ -93,6 +100,13 @@ def is_youtube_playlist(url: str) -> bool:
         if list_match:
             list_id = list_match.group(1)
             # Only treat as playlist if it's a real playlist (not RD/auto-generated)
+            if not list_id.startswith("rd") and not list_id.startswith("fl"):
+                return True
+    # music.youtube.com/watch?v=...&list= — treat as playlist
+    if "music.youtube.com/watch" in url_lower and "list=" in url_lower:
+        list_match = re.search(r"list=([^&]+)", url_lower)
+        if list_match:
+            list_id = list_match.group(1)
             if not list_id.startswith("rd") and not list_id.startswith("fl"):
                 return True
     return False
@@ -335,7 +349,7 @@ async def _safe_send_video(chat_id: int, reply_to_msg_id: Optional[int], **kwarg
         )
     except Exception as e:
         err_str = str(e).lower()
-        if "message to be replied not found" in err_str or "bad request" in err_str:
+        if "message to be replied not found" in err_str or "replied message not found" in err_str:
             try:
                 return await bot.send_video(chat_id, **kwargs)
             except Exception as e2:
@@ -356,7 +370,7 @@ async def _safe_send_audio(chat_id: int, reply_to_msg_id: Optional[int], **kwarg
         )
     except Exception as e:
         err_str = str(e).lower()
-        if "message to be replied not found" in err_str or "bad request" in err_str:
+        if "message to be replied not found" in err_str or "replied message not found" in err_str:
             try:
                 return await bot.send_audio(chat_id, **kwargs)
             except Exception as e2:
@@ -373,7 +387,7 @@ async def _safe_reply_text(m: Message, text: str, **kwargs) -> Optional[Message]
         return await m.reply(text, **kwargs)
     except Exception as e:
         err_str = str(e).lower()
-        if "message to be replied not found" in err_str or "bad request" in err_str:
+        if "message to be replied not found" in err_str or "replied message not found" in err_str:
             try:
                 return await bot.send_message(m.chat.id, text, **kwargs)
             except Exception as e2:
