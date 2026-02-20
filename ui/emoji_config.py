@@ -2,107 +2,142 @@
 Emoji Configuration — Premium vs Normal toggle.
 
 Usage:
-    from ui.emoji_config import YT, INSTA, PINTEREST, MUSIC, SUCCESS, PROCESS
-    from ui.emoji_config import get_emoji
+    from ui.emoji_config import get_emoji, get_emoji_async
 
-    # Direct key access:
+    # Sync (module-load time, no Redis):
     emoji = get_emoji("SUCCESS")
 
-Never hardcode emojis in handlers. Import from here only.
+    # Async (runtime, checks Redis first):
+    emoji = await get_emoji_async("SUCCESS")
 
-Keys:
-    Platform:   YT, INSTA, PINTEREST, MUSIC, VIDEO, PIN, PLAYLIST
-    Status:     SUCCESS, ERROR, PROCESS, FAST, DOWNLOAD, COMPLETE
+Never hardcode emojis in handlers. Use get_emoji_async() in async contexts.
+
+Keys (all uppercase):
+    Platform:   YT, INSTA, PINTEREST, MUSIC, VIDEO, PIN, PLAYLIST, SPOTIFY
+    Status:     SUCCESS, ERROR, PROCESS, FAST, DOWNLOAD, COMPLETE, LOADING, CHECK
     Commands:   BROADCAST, INFO, ID, USER, PING
+    Decorative: STAR, FIRE, ROCKET, CROWN, DIAMOND, ZAP, WAVE
+    Extra:      PROCESSING, DELIVERED
 """
 
 USE_PREMIUM = True  # toggle: True = premium emojis, False = standard
 
-# ─── Unicode fallbacks (always available) ─────────────────────────────────────
+# ─── Default emoji fallbacks (always available, covers ALL keys) ──────────────
+# This is the single source of truth for fallback values.
 
-UNICODE = {
+DEFAULT_EMOJIS: dict[str, str] = {
     # Platform
-    "YT":        "🎬",
-    "INSTA":     "📸",
-    "PINTEREST": "📌",
-    "MUSIC":     "🎵",
-    "VIDEO":     "🎥",
-    "PIN":       "📌",
-    "PLAYLIST":  "🎶",
+    "YT":          "🎬",
+    "INSTA":       "📸",
+    "PINTEREST":   "📌",
+    "MUSIC":       "🎵",
+    "VIDEO":       "🎥",
+    "PIN":         "📌",
+    "PLAYLIST":    "🎶",
+    "SPOTIFY":     "🎧",
     # Status
-    "SUCCESS":   "✓",
-    "ERROR":     "⚠",
-    "PROCESS":   "⏳",
-    "FAST":      "⚡",
-    "DOWNLOAD":  "📥",
-    "COMPLETE":  "🎉",
+    "SUCCESS":     "✅",
+    "ERROR":       "⚠",
+    "PROCESS":     "⏳",
+    "PROCESSING":  "⏳",
+    "FAST":        "⚡",
+    "DOWNLOAD":    "📥",
+    "COMPLETE":    "🎉",
+    "LOADING":     "⏳",
+    "CHECK":       "✅",
+    "DELIVERED":   "✓",
     # Commands
-    "BROADCAST": "📢",
-    "INFO":      "ℹ",
-    "ID":        "🆔",
-    "USER":      "👤",
-    "PING":      "🏓",
+    "BROADCAST":   "📢",
+    "INFO":        "ℹ",
+    "ID":          "🆔",
+    "USER":        "👤",
+    "PING":        "🏓",
+    # Decorative
+    "STAR":        "⭐",
+    "FIRE":        "🔥",
+    "ROCKET":      "🚀",
+    "CROWN":       "👑",
+    "DIAMOND":     "💎",
+    "ZAP":         "⚡",
+    "WAVE":        "👋",
 }
 
-# ─── Premium overrides (set file_id or emoji string; None = use Unicode) ──────
+# ─── Unicode fallbacks (legacy alias — same as DEFAULT_EMOJIS) ─────────────────
+UNICODE = DEFAULT_EMOJIS
 
-PREMIUM = {
+# ─── Premium overrides (set emoji string; None = use DEFAULT) ─────────────────
+PREMIUM: dict[str, str | None] = {
     # Platform
-    "YT":        "🔥",
-    "INSTA":     "✨",
-    "PINTEREST": "📌",
-    "MUSIC":     "🎵",
-    "VIDEO":     "🎥",
-    "PIN":       "📌",
-    "PLAYLIST":  "🎶",
+    "YT":          "🔥",
+    "INSTA":       "✨",
+    "PINTEREST":   "📌",
+    "MUSIC":       "🎵",
+    "VIDEO":       "🎥",
+    "PIN":         "📌",
+    "PLAYLIST":    "🎶",
+    "SPOTIFY":     "🎧",
     # Status
-    "SUCCESS":   "✅",
-    "ERROR":     "⚠",
-    "PROCESS":   "⚡",
-    "FAST":      "⚡",
-    "DOWNLOAD":  "📥",
-    "COMPLETE":  "🎉",
+    "SUCCESS":     "✅",
+    "ERROR":       "⚠",
+    "PROCESS":     "⚡",
+    "PROCESSING":  "⚡",
+    "FAST":        "⚡",
+    "DOWNLOAD":    "📥",
+    "COMPLETE":    "🎉",
+    "LOADING":     "⏳",
+    "CHECK":       "✅",
+    "DELIVERED":   "✓",
     # Commands
-    "BROADCAST": "📢",
-    "INFO":      "ℹ",
-    "ID":        "🆔",
-    "USER":      "👤",
-    "PING":      "🏓",
+    "BROADCAST":   "📢",
+    "INFO":        "ℹ",
+    "ID":          "🆔",
+    "USER":        "👤",
+    "PING":        "🏓",
+    # Decorative
+    "STAR":        "⭐",
+    "FIRE":        "🔥",
+    "ROCKET":      "🚀",
+    "CROWN":       "👑",
+    "DIAMOND":     "💎",
+    "ZAP":         "⚡",
+    "WAVE":        "👋",
 }
 
 
 def get_emoji(key: str) -> str:
     """
-    Get emoji for key.
+    Sync emoji resolver — no Redis, uses static config only.
 
     Safe behavior:
-    - Checks Redis for admin-assigned custom emoji first (async not available here,
-      so this is the sync fallback used at module load time)
     - If USE_PREMIUM is True and PREMIUM[key] is not None → return premium value
-    - Otherwise → return UNICODE fallback
+    - Otherwise → return DEFAULT_EMOJIS fallback
     - If key not found → return empty string (never crashes)
+
+    Use get_emoji_async() in async contexts for Redis-backed custom emoji.
     """
     if USE_PREMIUM:
         premium_value = PREMIUM.get(key)
         if premium_value:
             return premium_value
-    return UNICODE.get(key, "")
+    return DEFAULT_EMOJIS.get(key, "")
 
 
 async def get_emoji_async(key: str) -> str:
     """
-    Async version of get_emoji — checks Redis for admin-assigned custom emoji.
+    Async emoji resolver — checks Redis for admin-assigned custom emoji first.
 
     Priority:
     1. Redis-stored custom emoji (set via /assign command)
+       - Numeric string → rendered as <tg-emoji emoji-id="...">fallback</tg-emoji>
+       - Unicode string → returned as-is
     2. PREMIUM dict (if USE_PREMIUM)
-    3. UNICODE fallback
+    3. DEFAULT_EMOJIS fallback
 
-    If stored value looks like a numeric ID → render as Telegram custom emoji HTML.
-    If stored value is a unicode emoji → return as-is.
-    If not found → return UNICODE fallback.
+    Never crashes — silently falls back on any error.
+    Always returns a non-empty string.
 
-    Never crashes.
+    IMPORTANT: Messages using this must use parse_mode="HTML" for
+    <tg-emoji> tags to render correctly.
     """
     try:
         from utils.redis_client import redis_client
@@ -110,12 +145,13 @@ async def get_emoji_async(key: str) -> str:
         stored = await redis_client.get(redis_key)
         if stored:
             stored = stored.strip()
-            # If it's a numeric ID → it's a custom_emoji_id
-            if stored.isdigit():
-                fallback = UNICODE.get(key, "•")
-                return f'<tg-emoji emoji-id="{stored}">{fallback}</tg-emoji>'
-            # Otherwise it's a unicode emoji — return as-is
-            return stored
+            if stored:
+                # Numeric ID → Telegram custom emoji HTML tag
+                if stored.isdigit():
+                    fallback = DEFAULT_EMOJIS.get(key, "•")
+                    return f'<tg-emoji emoji-id="{stored}">{fallback}</tg-emoji>'
+                # Unicode emoji → return as-is
+                return stored
     except Exception:
         pass
 

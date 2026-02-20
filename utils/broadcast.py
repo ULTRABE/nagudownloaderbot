@@ -26,6 +26,7 @@ from utils.redis_client import redis_client
 from utils.logger import logger
 from core.config import config
 from ui.formatting import format_broadcast_report
+from ui.emoji_config import get_emoji_async
 
 # ─── Redis keys ───────────────────────────────────────────────────────────────
 
@@ -209,9 +210,10 @@ async def run_broadcast(
     if total_users == 0 and total_groups == 0:
         logger.warning("Broadcast: no users or groups registered — nothing to send")
         try:
+            _bc = await get_emoji_async("BROADCAST")
             await bot.send_message(
                 admin_id,
-                "📢 <b>Broadcast</b>\n\nNo users or groups registered yet.",
+                f"{_bc} <b>Broadcast</b>\n\nNo users or groups registered yet.",
                 parse_mode="HTML",
             )
         except Exception:
@@ -283,7 +285,7 @@ async def run_broadcast(
     try:
         await bot.send_message(
             admin_id,
-            format_broadcast_report(total_users, total_groups, success, failed),
+            await format_broadcast_report(total_users, total_groups, success, failed),
             parse_mode="HTML",
         )
     except Exception as e:
