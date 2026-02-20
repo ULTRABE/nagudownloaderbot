@@ -68,6 +68,7 @@ from ui.formatting import (
     format_yt_playlist_final,
 )
 from ui.stickers import send_sticker, delete_sticker
+from ui.emoji_config import get_emoji_async
 from utils.user_state import user_state_manager
 from utils.log_channel import log_download
 
@@ -393,7 +394,7 @@ async def handle_youtube_music(m: Message, url: str):
     """
     user_id = m.from_user.id
     first_name = m.from_user.first_name or "User"
-    delivered_caption = format_delivered_with_mention(user_id, first_name)
+    delivered_caption = await format_delivered_with_mention(user_id, first_name)
     _t_start = time.monotonic()
 
     # Cache check
@@ -423,9 +424,10 @@ async def handle_youtube_music(m: Message, url: str):
 
             if not audio_file or not audio_file.exists():
                 await delete_sticker(bot, m.chat.id, sticker_msg_id)
+                _err = await get_emoji_async("ERROR")
                 await _safe_reply_text(
                     m,
-                    "⚠ Unable to process this link.\n\nPlease try again.",
+                    f"{_err} Unable to process this link.\n\nPlease try again.",
                     parse_mode="HTML",
                 )
                 return
@@ -448,11 +450,10 @@ async def handle_youtube_music(m: Message, url: str):
 
             # Log to channel
             _elapsed = time.monotonic() - _t_start
-            _chat_type = "Group" if m.chat.type in ("group", "supergroup") else "Private"
             asyncio.create_task(log_download(
                 user=m.from_user,
                 link=url,
-                chat_type=_chat_type,
+                chat=m.chat,
                 media_type="Audio (YT Music)",
                 time_taken=_elapsed,
             ))
@@ -462,9 +463,10 @@ async def handle_youtube_music(m: Message, url: str):
     except Exception as e:
         logger.error(f"YT MUSIC ERROR: {e}", exc_info=True)
         await delete_sticker(bot, m.chat.id, sticker_msg_id)
+        _err = await get_emoji_async("ERROR")
         await _safe_reply_text(
             m,
-            "⚠ Unable to process this link.\n\nPlease try again.",
+            f"{_err} Unable to process this link.\n\nPlease try again.",
             parse_mode="HTML",
         )
 
@@ -477,7 +479,7 @@ async def handle_youtube_short(m: Message, url: str):
     """
     user_id = m.from_user.id
     first_name = m.from_user.first_name or "User"
-    delivered_caption = format_delivered_with_mention(user_id, first_name)
+    delivered_caption = await format_delivered_with_mention(user_id, first_name)
     _t_start = time.monotonic()
 
     # Cache check
@@ -511,9 +513,10 @@ async def handle_youtube_short(m: Message, url: str):
 
             if not video_file or not video_file.exists():
                 await delete_sticker(bot, m.chat.id, sticker_msg_id)
+                _err = await get_emoji_async("ERROR")
                 await _safe_reply_text(
                     m,
-                    "⚠ Unable to process this link.\n\nPlease try again.",
+                    f"{_err} Unable to process this link.\n\nPlease try again.",
                     parse_mode="HTML",
                 )
                 return
@@ -548,11 +551,10 @@ async def handle_youtube_short(m: Message, url: str):
 
             # Log to channel
             _elapsed = time.monotonic() - _t_start
-            _chat_type = "Group" if m.chat.type in ("group", "supergroup") else "Private"
             asyncio.create_task(log_download(
                 user=m.from_user,
                 link=url,
-                chat_type=_chat_type,
+                chat=m.chat,
                 media_type="Video (Short)",
                 time_taken=_elapsed,
             ))
@@ -562,9 +564,10 @@ async def handle_youtube_short(m: Message, url: str):
     except Exception as e:
         logger.error(f"SHORTS ERROR: {e}", exc_info=True)
         await delete_sticker(bot, m.chat.id, sticker_msg_id)
+        _err = await get_emoji_async("ERROR")
         await _safe_reply_text(
             m,
-            "⚠ Unable to process this link.\n\nPlease try again.",
+            f"{_err} Unable to process this link.\n\nPlease try again.",
             parse_mode="HTML",
         )
 
@@ -690,7 +693,7 @@ async def cb_yt_video(callback: CallbackQuery):
         await callback.answer("Session expired. Send the link again.", show_alert=True)
         return
 
-    await callback.answer("⏳ Preparing video...")
+    await callback.answer("Preparing video...")
 
     chat_id = job["chat_id"]
     url = job["url"]
@@ -698,7 +701,7 @@ async def cb_yt_video(callback: CallbackQuery):
     first_name = job.get("first_name", "User")
     original_msg_id = job.get("original_msg_id")
     sticker_msg_id = job.get("sticker_msg_id")
-    delivered_caption = format_delivered_with_mention(user_id, first_name)
+    delivered_caption = await format_delivered_with_mention(user_id, first_name)
 
     # Delete status message and sticker immediately
     try:
@@ -731,17 +734,19 @@ async def cb_yt_video(callback: CallbackQuery):
                 timeout=config.DOWNLOAD_TIMEOUT,
             )
         except asyncio.TimeoutError:
+            _err = await get_emoji_async("ERROR")
             await bot.send_message(
                 chat_id,
-                "⚠ Unable to process this link.\n\nPlease try again.",
+                f"{_err} Unable to process this link.\n\nPlease try again.",
                 parse_mode="HTML",
             )
             return
 
         if not video_file or not video_file.exists():
+            _err = await get_emoji_async("ERROR")
             await bot.send_message(
                 chat_id,
-                "⚠ Unable to process this link.\n\nPlease try again.",
+                f"{_err} Unable to process this link.\n\nPlease try again.",
                 parse_mode="HTML",
             )
             return
@@ -780,9 +785,10 @@ async def cb_yt_video(callback: CallbackQuery):
     except Exception as e:
         logger.error(f"YT VIDEO CALLBACK ERROR: {e}", exc_info=True)
         try:
+            _err = await get_emoji_async("ERROR")
             await bot.send_message(
                 chat_id,
-                "⚠ Unable to process this link.\n\nPlease try again.",
+                f"{_err} Unable to process this link.\n\nPlease try again.",
                 parse_mode="HTML",
             )
         except Exception:
@@ -799,7 +805,7 @@ async def cb_yt_audio(callback: CallbackQuery):
         await callback.answer("Session expired. Send the link again.", show_alert=True)
         return
 
-    await callback.answer("⏳ Preparing audio...")
+    await callback.answer("Preparing audio...")
 
     chat_id = job["chat_id"]
     url = job["url"]
@@ -807,7 +813,7 @@ async def cb_yt_audio(callback: CallbackQuery):
     first_name = job.get("first_name", "User")
     original_msg_id = job.get("original_msg_id")
     sticker_msg_id = job.get("sticker_msg_id")
-    delivered_caption = format_delivered_with_mention(user_id, first_name)
+    delivered_caption = await format_delivered_with_mention(user_id, first_name)
 
     # Delete status message and sticker immediately
     try:
@@ -839,17 +845,19 @@ async def cb_yt_audio(callback: CallbackQuery):
                 timeout=config.DOWNLOAD_TIMEOUT,
             )
         except asyncio.TimeoutError:
+            _err = await get_emoji_async("ERROR")
             await bot.send_message(
                 chat_id,
-                "⚠ Unable to process this link.\n\nPlease try again.",
+                f"{_err} Unable to process this link.\n\nPlease try again.",
                 parse_mode="HTML",
             )
             return
 
         if not audio_file or not audio_file.exists():
+            _err = await get_emoji_async("ERROR")
             await bot.send_message(
                 chat_id,
-                "⚠ Unable to process this link.\n\nPlease try again.",
+                f"{_err} Unable to process this link.\n\nPlease try again.",
                 parse_mode="HTML",
             )
             return
@@ -879,9 +887,10 @@ async def cb_yt_audio(callback: CallbackQuery):
     except Exception as e:
         logger.error(f"YT AUDIO CALLBACK ERROR: {e}", exc_info=True)
         try:
+            _err = await get_emoji_async("ERROR")
             await bot.send_message(
                 chat_id,
-                "⚠ Unable to process this link.\n\nPlease try again.",
+                f"{_err} Unable to process this link.\n\nPlease try again.",
                 parse_mode="HTML",
             )
         except Exception:
@@ -970,9 +979,10 @@ async def handle_youtube_playlist(m: Message, url: str):
                 await status_msg.delete()
             except Exception:
                 pass
+        _err = await get_emoji_async("ERROR")
         await _safe_reply_text(
             m,
-            "⚠ Unable to process this link.\n\nPlease try again.",
+            f"{_err} Unable to process this link.\n\nPlease try again.",
             parse_mode="HTML",
         )
         return
@@ -1098,7 +1108,7 @@ async def cb_ytpl_audio_quality(callback: CallbackQuery):
         await callback.answer("Session expired. Send the link again.", show_alert=True)
         return
 
-    await callback.answer("🎵 Starting download...")
+    await callback.answer("Starting download...")
 
     # Delete quality selector message
     try:
@@ -1126,7 +1136,7 @@ async def cb_ytpl_video_quality(callback: CallbackQuery):
         await callback.answer("Session expired. Send the link again.", show_alert=True)
         return
 
-    await callback.answer("🎬 Starting download...")
+    await callback.answer("Starting download...")
 
     # Delete quality selector message
     try:
@@ -1261,7 +1271,7 @@ async def _run_yt_playlist_audio(callback: CallbackQuery, job_key: str, job: dic
         asyncio.create_task(log_download(
             user=type("U", (), {"id": user_id, "first_name": job.get("first_name", "User")})(),
             link=job.get("url", ""),
-            chat_type="Group" if chat_id != user_id else "Private",
+            chat_type="Group" if chat_id != user_id else "Private",  # no chat object available here
             media_type=f"Playlist (Audio, {sent_count}/{total})",
             time_taken=0.0,
         ))
@@ -1360,7 +1370,7 @@ async def _run_yt_playlist_video(callback: CallbackQuery, job_key: str, job: dic
         if progress_msg:
             try:
                 await progress_msg.edit_text(
-                    format_yt_playlist_final(playlist_name, total, sent_count, failed_count),
+                    await format_yt_playlist_final(playlist_name, total, sent_count, failed_count),
                     parse_mode="HTML",
                 )
             except Exception:
@@ -1387,7 +1397,7 @@ async def _run_yt_playlist_video(callback: CallbackQuery, job_key: str, job: dic
         asyncio.create_task(log_download(
             user=type("U", (), {"id": user_id, "first_name": job.get("first_name", "User")})(),
             link=job.get("url", ""),
-            chat_type="Group" if chat_id != user_id else "Private",
+            chat_type="Group" if chat_id != user_id else "Private",  # no chat object available here
             media_type=f"Playlist (Video, {sent_count}/{total})",
             time_taken=0.0,
         ))
@@ -1400,12 +1410,13 @@ async def _run_yt_playlist_video(callback: CallbackQuery, job_key: str, job: dic
 async def handle_youtube(m: Message, url: str):
     """Route YouTube URL to appropriate handler"""
     if not await acquire_user_slot(m.from_user.id, config.MAX_CONCURRENT_PER_USER):
+        _proc = await get_emoji_async("PROCESS")
         try:
-            await m.reply("⏳ You have downloads in progress. Please wait.", parse_mode="HTML")
+            await m.reply(f"{_proc} You have downloads in progress. Please wait.", parse_mode="HTML")
         except Exception:
             await bot.send_message(
                 m.chat.id,
-                "⏳ You have downloads in progress. Please wait.",
+                f"{_proc} You have downloads in progress. Please wait.",
                 parse_mode="HTML",
             )
         return

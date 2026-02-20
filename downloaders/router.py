@@ -95,8 +95,9 @@ async def global_error_handler(event: ErrorEvent) -> bool:
         cb = getattr(update, "callback_query", None)
         if msg:
             try:
+                _err = await get_emoji_async("ERROR")
                 await msg.reply(
-                    "⚠ Unable to process this link.\n\nPlease try again.",
+                    f"{_err} Unable to process this link.\n\nPlease try again.",
                     parse_mode="HTML",
                 )
             except Exception:
@@ -151,9 +152,11 @@ async def start_command(m: Message):
     if is_first_time:
         first_name = (m.from_user.first_name or "there")[:32]
         safe_name = first_name.replace("<", "").replace(">", "")
+        _wave = await get_emoji_async("WAVE")
+        _complete = await get_emoji_async("COMPLETE")
         first_time_msg = (
-            f"👋 <b>Hey {safe_name}, welcome to Nagu Downloader!</b>\n\n"
-            "𝐓𝐡𝐚𝐧𝐤𝐬 𝐟𝐨𝐫 𝐬𝐭𝐚𝐫𝐭𝐢𝐧𝐠 𝐭𝐡𝐞 𝐛𝐨𝐭! 🎉\n\n"
+            f"{_wave} <b>Hey {safe_name}, welcome to Nagu Downloader!</b>\n\n"
+            f"𝐓𝐡𝐚𝐧𝐤𝐬 𝐟𝐨𝐫 𝐬𝐭𝐚𝐫𝐭𝐢𝐧𝐠 𝐭𝐡𝐞 𝐛𝐨𝐭! {_complete}\n\n"
             "You're all set to receive music, videos and playlists directly here.\n\n"
             "ꜱᴇɴᴅ ᴀɴʏ ʟɪɴᴋ ꜰʀᴏᴍ:\n"
             "• YouTube — Videos, Shorts, Music\n"
@@ -180,7 +183,7 @@ async def start_command(m: Message):
         await _safe_reply(m, first_time_msg, parse_mode="HTML", reply_markup=keyboard)
         return
 
-    caption = format_welcome(m.from_user, m.from_user.id)
+    caption = await format_welcome(m.from_user, m.from_user.id)
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="➕ Add to Group", url=f"https://t.me/{(await bot.get_me()).username}?startgroup=true"),
@@ -209,7 +212,7 @@ async def start_command(m: Message):
 async def help_command(m: Message):
     """Help — single unified message"""
     logger.info(f"HELP: User {m.from_user.id}")
-    await _safe_reply(m, format_help(), parse_mode="HTML")
+    await _safe_reply(m, await format_help(), parse_mode="HTML")
 
 
 # ─── /mp3 ────────────────────────────────────────────────────────────────────
@@ -277,7 +280,8 @@ async def cmd_mp3(m: Message):
                     await progress.delete()
                 except Exception:
                     pass
-                await _safe_reply(m, "⚠ Unable to extract audio.\n\nPlease try again.", parse_mode="HTML")
+                _err = await get_emoji_async("ERROR")
+                await _safe_reply(m, f"{_err} Unable to extract audio.\n\nPlease try again.", parse_mode="HTML")
                 return
 
             try:
@@ -307,11 +311,10 @@ async def cmd_mp3(m: Message):
             logger.info(f"MP3: Sent to {user_id}")
 
             # Log to channel
-            chat_type = "Group" if m.chat.type in ("group", "supergroup") else "Private"
             asyncio.create_task(log_download(
                 user=m.from_user,
                 link="[MP3 extraction]",
-                chat_type=chat_type,
+                chat=m.chat,
                 media_type="Audio (MP3)",
                 time_taken=elapsed,
             ))
@@ -322,7 +325,8 @@ async def cmd_mp3(m: Message):
             await progress.delete()
         except Exception:
             pass
-        await _safe_reply(m, "⚠ Unable to extract audio.\n\nPlease try again.", parse_mode="HTML")
+        _err = await get_emoji_async("ERROR")
+        await _safe_reply(m, f"{_err} Unable to extract audio.\n\nPlease try again.", parse_mode="HTML")
 
 
 # ─── /ping ────────────────────────────────────────────────────────────────────
@@ -331,12 +335,13 @@ async def cmd_mp3(m: Message):
 async def cmd_ping(m: Message):
     """Health check — anyone can use"""
     t0 = time.monotonic()
+    _ping = await get_emoji_async("PING")
     try:
-        sent = await m.reply("🏓 Pong...", parse_mode="HTML")
+        sent = await m.reply(f"{_ping} Pong...", parse_mode="HTML")
         elapsed_ms = int((time.monotonic() - t0) * 1000)
         try:
             await sent.edit_text(
-                f"🏓 Pong — <b>{elapsed_ms} ms</b>",
+                f"{_ping} Pong — <b>{elapsed_ms} ms</b>",
                 parse_mode="HTML",
             )
         except Exception:
@@ -346,7 +351,7 @@ async def cmd_ping(m: Message):
         try:
             await bot.send_message(
                 m.chat.id,
-                f"🏓 Pong — <b>{elapsed_ms} ms</b>",
+                f"{_ping} Pong — <b>{elapsed_ms} ms</b>",
                 parse_mode="HTML",
             )
         except Exception:
@@ -363,7 +368,7 @@ async def cmd_id(m: Message):
     else:
         user = m.from_user
         label = "YOUR  ID"
-    await _safe_reply(m, format_id(user, label), parse_mode="HTML")
+    await _safe_reply(m, await format_id(user, label), parse_mode="HTML")
 
 
 # ─── /chatid ──────────────────────────────────────────────────────────────────
@@ -373,7 +378,7 @@ async def cmd_chatid(m: Message):
     chat_title = (m.chat.title or "Private Chat")[:20]
     await _safe_reply(
         m,
-        format_chatid(m.chat.id, chat_title, m.chat.type),
+        await format_chatid(m.chat.id, chat_title, m.chat.type),
         parse_mode="HTML",
     )
 
@@ -385,7 +390,7 @@ async def cmd_myinfo(m: Message):
     chat_title = (m.chat.title or "Private")[:20]
     await _safe_reply(
         m,
-        format_myinfo(m.from_user, chat_title),
+        await format_myinfo(m.from_user, chat_title),
         parse_mode="HTML",
     )
 
@@ -403,14 +408,15 @@ async def cmd_status(m: Message):
         # Admin: full system stats
         await _safe_reply(
             m,
-            format_status(active_jobs=0, queue=0, uptime=uptime_str),
+            await format_status(active_jobs=0, queue=0, uptime=uptime_str),
             parse_mode="HTML",
         )
     else:
         # Normal user: uptime + active jobs only (no system internals)
+        _info = await get_emoji_async("INFO")
         await _safe_reply(
             m,
-            f"📊 <b>𝐁𝐨𝐭 𝐒𝐭𝐚𝐭𝐮𝐬</b>\n\nUptime: {uptime_str}\nActive Jobs: 0",
+            f"{_info} <b>𝐁𝐨𝐭 𝐒𝐭𝐚𝐭𝐮𝐬</b>\n\nUptime: {uptime_str}\nActive Jobs: 0",
             parse_mode="HTML",
         )
 
@@ -424,14 +430,14 @@ async def cb_status(callback):
     await callback.answer()
     try:
         await callback.message.reply(
-            format_status(active_jobs=0, queue=0, uptime=uptime_str),
+            await format_status(active_jobs=0, queue=0, uptime=uptime_str),
             parse_mode="HTML",
         )
     except Exception:
         try:
             await bot.send_message(
                 callback.message.chat.id,
-                format_status(active_jobs=0, queue=0, uptime=uptime_str),
+                await format_status(active_jobs=0, queue=0, uptime=uptime_str),
                 parse_mode="HTML",
             )
         except Exception:
@@ -455,7 +461,7 @@ async def cmd_admin(m: Message):
     users  = await get_all_users()
     groups = await get_all_groups()
     stats  = {"users": len(users), "groups": len(groups)}
-    await _safe_reply(m, format_admin_panel(stats), parse_mode="HTML")
+    await _safe_reply(m, await format_admin_panel(stats), parse_mode="HTML")
 
 
 @dp.message(Command("stats"))
@@ -468,14 +474,14 @@ async def cmd_stats(m: Message):
         hours = (uptime_secs % 86400) // 3600
         await _safe_reply(
             m,
-            format_status(active_jobs=0, queue=0, uptime=f"{days}d {hours}h"),
+            await format_status(active_jobs=0, queue=0, uptime=f"{days}d {hours}h"),
             parse_mode="HTML",
         )
         return
 
     users  = await get_all_users()
     groups = await get_all_groups()
-    await _safe_reply(m, format_stats(len(users), len(groups)), parse_mode="HTML")
+    await _safe_reply(m, await format_stats(len(users), len(groups)), parse_mode="HTML")
 
 
 @dp.message(Command("broadcast"))
@@ -495,7 +501,7 @@ async def cmd_broadcast(m: Message):
     if m.reply_to_message:
         reply = m.reply_to_message
         logger.info(f"BROADCAST: Admin {m.from_user.id} broadcasting replied message")
-        await _safe_reply(m, format_broadcast_started(), parse_mode="HTML")
+        await _safe_reply(m, await format_broadcast_started(), parse_mode="HTML")
         asyncio.create_task(
             run_broadcast(bot, m.from_user.id, reply_to_msg=reply)
         )
@@ -516,7 +522,7 @@ async def cmd_broadcast(m: Message):
     broadcast_text = parts[1].strip()
     logger.info(f"BROADCAST: Admin {m.from_user.id} starting text broadcast: {broadcast_text[:50]}")
 
-    await _safe_reply(m, format_broadcast_started(), parse_mode="HTML")
+    await _safe_reply(m, await format_broadcast_started(), parse_mode="HTML")
 
     asyncio.create_task(
         run_broadcast(bot, m.from_user.id, text=broadcast_text)
@@ -768,9 +774,10 @@ async def handle_link(m: Message):
         elif "spotify.com" in url_lower:
             await handle_spotify_playlist(m, url)
         else:
+            _err = await get_emoji_async("ERROR")
             await _safe_reply(
                 m,
-                "⚠ Unable to process this link.\n\nPlease try again.",
+                f"{_err} Unable to process this link.\n\nPlease try again.",
                 parse_mode="HTML",
             )
     except asyncio.CancelledError:
@@ -778,9 +785,10 @@ async def handle_link(m: Message):
     except Exception as e:
         logger.error(f"Error handling link: {e}", exc_info=True)
         try:
+            _err = await get_emoji_async("ERROR")
             await _safe_reply(
                 m,
-                "⚠ Unable to process this link.\n\nPlease try again.",
+                f"{_err} Unable to process this link.\n\nPlease try again.",
                 parse_mode="HTML",
             )
         except Exception:
