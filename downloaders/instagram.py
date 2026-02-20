@@ -109,7 +109,7 @@ async def _safe_reply_video(m: Message, **kwargs) -> Optional[Message]:
         )
     except Exception as e:
         err_str = str(e).lower()
-        if "message to be replied not found" in err_str or "bad request" in err_str:
+        if "message to be replied not found" in err_str or "replied message not found" in err_str:
             try:
                 return await bot.send_video(m.chat.id, **kwargs)
             except Exception as e2:

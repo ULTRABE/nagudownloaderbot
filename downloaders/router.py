@@ -122,7 +122,7 @@ async def _safe_reply(m: Message, text: str, **kwargs) -> None:
         await m.reply(text, **kwargs)
     except Exception as e:
         err_str = str(e).lower()
-        if "message to be replied not found" in err_str or "bad request" in err_str:
+        if "message to be replied not found" in err_str or "replied message not found" in err_str:
             try:
                 await bot.send_message(m.chat.id, text, **kwargs)
             except Exception:
