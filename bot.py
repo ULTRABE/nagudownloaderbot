@@ -139,7 +139,11 @@ async def main():
     logger.info(f"✓ Max concurrent Spotify: {config.MAX_CONCURRENT_SPOTIFY}")
     logger.info(f"✓ Max per-user slots: {config.MAX_CONCURRENT_PER_USER}")
     logger.info(f"✓ Proxies configured: {len(config.PROXIES)}")
-    logger.info(f"✓ Admin IDs: {config.ADMIN_IDS or 'none configured'}")
+    if config.ADMIN_IDS:
+        logger.info(f"✓ Admin IDs: {config.ADMIN_IDS}")
+    else:
+        logger.warning("⚠ ADMIN_IDS not configured — /broadcast and admin commands will not work")
+        logger.warning("  Set ADMIN_IDS env var to comma-separated Telegram user IDs")
     logger.info(f"✓ Premium emojis: {'enabled' if config.BOT_HAS_PREMIUM else 'disabled'}")
     logger.info(f"✓ Download timeout: {config.DOWNLOAD_TIMEOUT}s")
     

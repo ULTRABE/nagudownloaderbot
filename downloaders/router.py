@@ -276,12 +276,16 @@ async def cb_status(callback):
 # ─── Admin commands ───────────────────────────────────────────────────────────
 
 def _is_admin(user_id: int) -> bool:
-    return config.is_admin(user_id)
+    result = config.is_admin(user_id)
+    if not result:
+        logger.debug(f"Admin check failed for user {user_id}. Configured admins: {config.ADMIN_IDS}")
+    return result
 
 
 @dp.message(Command("admin"))
 async def cmd_admin(m: Message):
     if not _is_admin(m.from_user.id):
+        await _safe_reply(m, "⛔ You are not authorized.", parse_mode="HTML")
         return
     users  = await get_all_users()
     groups = await get_all_groups()
@@ -318,6 +322,7 @@ async def cmd_stats(m: Message):
 async def cmd_broadcast(m: Message):
     """Broadcast text to all users + groups. Admin only."""
     if not _is_admin(m.from_user.id):
+        await _safe_reply(m, "⛔ You are not authorized.", parse_mode="HTML")
         return
 
     parts = m.text.split(None, 1)
@@ -330,6 +335,7 @@ async def cmd_broadcast(m: Message):
         return
 
     broadcast_text = parts[1].strip()
+    logger.info(f"BROADCAST: Admin {m.from_user.id} starting broadcast: {broadcast_text[:50]}")
 
     await _safe_reply(m, format_broadcast_started(), parse_mode="HTML")
 
@@ -342,6 +348,7 @@ async def cmd_broadcast(m: Message):
 async def cmd_broadcast_media(m: Message):
     """Broadcast media (reply to media). Admin only."""
     if not _is_admin(m.from_user.id):
+        await _safe_reply(m, "⛔ You are not authorized.", parse_mode="HTML")
         return
 
     if not m.reply_to_message:
