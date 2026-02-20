@@ -1,263 +1,239 @@
-# NAGU Downloader Bot
+# Nagu Downloader Bot
 
-**Production-grade Telegram bot for downloading media from multiple platforms with advanced management features.**
+**A production-grade Telegram bot for downloading media from YouTube, Instagram, Spotify, and Pinterest — with premium emoji support, download logging, and admin tools.**
 
-## 🚀 Features
+---
+
+## Features
 
 ### Media Download
+- **YouTube** — Videos, Shorts, YouTube Music (320kbps), Playlists (audio & video)
 - **Instagram** — Posts, Reels, Stories
-- **YouTube** — Videos, Shorts, Streams (with cookie rotation)
-- **Pinterest** — Video Pins (with URL resolution)
-- **Spotify** — Full playlist downloads with real-time progress
-- **MP3 Search** — Search and download music with metadata
+- **Spotify** — Single tracks and full playlists (streamed track-by-track to DM)
+- **Pinterest** — Video pins and carousels
+- **MP3 Extraction** — Extract audio from any replied video via `/mp3`
 
-### Admin & Moderation
-- **User Management** — Promote/demote admins
-- **Moderation Tools** — Mute, unmute, ban, unban
-- **Permission System** — Proper admin detection with caching
-- **Content Filtering** — Word filters and exact blocklists
+### UI & Emoji System
+- **Dynamic Emoji Resolver** — All emojis loaded from Redis at runtime via `get_emoji_async()`
+- **Admin Emoji Assignment** — `/assign` command lets admins set custom Telegram premium emojis or unicode emojis for any UI position
+- **Fallback System** — Always falls back to `DEFAULT_EMOJIS` if Redis is unavailable — never crashes
+- **HTML Parse Mode** — All messages use `parse_mode="HTML"` for proper `<tg-emoji>` rendering
 
-### Premium Features
-- **Real-time Progress** — Live progress bars for Spotify downloads
-- **Batch Delivery** — Songs sent in batches of 10 to user DM
-- **Whisper Command** — Private messages in groups
-- **Premium UI** — Clean quoted blocks throughout
-- **Clickable Mentions** — All user references are clickable
+### Download Log Channel
+- Every download is logged to a private Telegram channel
+- Clickable user mention (`tg://user?id=...`)
+- Clickable group link for public groups; plain title for private groups
+- Shows: user, link, chat, media type, time taken
+
+### Admin Tools
+- `/broadcast` — Send text or media to all users and groups
+- `/assign` — Configure custom emojis for each UI position
+- `/stats` — User and group counts
+- `/admin` — Admin panel
+- `/ping` — Health check with latency
 
 ### Performance
-- **Fully Async** — Non-blocking architecture
-- **Worker Pools** — Concurrent download management
-- **Cookie Rotation** — Multiple cookies for reliability
+- **Fully Async** — Non-blocking architecture with aiogram 3.x
+- **Semaphore-based Concurrency** — Configurable per-platform limits
+- **URL Cache** — Telegram `file_id` caching via Redis (instant re-sends)
+- **Cookie Rotation** — Multiple cookie files per platform
 - **Proxy Support** — Configurable proxy rotation
-- **Rate Limiting** — Semaphore-based concurrency control
+- **Per-User Slot Limiting** — Prevents abuse via watchdog
 
-## 📋 Requirements
+---
+
+## Requirements
 
 - Python 3.10+
 - Redis (Upstash or local)
-- FFmpeg (for audio processing)
+- FFmpeg + FFprobe
 - spotdl (for Spotify downloads)
-- yt-dlp (for video downloads)
+- yt-dlp (for YouTube/Instagram/Pinterest)
 
-## 🔧 Installation
+---
 
-### 1. Clone Repository
-```bash
-git clone <repository-url>
-cd nagu-downloader-bot
-```
-
-### 2. Install Dependencies
-```bash
-pip install -r requirements.txt
-```
-
-### 3. Install System Dependencies
-```bash
-# Ubuntu/Debian
-sudo apt update
-sudo apt install ffmpeg
-
-# macOS
-brew install ffmpeg
-
-# Windows
-# Download from https://ffmpeg.org/download.html
-```
-
-### 4. Configure Environment Variables
-
-Create a `.env` file:
+## Environment Variables
 
 ```env
-# Bot Configuration
+# Required
 BOT_TOKEN=your_telegram_bot_token
 
-# Spotify API (get from https://developer.spotify.com)
+# Spotify API (https://developer.spotify.com)
 SPOTIFY_CLIENT_ID=your_spotify_client_id
 SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
 
-# Redis (Upstash or local)
+# Redis
 REDIS_URL=your_redis_url
 REDIS_TOKEN=your_redis_token
 
-# Optional: Proxies (comma-separated)
-PROXIES=http://proxy1:port,http://proxy2:port
+# Admin IDs (comma-separated Telegram user IDs)
+ADMIN_IDS=123456789,987654321
 
-# Optional: Custom Stickers
-IG_STICKER=sticker_file_id
-YT_STICKER=sticker_file_id
-PIN_STICKER=sticker_file_id
-MUSIC_STICKER=sticker_file_id
+# Optional
+PROXIES=http://proxy1:port,http://proxy2:port
+MAX_CONCURRENT_DOWNLOADS=8
+MAX_CONCURRENT_MUSIC=5
+MAX_CONCURRENT_SPOTIFY=3
+MAX_CONCURRENT_PER_USER=2
+DOWNLOAD_TIMEOUT=120
 ```
 
-### 5. Add Cookies (Optional but Recommended)
+---
 
-For better reliability, add cookie files:
+## Cookie Files
+
+Place cookie files in the following locations for better reliability:
 
 ```
 yt cookies/
   ├── cookie1.txt
-  ├── cookie2.txt
-  └── cookie3.txt
+  └── cookie2.txt
 
 yt music cookies/
   ├── music_cookie1.txt
   └── music_cookie2.txt
 
-cookies_instagram.txt (optional)
+cookies_instagram.txt   (optional)
 ```
 
-### 6. Add Start Image (Optional)
+Export cookies using the "Get cookies.txt LOCALLY" browser extension.
 
-Place a `picture.png` in the `assets/` folder for the `/start` command.
+---
 
-## 🚀 Running the Bot
+## Installation
 
-### Development
 ```bash
+# 1. Clone
+git clone https://github.com/ULTRABE/nagudownloaderbot.git
+cd nagudownloaderbot
+
+# 2. Install Python dependencies
+pip install -r requirements.txt
+
+# 3. Install FFmpeg
+# Ubuntu/Debian:
+sudo apt install ffmpeg
+# macOS:
+brew install ffmpeg
+
+# 4. Configure environment variables (see above)
+
+# 5. Run
 python bot.py
 ```
 
-### Production (with Docker)
+---
+
+## Docker
+
 ```bash
 docker build -t nagu-bot .
 docker run -d --env-file .env nagu-bot
 ```
 
-### Production (with systemd)
-```bash
-sudo cp nagu-bot.service /etc/systemd/system/
-sudo systemctl enable nagu-bot
-sudo systemctl start nagu-bot
-```
+---
 
-## 📖 Usage
+## Commands
 
-### Basic Commands
+### User Commands
+| Command | Description |
+|---------|-------------|
+| `/start` | Welcome message |
+| `/help` | Show all features |
+| `/id` | Get your Telegram user ID |
+| `/chatid` | Get current chat ID |
+| `/myinfo` | Account details |
+| `/mp3` | Extract audio from replied video |
+| `/ping` | Health check |
 
-#### Download Commands
-- Send any Instagram/YouTube/Pinterest/Spotify link
-- `/mp3 <song name>` — Search and download music
-
-#### Info Commands
-- `/start` — Welcome message with user info
-- `/help` — View all features (5 premium panels)
-- `/id` — Get user ID
-- `/chatid` — Get chat ID
-- `/myinfo` — Get detailed user information
-
-#### Admin Commands (Groups Only)
-- `/promote` — Promote user to admin (reply to user)
-- `/demote` — Demote admin (reply to user)
-- `/mute [minutes]` — Mute user (reply to user)
-- `/unmute` — Unmute user (reply to user)
-- `/ban` — Ban user (reply to user)
-- `/unban` — Unban user (reply to user)
-
-#### Filter Commands (Groups Only)
-- `/filter <word>` — Add word to filter (substring match)
-- `/unfilter <word>` — Remove word from filter
-- `/filters` — List all filters
-- `/block <word>` — Block exact word
-- `/unblock <word>` — Unblock word
-- `/blocklist` — List all blocked words
-
-#### Other Commands
-- `/whisper <message>` — Send private message (reply to user in group)
-
-### Spotify Workflow
-
-1. User sends Spotify playlist link
-2. Bot deletes user message after 3-5 seconds
-3. Bot sends "Spotify Playlist Fetched" message
-4. Live progress updates with dual progress bars:
-   - Main bar: Overall playlist progress
-   - Sub bar: Current song progress
-5. Songs sent in batches of 10 to user's DM
-6. Final completion message in group
-
-## 🏗️ Architecture
-
-```
-/core           → Bot initialization, config, dispatcher
-/downloaders    → Instagram, Pinterest, YouTube, Spotify, MP3
-/workers        → Async queues, concurrency pools
-/ui             → Message formatting, progress bars
-/admin          → Permissions, moderation, filters
-/utils          → Logging, Redis, helpers
-/assets         → Images for UI
-```
-
-## ⚡ Performance Optimizations
-
-- **Async Subprocess** — All downloads run asynchronously
-- **Worker Pools** — Configurable concurrency limits
-- **Cookie Rotation** — Random cookie selection per request
-- **Proxy Rotation** — Random proxy selection per request
-- **Redis Caching** — Admin permissions cached for 5 minutes
-- **Batch Processing** — Spotify songs sent in batches
-- **Rate Limiting** — Semaphore-based concurrency control
-
-## 🔒 Security
-
-- All secrets stored in environment variables
-- Admin permissions verified with Telegram API
-- Redis-backed permission caching
-- Secure whisper delivery (no public leaks)
-- Input validation and sanitization
-
-## 🐛 Troubleshooting
-
-### Bot not responding
-- Check bot token is correct
-- Verify Redis connection
-- Check logs for errors
-
-### Downloads failing
-- Verify FFmpeg is installed
-- Check cookie files are valid
-- Try adding proxies
-- Check yt-dlp is up to date
-
-### Spotify not working
-- Verify Spotify API credentials
-- Check spotdl is installed
-- Ensure FFmpeg is available
-
-### Admin commands not working
-- Verify user is Telegram admin
-- Check Redis connection
-- Clear admin cache if needed
-
-## 📝 License
-
-MIT License - See LICENSE file for details
-
-## 👥 Contributing
-
-Contributions welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
-
-## 📧 Support
-
-For issues and questions:
-- Open an issue on GitHub
-- Contact: @bhosadih
-
-## 🎯 Roadmap
-
-- [ ] Twitter/X downloader
-- [ ] TikTok downloader
-- [ ] Batch download queue
-- [ ] User statistics
-- [ ] Download history
-- [ ] Custom download quality settings
-- [ ] Multi-language support
+### Admin Commands
+| Command | Description |
+|---------|-------------|
+| `/broadcast <text>` | Broadcast text to all users & groups |
+| `/broadcast` (reply) | Broadcast any media message |
+| `/assign` | Configure custom emojis for UI positions |
+| `/stats` | User and group statistics |
+| `/admin` | Admin panel |
 
 ---
 
-**Built with ❤️ for the Telegram community**
+## Architecture
+
+```
+bot.py                  — Entry point, startup checks
+core/
+  bot.py                — Bot + dispatcher initialization
+  config.py             — Centralized config (env vars)
+  emoji_config.py       — Legacy emoji config (core layer)
+downloaders/
+  router.py             — URL routing, admin commands, info commands
+  youtube.py            — YouTube video/audio/shorts/playlist
+  instagram.py          — Instagram posts/reels
+  spotify.py            — Spotify tracks and playlists
+  pinterest.py          — Pinterest video pins
+ui/
+  emoji_config.py       — Async emoji resolver (get_emoji_async)
+  formatting.py         — All user-facing message formatters (async)
+  stickers.py           — Platform sticker sending
+  progress.py           — Progress bar helpers
+utils/
+  log_channel.py        — Download activity logger
+  broadcast.py          — Mass messaging engine
+  cache.py              — URL → file_id Redis cache
+  error_handler.py      — Async error message formatter
+  helpers.py            — Cookie/proxy/metadata helpers
+  media_processor.py    — FFmpeg encode/split/info
+  rate_limiter.py       — Per-user rate limiting
+  redis_client.py       — Redis connection
+  user_state.py         — User registration/cooldown state
+  watchdog.py           — Per-user concurrent slot control
+workers/
+  task_queue.py         — Semaphores for concurrency control
+assets/
+  picture.png           — Welcome image (optional)
+```
+
+---
+
+## Emoji System
+
+Admins can assign custom Telegram premium emojis (or plain unicode) to any UI position using `/assign`.
+
+Emojis are stored in Redis under `emoji:{KEY}` and resolved at runtime:
+- **Numeric ID** → rendered as `<tg-emoji emoji-id="...">fallback</tg-emoji>`
+- **Unicode string** → returned as-is
+- **Not set / Redis unavailable** → falls back to `DEFAULT_EMOJIS` dict
+
+Available keys: `SUCCESS`, `ERROR`, `PROCESS`, `MUSIC`, `VIDEO`, `PLAYLIST`, `SPOTIFY`, `YT`, `INSTA`, `PINTEREST`, `DOWNLOAD`, `COMPLETE`, `BROADCAST`, `INFO`, `ID`, `USER`, `PING`, `STAR`, `FIRE`, `ROCKET`, `CROWN`, `DIAMOND`, `ZAP`, `WAVE`, `DELIVERED`, `FAST`, `LOADING`, `CHECK`
+
+---
+
+## Troubleshooting
+
+**Bot not responding**
+- Check `BOT_TOKEN` is correct
+- Verify Redis connection (`REDIS_URL` / `REDIS_TOKEN`)
+- Check logs for errors
+
+**Downloads failing**
+- Verify FFmpeg is installed (`ffmpeg -version`)
+- Check cookie files are valid and not expired
+- Update yt-dlp: `pip install -U yt-dlp`
+
+**Spotify not working**
+- Verify `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET`
+- Check spotdl is installed: `pip install spotdl`
+- Ensure FFmpeg is available
+
+**Admin commands not working**
+- Verify your Telegram user ID is in `ADMIN_IDS` env var
+
+---
+
+## License
+
+MIT License
+
+---
+
+**Built for the Telegram community**
