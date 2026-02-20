@@ -122,7 +122,7 @@ async def _safe_reply(m: Message, text: str, **kwargs) -> None:
         await m.reply(text, **kwargs)
     except Exception as e:
         err_str = str(e).lower()
-        if "message to be replied not found" in err_str or "bad request" in err_str:
+        if "message to be replied not found" in err_str or "replied message not found" in err_str:
             try:
                 await bot.send_message(m.chat.id, text, **kwargs)
             except Exception:
@@ -225,7 +225,8 @@ async def cmd_mp3(m: Message):
     # Must reply to a video
     reply = m.reply_to_message
     if not reply or not reply.video:
-        await _safe_reply(m, "Reply to a video with /mp3", parse_mode="HTML")
+        _info = await get_emoji_async("INFO")
+        await _safe_reply(m, f"{_info} 𝐑𝐞𝐩𝐥𝐲 ᴛᴏ ᴀ ᴠɪᴅᴇᴏ ᴡɪᴛʜ /mp3", parse_mode="HTML")
         return
 
     import tempfile
@@ -456,7 +457,8 @@ def _is_admin(user_id: int) -> bool:
 @dp.message(Command("admin"))
 async def cmd_admin(m: Message):
     if not _is_admin(m.from_user.id):
-        await _safe_reply(m, "⛔ You are not authorized.", parse_mode="HTML")
+        _err = await get_emoji_async("ERROR")
+        await _safe_reply(m, f"{_err} 𝐀ᴅᴍɪɴ 𝐎ɴʟʏ", parse_mode="HTML")
         return
     users  = await get_all_users()
     groups = await get_all_groups()
@@ -494,7 +496,8 @@ async def cmd_broadcast(m: Message):
       /broadcast (reply to msg) — broadcast that exact message (any type)
     """
     if not _is_admin(m.from_user.id):
-        await _safe_reply(m, "⛔ You are not authorized.", parse_mode="HTML")
+        _err = await get_emoji_async("ERROR")
+        await _safe_reply(m, f"{_err} 𝐀ᴅᴍɪɴ 𝐎ɴʟʏ", parse_mode="HTML")
         return
 
     # If replying to a message — broadcast that message (any media type)
@@ -510,9 +513,10 @@ async def cmd_broadcast(m: Message):
     # Otherwise broadcast text from command
     parts = (m.text or "").split(None, 1)
     if len(parts) < 2 or not parts[1].strip():
+        _info = await get_emoji_async("INFO")
         await _safe_reply(
             m,
-            "Usage:\n"
+            f"{_info} 𝐁ʀᴏᴀᴅᴄᴀꜱᴛ 𝐔ꜱᴀɢᴇ\n\n"
             "/broadcast Your message here\n\n"
             "Or reply to any message with /broadcast to broadcast it.",
             parse_mode="HTML",
@@ -533,11 +537,13 @@ async def cmd_broadcast(m: Message):
 async def cmd_broadcast_media(m: Message):
     """Broadcast media (reply to media). Admin only. Legacy — use /broadcast instead."""
     if not _is_admin(m.from_user.id):
-        await _safe_reply(m, "⛔ You are not authorized.", parse_mode="HTML")
+        _err = await get_emoji_async("ERROR")
+        await _safe_reply(m, f"{_err} 𝐀ᴅᴍɪɴ 𝐎ɴʟʏ", parse_mode="HTML")
         return
 
     if not m.reply_to_message:
-        await _safe_reply(m, "Reply to a media message to broadcast it.", parse_mode="HTML")
+        _info = await get_emoji_async("INFO")
+        await _safe_reply(m, f"{_info} Reply to a media message to broadcast it.", parse_mode="HTML")
         return
 
     reply = m.reply_to_message
@@ -548,10 +554,11 @@ async def cmd_broadcast_media(m: Message):
     ])
 
     if not has_media and not reply.text:
-        await _safe_reply(m, "Reply to a message with media or text.", parse_mode="HTML")
+        _info = await get_emoji_async("INFO")
+        await _safe_reply(m, f"{_info} Reply to a message with media or text.", parse_mode="HTML")
         return
 
-    await _safe_reply(m, format_broadcast_started(), parse_mode="HTML")
+    await _safe_reply(m, await format_broadcast_started(), parse_mode="HTML")
 
     asyncio.create_task(
         run_broadcast(bot, m.from_user.id, reply_to_msg=reply)
@@ -596,7 +603,8 @@ async def _build_assign_keyboard(configured_keys: set) -> InlineKeyboardMarkup:
 async def cmd_assign(m: Message):
     """Visual emoji assignment system — admin only"""
     if not _is_admin(m.from_user.id):
-        await _safe_reply(m, "⛔ You are not authorized.", parse_mode="HTML")
+        _err = await get_emoji_async("ERROR")
+        await _safe_reply(m, f"{_err} 𝐀ᴅᴍɪɴ 𝐎ɴʟʏ", parse_mode="HTML")
         return
 
     configured = await _get_configured_emoji_keys()
@@ -609,7 +617,7 @@ async def cmd_assign(m: Message):
 async def cb_assign(callback):
     """Handle emoji assignment button tap"""
     if not _is_admin(callback.from_user.id):
-        await callback.answer("⛔ Unauthorized", show_alert=True)
+        await callback.answer("Admin Only", show_alert=True)
         return
 
     key = callback.data.split(":", 1)[1]
