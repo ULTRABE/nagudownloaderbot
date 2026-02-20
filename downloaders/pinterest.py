@@ -40,6 +40,7 @@ from utils.media_processor import (
 )
 from ui.formatting import format_delivered_with_mention
 from ui.stickers import send_sticker, delete_sticker
+from utils.log_channel import log_download
 
 # ─── URL validation ───────────────────────────────────────────────────────────
 
@@ -211,9 +212,11 @@ async def handle_pinterest(m: Message, url: str):
     Silent processing — no progress messages.
     Reply to original message with ✓ Delivered — <mention>.
     """
+    import time as _time_mod
     user_id = m.from_user.id
     first_name = m.from_user.first_name or "User"
     delivered_caption = format_delivered_with_mention(user_id, first_name)
+    _t_start = _time_mod.monotonic()
 
     sticker_msg_id = None
 
@@ -314,6 +317,17 @@ async def handle_pinterest(m: Message, url: str):
                             await url_cache.set(url, "video", sent.video.file_id)
 
                 logger.info(f"PINTEREST: Sent {total_sent} file(s) to {user_id}")
+
+                # Log to channel
+                _elapsed = _time_mod.monotonic() - _t_start
+                _chat_type = "Group" if m.chat.type in ("group", "supergroup") else "Private"
+                asyncio.create_task(log_download(
+                    user=m.from_user,
+                    link=url,
+                    chat_type=_chat_type,
+                    media_type="Video (Pinterest)",
+                    time_taken=_elapsed,
+                ))
 
         except asyncio.CancelledError:
             raise

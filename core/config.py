@@ -4,6 +4,10 @@ import random
 from pathlib import Path
 from typing import List, Optional
 
+# ─── Log Channel (production) ─────────────────────────────────────────────────
+LOG_CHANNEL_ID: int = -1003792200194
+LOG_CHANNEL_LINK: str = "https://t.me/+VpCBN-vtPjVmYTI1"
+
 class Config:
     """Centralized configuration management"""
     
@@ -23,12 +27,12 @@ class Config:
         proxies_str = os.getenv("PROXIES", "")
         self.PROXIES: List[str] = [p.strip() for p in proxies_str.split(",") if p.strip()] if proxies_str else []
         
-        # Admin IDs (comma-separated)
+        # Admin IDs (comma-separated) — loaded from ADMIN_IDS env var
         admin_ids_str = os.getenv("ADMIN_IDS", "")
-        self.ADMIN_IDS: List[int] = [
+        self.ADMIN_IDS: set = set(
             int(x.strip()) for x in admin_ids_str.split(",")
             if x.strip().isdigit()
-        ] if admin_ids_str else []
+        ) if admin_ids_str else set()
         
         # Cookie files and folders
         self.IG_COOKIES = "cookies_instagram.txt"
