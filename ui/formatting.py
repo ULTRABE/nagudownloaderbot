@@ -15,10 +15,17 @@ STRICT RULES:
   - Do NOT stylize: progress bars, percentages, dynamic numbers, file sizes,
     mentions, URLs, inline buttons
   - No duplicate stylizing, no double wrapping
+
+Emoji usage:
+  - All user-facing emojis come from get_emoji_async() (async functions)
+  - Sync functions use get_emoji() as fallback (no Redis)
+  - Never hardcode emojis in message strings — always use the emoji resolver
 """
 from __future__ import annotations
 from typing import List
 from aiogram.types import User
+
+from ui.emoji_config import get_emoji, get_emoji_async
 
 
 # ─── Centralized UI title helper ──────────────────────────────────────────────
@@ -50,15 +57,26 @@ def mention(user: User) -> str:
     return f'<a href="tg://user?id={user.id}">{safe}</a>'
 
 
-def format_delivered_with_mention(user_id: int, first_name: str) -> str:
+async def format_delivered_with_mention(user_id: int, first_name: str) -> str:
     """
     Returns a clean delivered message with clickable user mention.
     Uses HTML mode for safety.
 
     Output: ✓ Delivered — <Name>
     """
+    emoji = await get_emoji_async("DELIVERED")
     safe_name = (first_name or "User")[:32].replace("<", "").replace(">", "")
-    return f'✓ Delivered — <a href="tg://user?id={user_id}">{safe_name}</a>'
+    return f'{emoji} Delivered — <a href="tg://user?id={user_id}">{safe_name}</a>'
+
+
+def format_delivered_with_mention_sync(user_id: int, first_name: str) -> str:
+    """
+    Sync fallback for format_delivered_with_mention.
+    Uses static emoji config (no Redis).
+    """
+    emoji = get_emoji("DELIVERED")
+    safe_name = (first_name or "User")[:32].replace("<", "").replace(">", "")
+    return f'{emoji} Delivered — <a href="tg://user?id={user_id}">{safe_name}</a>'
 
 
 def format_user_id(user_id: int) -> str:
@@ -92,9 +110,10 @@ def premium_panel(title: str, lines: list) -> str:
     return quoted_block(content)
 
 
-def format_downloading() -> str:
-    """Legacy compat"""
-    return "⏳ Processing link..."
+async def format_downloading() -> str:
+    """Processing/downloading indicator"""
+    emoji = await get_emoji_async("PROCESS")
+    return f"{emoji} Processing link..."
 
 
 def code_panel(lines: List[str], width: int = 32) -> str:
@@ -120,13 +139,14 @@ def code_panel(lines: List[str], width: int = 32) -> str:
 
 # ─── /start ───────────────────────────────────────────────────────────────────
 
-def format_welcome(user: User, user_id: int) -> str:
+async def format_welcome(user: User, user_id: int) -> str:
     """
     Welcome message with unified font heading.
     No promotional/marketing text.
     """
+    wave = await get_emoji_async("WAVE")
     return (
-        "👋 <b>𝐖𝐞𝐥𝐜𝐨𝐦𝐞 𝐭𝐨 𝐍𝐚𝐠𝐮 𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐞𝐫</b>\n\n"
+        f"{wave} <b>𝐖𝐞𝐥𝐜𝐨𝐦𝐞 𝐭𝐨 𝐍𝐚𝐠𝐮 𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐞𝐫</b>\n\n"
         "ꜱᴇɴᴅ ᴀ ʟɪɴᴋ ꜰʀᴏᴍ:\n"
         "• YouTube\n"
         "• Instagram\n"
@@ -137,10 +157,15 @@ def format_welcome(user: User, user_id: int) -> str:
 
 # ─── /help ────────────────────────────────────────────────────────────────────
 
-def format_help() -> str:
+async def format_help() -> str:
     """Single unified help message with stylized heading"""
+    info = await get_emoji_async("INFO")
+    yt   = await get_emoji_async("YT")
+    sp   = await get_emoji_async("SPOTIFY")
+    ig   = await get_emoji_async("INSTA")
+    pin  = await get_emoji_async("PINTEREST")
     return (
-        "𝐇𝐞𝐥𝐩 — 𝐂𝐨𝐦𝐦𝐚𝐧𝐝𝐬 &amp; 𝐅𝐞𝐚𝐭𝐮𝐫𝐞𝐬\n\n"
+        f"{info} 𝐇𝐞𝐥𝐩 — 𝐂𝐨𝐦𝐦𝐚𝐧𝐝𝐬 &amp; 𝐅𝐞𝐚𝐭𝐮𝐫𝐞𝐬\n\n"
         "/start — Start the bot\n"
         "/help — Show commands\n"
         "/id — Get your user ID\n"
@@ -149,17 +174,17 @@ def format_help() -> str:
         "/broadcast — Admin broadcast\n"
         "/mp3 — Extract audio from video\n\n"
         "<b>𝐅𝐞𝐚𝐭𝐮𝐫𝐞𝐬:</b>\n\n"
-        "• YouTube — Video / Audio download\n"
-        "• Spotify — Track &amp; playlist support\n"
-        "• Instagram — Reels &amp; posts\n"
-        "• Pinterest — Video pins\n"
+        f"• {yt} YouTube — Video / Audio download\n"
+        f"• {sp} Spotify — Track &amp; playlist support\n"
+        f"• {ig} Instagram — Reels &amp; posts\n"
+        f"• {pin} Pinterest — Video pins\n"
         "• Fast progress bar system"
     )
 
 
 # Legacy compat — keep old functions pointing to new single help
-def format_help_video() -> str:
-    return format_help()
+async def format_help_video() -> str:
+    return await format_help()
 
 
 def format_help_music() -> str:
@@ -172,12 +197,13 @@ def format_help_info() -> str:
 
 # ─── /myinfo ──────────────────────────────────────────────────────────────────
 
-def format_myinfo(user: User, chat_title: str = None) -> str:
+async def format_myinfo(user: User, chat_title: str = None) -> str:
     """Clean plain HTML — stylized heading"""
+    user_emoji = await get_emoji_async("USER")
     username = f"@{user.username}" if user.username else "—"
     chat_type = "private" if not chat_title else "group"
     text = (
-        "👤 <b>𝐀𝐜𝐜𝐨𝐮𝐧𝐭 𝐈𝐧𝐟𝐨</b>\n\n"
+        f"{user_emoji} <b>𝐀𝐜𝐜𝐨𝐮𝐧𝐭 𝐈𝐧𝐟𝐨</b>\n\n"
         f"Name: {(user.first_name or '—')[:32]}\n"
         f"Last Name: {(user.last_name or '—')[:32]}\n"
         f"Username: {username}\n"
@@ -190,11 +216,12 @@ def format_myinfo(user: User, chat_title: str = None) -> str:
 
 # ─── /id ──────────────────────────────────────────────────────────────────────
 
-def format_id(user: User, label: str = "YOUR  ID") -> str:
+async def format_id(user: User, label: str = "YOUR  ID") -> str:
     """Clean plain HTML — stylized heading"""
+    id_emoji = await get_emoji_async("ID")
     username = f"@{user.username}" if user.username else "—"
     is_other = "USER" in label.upper()
-    title = "🆔 𝐔𝐬𝐞𝐫 𝐈𝐃" if is_other else "🆔 𝐘𝐨𝐮𝐫 𝐈𝐃"
+    title = f"{id_emoji} 𝐔𝐬𝐞𝐫 𝐈𝐃" if is_other else f"{id_emoji} 𝐘𝐨𝐮𝐫 𝐈𝐃"
     return (
         f"{title}\n\n"
         f"Name: {(user.first_name or '—')[:32]}\n"
@@ -205,10 +232,11 @@ def format_id(user: User, label: str = "YOUR  ID") -> str:
 
 # ─── /chatid ──────────────────────────────────────────────────────────────────
 
-def format_chatid(chat_id: int, chat_title: str, chat_type: str) -> str:
+async def format_chatid(chat_id: int, chat_title: str, chat_type: str) -> str:
     """Clean plain HTML — stylized heading"""
+    info = await get_emoji_async("INFO")
     return (
-        "💬 <b>𝐂𝐡𝐚𝐭 𝐈𝐃</b>\n\n"
+        f"{info} <b>𝐂𝐡𝐚𝐭 𝐈𝐃</b>\n\n"
         f"Chat: {chat_title[:32]}\n"
         f"Type: {chat_type}\n"
         f"ID: <code>{chat_id}</code>"
@@ -217,7 +245,7 @@ def format_chatid(chat_id: int, chat_title: str, chat_type: str) -> str:
 
 # ─── Admin panel ──────────────────────────────────────────────────────────────
 
-def format_admin_panel(stats: dict = None) -> str:
+async def format_admin_panel(stats: dict = None) -> str:
     """Clean plain HTML admin panel — stylized heading"""
     text = (
         "🔧 <b>𝐀𝐝𝐦𝐢𝐧 𝐏𝐚𝐧𝐞𝐥</b>\n\n"
@@ -236,9 +264,10 @@ def format_admin_panel(stats: dict = None) -> str:
 
 # ─── /status ──────────────────────────────────────────────────────────────────
 
-def format_status(active_jobs: int = 0, queue: int = 0, uptime: str = "—") -> str:
+async def format_status(active_jobs: int = 0, queue: int = 0, uptime: str = "—") -> str:
+    info = await get_emoji_async("INFO")
     return (
-        f"📊 <b>𝐁𝐨𝐭 𝐒𝐭𝐚𝐭𝐮𝐬</b>\n\n"
+        f"{info} <b>𝐁𝐨𝐭 𝐒𝐭𝐚𝐭𝐮𝐬</b>\n\n"
         f"Active Jobs: {active_jobs}\n"
         f"Queue: {queue}\n"
         f"Uptime: {uptime}"
@@ -247,50 +276,59 @@ def format_status(active_jobs: int = 0, queue: int = 0, uptime: str = "—") -> 
 
 # ─── Download status messages ─────────────────────────────────────────────────
 
-def format_processing(platform: str = "") -> str:
+async def format_processing(platform: str = "") -> str:
     """Initial processing message"""
+    process = await get_emoji_async("PROCESS")
+    fast    = await get_emoji_async("FAST")
+    music   = await get_emoji_async("MUSIC")
+    pin     = await get_emoji_async("PIN")
+
     if platform == "youtube":
-        return "⏳ Processing link..."
+        return f"{process} Processing link..."
     elif platform == "shorts":
-        return "⚡ Processing Short..."
+        return f"{fast} Processing Short..."
     elif platform == "ytmusic":
-        return "🎵 Processing Audio..."
+        return f"{music} Processing Audio..."
     elif platform == "instagram":
-        return "⚡ Fetching Media..."
+        return f"{fast} Fetching Media..."
     elif platform == "pinterest":
-        return "📌 Fetching Media..."
+        return f"{pin} Fetching Media..."
     elif platform == "spotify":
-        return "🎵 Processing Track..."
-    return "⏳ Processing link..."
+        return f"{music} Processing Track..."
+    return f"{process} Processing link..."
 
 
-def format_progress(pct: int, label: str = "Preparing media...") -> str:
+async def format_progress(pct: int, label: str = "Preparing media...") -> str:
     """
     📥 𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐢𝐧𝐠
 
     [████░░░░░░] 40%
     Preparing media...
     """
+    dl = await get_emoji_async("DOWNLOAD")
     width = 10
     filled = int(width * pct / 100)
     bar = "█" * filled + "░" * (width - filled)
-    return f"📥 <b>𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐢𝐧𝐠</b>\n\n[{bar}] {pct}%\n{label}"
+    return f"{dl} <b>𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐢𝐧𝐠</b>\n\n[{bar}] {pct}%\n{label}"
 
 
-def format_delivered() -> str:
+async def format_delivered() -> str:
     """Plain delivery confirmation"""
-    return "✓ Delivered"
+    emoji = await get_emoji_async("DELIVERED")
+    return f"{emoji} Delivered"
 
 
-def format_error(message: str | None = None) -> str:
+async def format_error(message: str | None = None) -> str:
     """Global error message — never show debug info"""
-    return "⚠ Unable to process this link.\n\nPlease try again."
+    emoji = await get_emoji_async("ERROR")
+    return f"{emoji} Unable to process this link.\n\nPlease try again."
 
 
 # ─── Spotify progress ─────────────────────────────────────────────────────────
 
-def format_playlist_detected() -> str:
-    return "🎵 <b>𝐏ʟᴀʏʟɪꜱᴛ 𝐃𝐞𝐭𝐞𝐜𝐭𝐞𝐝</b>\n\nStarting download..."
+async def format_playlist_detected() -> str:
+    music = await get_emoji_async("MUSIC")
+    return f"{music} <b>𝐏ʟᴀʏʟɪꜱᴛ 𝐃𝐞𝐭𝐞𝐜𝐭𝐞ᴅ</b>\n\nStarting download..."
 
 
 def format_playlist_progress(name: str, done: int, total: int) -> str:
@@ -315,7 +353,7 @@ def format_playlist_progress(name: str, done: int, total: int) -> str:
     )
 
 
-def format_playlist_final(user: User, name: str, total: int, sent: int, failed: int) -> str:
+async def format_playlist_final(user: User, name: str, total: int, sent: int, failed: int) -> str:
     """
     𝐏ʟᴀʏʟɪꜱᴛ 𝐂ᴏᴍᴘʟᴇᴛᴇᴅ
 
@@ -323,10 +361,11 @@ def format_playlist_final(user: User, name: str, total: int, sent: int, failed: 
     Sent: 692
     Failed: 8
     """
+    complete = await get_emoji_async("COMPLETE")
     safe_name = (user.first_name or "User")[:32].replace("<", "").replace(">", "")
     user_link = f'<a href="tg://user?id={user.id}">{safe_name}</a>'
     return (
-        f"𝐏ʟᴀʏʟɪꜱᴛ 𝐂ᴏᴍᴘʟᴇᴛᴇᴅ\n\n"
+        f"{complete} 𝐏ʟᴀʏʟɪꜱᴛ 𝐂ᴏᴍᴘʟᴇᴛᴇᴅ\n\n"
         f"Total: {total}\n"
         f"Sent: {sent}\n"
         f"Failed: {failed}\n\n"
@@ -336,12 +375,12 @@ def format_playlist_final(user: User, name: str, total: int, sent: int, failed: 
 
 def format_playlist_dm_complete(name: str) -> str:
     """Final DM message after playlist delivery"""
-    return "𝐏ʟᴀʏʟɪꜱᴛ 𝐃𝐞𝐥𝐢𝐯𝐞𝐫𝐞𝐝."
+    return "𝐏ʟᴀʏʟɪꜱᴛ 𝐃𝐞𝐥𝐢𝐯𝐞𝐫𝐞ᴅ."
 
 
-def format_spotify_complete(user: User, total: int, sent: int) -> str:
+async def format_spotify_complete(user: User, total: int, sent: int) -> str:
     """Legacy compat"""
-    return format_playlist_final(user, "", total, sent, total - sent)
+    return await format_playlist_final(user, "", total, sent, total - sent)
 
 
 # ─── YouTube playlist ─────────────────────────────────────────────────────────
@@ -379,11 +418,12 @@ def format_yt_playlist_progress(name: str, done: int, total: int) -> str:
     )
 
 
-def format_yt_playlist_final(name: str, total: int, sent: int, failed: int) -> str:
+async def format_yt_playlist_final(name: str, total: int, sent: int, failed: int) -> str:
     """YouTube playlist completion message"""
+    complete = await get_emoji_async("COMPLETE")
     name_short = (name or "Playlist")[:30]
     return (
-        f"𝐏ʟᴀʏʟɪꜱᴛ 𝐂ᴏᴍᴘʟᴇᴛᴇᴅ\n\n"
+        f"{complete} 𝐏ʟᴀʏʟɪꜱᴛ 𝐂ᴏᴍᴘʟᴇᴛᴇᴅ\n\n"
         f"Total: {total}\n"
         f"Sent: {sent}\n"
         f"Failed: {failed}"
@@ -392,13 +432,15 @@ def format_yt_playlist_final(name: str, total: int, sent: int, failed: int) -> s
 
 # ─── Broadcast ────────────────────────────────────────────────────────────────
 
-def format_broadcast_started() -> str:
-    return "📢 <b>𝐁ʀᴏᴀᴅᴄᴀꜱᴛ 𝐒𝐭𝐚𝐫𝐭𝐞𝐝</b>"
+async def format_broadcast_started() -> str:
+    bc = await get_emoji_async("BROADCAST")
+    return f"{bc} <b>𝐁ʀᴏᴀᴅᴄᴀꜱᴛ 𝐒𝐭𝐚𝐫𝐭𝐞ᴅ</b>"
 
 
-def format_broadcast_report(total_users: int, total_groups: int, success: int, failed: int) -> str:
+async def format_broadcast_report(total_users: int, total_groups: int, success: int, failed: int) -> str:
+    bc = await get_emoji_async("BROADCAST")
     return (
-        f"📢 <b>𝐁ʀᴏᴀᴅᴄᴀꜱᴛ 𝐑𝐞𝐩𝐨𝐫𝐭</b>\n\n"
+        f"{bc} <b>𝐁ʀᴏᴀᴅᴄᴀꜱᴛ 𝐑𝐞𝐩𝐨𝐫𝐭</b>\n\n"
         f"Users: {total_users:,}\n"
         f"Groups: {total_groups:,}\n"
         f"Success: {success:,}\n"
@@ -477,9 +519,10 @@ def format_assign_updated() -> str:
 
 # ─── Stats ────────────────────────────────────────────────────────────────────
 
-def format_stats(users: int, groups: int) -> str:
+async def format_stats(users: int, groups: int) -> str:
+    info = await get_emoji_async("INFO")
     return (
-        f"📊 <b>𝐁𝐨𝐭 𝐒𝐭𝐚𝐭𝐬</b>\n\n"
+        f"{info} <b>𝐁𝐨𝐭 𝐒𝐭𝐚𝐭𝐬</b>\n\n"
         f"Users: {users}\n"
         f"Groups: {groups}"
     )
@@ -487,31 +530,13 @@ def format_stats(users: int, groups: int) -> str:
 
 # ─── Legacy compat ────────────────────────────────────────────────────────────
 
-def format_welcome_legacy(user: User, user_id: int) -> str:
-    return format_welcome(user, user_id)
+async def format_welcome_legacy(user: User, user_id: int) -> str:
+    return await format_welcome(user, user_id)
 
 
-def format_help_video_legacy() -> str:
-    return format_help_video()
+async def format_help_video_legacy() -> str:
+    return await format_help_video()
 
 
 def format_help_music_legacy() -> str:
     return format_help_music()
-
-
-def format_help_info_legacy() -> str:
-    return format_help_info()
-
-
-def format_download_complete(user: User, elapsed: float, platform: str) -> str:
-    """Legacy compat"""
-    return format_delivered()
-
-
-def format_audio_info(user: User, title: str, artist: str, size_mb: float, elapsed: float) -> str:
-    """Legacy compat"""
-    return format_delivered()
-
-
-def format_user_info(user: User, chat_title: str = None) -> str:
-    return format_myinfo(user, chat_title)
