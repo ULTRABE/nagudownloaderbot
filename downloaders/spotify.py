@@ -2,10 +2,10 @@
 Spotify Downloader — Single track + Large playlist (600–700 songs).
 
 Single track (group):
-  🎵 Processing Track... → audio sent to DM → ✓ Sent to your DM (reply in group)
+  🎵 Processing Track... → 📥 Downloading... [progress] → audio to DM → ✓ Sent to your DM
 
 Single track (DM):
-  🎵 Processing Track... → audio sent → 🎵 Track Ready
+  🎵 Processing Track... → 📥 Downloading... [progress] → audio → ✓ Delivered — <mention>
 
 Playlist (group-only):
   🎵 Playlist Detected → Starting download...
@@ -13,18 +13,20 @@ Playlist (group-only):
   Final: 🎉 Playlist Completed — mention
   DM: 🎵 Playlist Delivered
 
-Progress format:
-  Playlist: NAME
-  [██████░░░░] 60%
-  420 / 700 completed
+URL detection:
+  https://open.spotify.com/track/
+  https://open.spotify.com/playlist/
+  https://open.spotify.com/album/
+  spotify:track:
 """
 import asyncio
 import os
 import re
 import time
 import tempfile
+import traceback
 from pathlib import Path
-from typing import Set, Tuple
+from typing import Set, Tuple, Optional
 
 from aiogram.types import Message, FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramForbiddenError
@@ -48,10 +50,60 @@ def is_spotify_playlist(url: str) -> bool:
 
 def is_spotify_track(url: str) -> bool:
     url_lower = url.lower()
-    return "/track/" in url_lower or url_lower.startswith("spotify:track:")
+    return (
+        "/track/" in url_lower or
+        url_lower.startswith("spotify:track:") or
+        "open.spotify.com/track/" in url_lower
+    )
 
 def is_spotify_url(url: str) -> bool:
     return "spotify.com" in url.lower() or url.lower().startswith("spotify:")
+
+# ─── Progress bar helper ──────────────────────────────────────────────────────
+
+def _progress_bar(pct: int, label: str = "") -> str:
+    width = 10
+    filled = int(width * pct / 100)
+    bar = "█" * filled + "░" * (width - filled)
+    text = f"📥 <b>Downloading</b>\n\n[{bar}] {pct}%"
+    if label:
+        text += f"\n{label}"
+    return text
+
+# ─── Safe reply helpers ───────────────────────────────────────────────────────
+
+async def _safe_reply(m: Message, text: str, **kwargs) -> Optional[Message]:
+    """Reply with fallback to plain send."""
+    try:
+        return await m.reply(text, **kwargs)
+    except Exception as e:
+        err_str = str(e).lower()
+        if "message to be replied not found" in err_str or "bad request" in err_str:
+            try:
+                return await bot.send_message(m.chat.id, text, **kwargs)
+            except Exception as e2:
+                logger.error(f"Spotify safe_reply fallback failed: {e2}")
+                return None
+        logger.error(f"Spotify reply failed: {e}")
+        return None
+
+async def _safe_edit(msg: Optional[Message], text: str, **kwargs) -> None:
+    """Non-blocking safe message edit"""
+    if not msg:
+        return
+    try:
+        await msg.edit_text(text, **kwargs)
+    except Exception:
+        pass
+
+async def _safe_delete(msg: Optional[Message]) -> None:
+    """Non-blocking safe message delete"""
+    if not msg:
+        return
+    try:
+        await msg.delete()
+    except Exception:
+        pass
 
 # ─── Single track ─────────────────────────────────────────────────────────────
 
@@ -60,25 +112,45 @@ async def handle_spotify_single(m: Message, url: str):
     Download single Spotify track.
     Works in private + group chats.
 
-    Group: 🎵 Processing Track... → audio to DM → ✓ Sent to your DM
-    DM:    🎵 Processing Track... → audio → 🎵 Track Ready
+    Group: 🎵 Processing Track... → 📥 Downloading... → audio to DM → ✓ Sent to your DM
+    DM:    🎵 Processing Track... → 📥 Downloading... → audio → ✓ Delivered — <mention>
+
+    Uses 192k bitrate for speed.
+    Total target: < 5 seconds.
     """
     if not config.SPOTIFY_CLIENT_ID or not config.SPOTIFY_CLIENT_SECRET:
-        try:
-            await m.reply("⚠ Unable to process this link.\n\nPlease try again.", parse_mode="HTML")
-        except Exception:
-            await bot.send_message(m.chat.id, "⚠ Unable to process this link.\n\nPlease try again.", parse_mode="HTML")
+        logger.warning("Spotify: CLIENT_ID or CLIENT_SECRET not configured")
+        await _safe_reply(
+            m,
+            "⚠ Unable to process this link.\n\nPlease try again.",
+            parse_mode="HTML",
+        )
         return
 
     is_group = m.chat.type in ("group", "supergroup")
-    try:
-        status = await m.reply("🎵 Processing Track...", parse_mode="HTML")
-    except Exception:
-        status = await bot.send_message(m.chat.id, "🎵 Processing Track...", parse_mode="HTML")
+    user_id = m.from_user.id
+    first_name = m.from_user.first_name or "User"
+    delivered_caption = format_delivered_with_mention(user_id, first_name)
+
+    status = await _safe_reply(m, "🎵 Processing Track...", parse_mode="HTML")
 
     try:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp = Path(tmp_dir)
+
+            # Animate progress while downloading
+            async def _animate():
+                steps = [
+                    (20, "Fetching audio..."),
+                    (40, "Fetching audio..."),
+                    (60, "Encoding..."),
+                    (80, "Encoding..."),
+                ]
+                for pct, label in steps:
+                    await asyncio.sleep(1.5)
+                    await _safe_edit(status, _progress_bar(pct, label), parse_mode="HTML")
+
+            anim_task = asyncio.create_task(_animate())
 
             cmd = [
                 "spotdl", "download", url,
@@ -86,10 +158,12 @@ async def handle_spotify_single(m: Message, url: str):
                 "--client-secret", config.SPOTIFY_CLIENT_SECRET,
                 "--output", str(tmp),
                 "--format", "mp3",
-                "--bitrate", "320k",
-                "--threads", "1",
+                "--bitrate", "192k",   # 192k is fast enough, 320k is too slow
+                "--threads", "2",
                 "--no-cache",
             ]
+
+            logger.info(f"SPOTIFY SINGLE: Starting download for {url}")
 
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -103,20 +177,21 @@ async def handle_spotify_single(m: Message, url: str):
                     timeout=config.DOWNLOAD_TIMEOUT,
                 )
             except asyncio.TimeoutError:
+                anim_task.cancel()
                 try:
                     proc.kill()
                     await asyncio.wait_for(proc.communicate(), timeout=5)
                 except Exception:
                     pass
-                try:
-                    await status.delete()
-                except Exception:
-                    pass
-                await m.reply(
+                await _safe_delete(status)
+                await _safe_reply(
+                    m,
                     "⚠ Unable to process this link.\n\nPlease try again.",
                     parse_mode="HTML",
                 )
                 return
+
+            anim_task.cancel()
 
             if proc.returncode is None:
                 try:
@@ -128,12 +203,11 @@ async def handle_spotify_single(m: Message, url: str):
             mp3_files = sorted(tmp.glob("*.mp3"))
 
             if not mp3_files:
-                logger.warning(f"SPOTIFY SINGLE: No MP3. stderr={stderr.decode()[:200]}")
-                try:
-                    await status.delete()
-                except Exception:
-                    pass
-                await m.reply(
+                stderr_text = stderr.decode(errors="replace")[:500] if stderr else ""
+                logger.warning(f"SPOTIFY SINGLE: No MP3 found. returncode={proc.returncode}, stderr={stderr_text}")
+                await _safe_delete(status)
+                await _safe_reply(
+                    m,
                     "⚠ Unable to process this link.\n\nPlease try again.",
                     parse_mode="HTML",
                 )
@@ -142,10 +216,9 @@ async def handle_spotify_single(m: Message, url: str):
             mp3_file = mp3_files[0]
             artist, title = extract_song_metadata(mp3_file.stem)
 
-            try:
-                await status.delete()
-            except Exception:
-                pass
+            logger.info(f"SPOTIFY SINGLE: Downloaded '{title}' by '{artist}'")
+
+            await _safe_delete(status)
 
             if is_group:
                 # Send to DM
@@ -155,9 +228,11 @@ async def handle_spotify_single(m: Message, url: str):
                         FSInputFile(mp3_file),
                         title=title,
                         performer=artist,
+                        caption=delivered_caption,
+                        parse_mode="HTML",
                     )
                     # Reply in group
-                    await m.reply("✓ Sent to your DM", parse_mode="HTML")
+                    await _safe_reply(m, "✓ Sent to your DM", parse_mode="HTML")
                 except TelegramForbiddenError:
                     # User hasn't started bot
                     bot_me = await bot.get_me()
@@ -167,7 +242,8 @@ async def handle_spotify_single(m: Message, url: str):
                             url=f"https://t.me/{bot_me.username}?start=spotify",
                         )
                     ]])
-                    await m.reply(
+                    await _safe_reply(
+                        m,
                         "⚠ Start the bot first to receive songs in DM.\n\nTap below, then resend the link 👇",
                         reply_markup=keyboard,
                         parse_mode="HTML",
@@ -180,30 +256,22 @@ async def handle_spotify_single(m: Message, url: str):
                     FSInputFile(mp3_file),
                     title=title,
                     performer=artist,
+                    caption=delivered_caption,
+                    parse_mode="HTML",
                 )
-                await m.reply("🎵 <b>Track Ready</b>\n\nEnjoy your music.", parse_mode="HTML")
 
-            logger.info(f"SPOTIFY SINGLE: '{title}' by '{artist}' → {m.from_user.id}")
+            logger.info(f"SPOTIFY SINGLE: '{title}' by '{artist}' → {user_id}")
 
     except asyncio.CancelledError:
         raise
     except Exception as e:
         logger.error(f"SPOTIFY SINGLE ERROR: {e}", exc_info=True)
-        try:
-            await status.delete()
-        except Exception:
-            pass
-        try:
-            await m.reply(
-                "⚠ Unable to process this link.\n\nPlease try again.",
-                parse_mode="HTML",
-            )
-        except Exception:
-            await bot.send_message(
-                m.chat.id,
-                "⚠ Unable to process this link.\n\nPlease try again.",
-                parse_mode="HTML",
-            )
+        await _safe_delete(status)
+        await _safe_reply(
+            m,
+            "⚠ Unable to process this link.\n\nPlease try again.",
+            parse_mode="HTML",
+        )
 
 # ─── Playlist watcher ─────────────────────────────────────────────────────────
 
@@ -312,6 +380,7 @@ async def _watch_and_send(
                 asyncio.create_task(_safe_edit(
                     progress_msg,
                     format_playlist_progress(playlist_name, total_done, display_total),
+                    parse_mode="HTML",
                 ))
 
         if proc.returncode is not None:
@@ -349,14 +418,6 @@ async def _watch_and_send(
 
     return sent_count, failed_count, False
 
-
-async def _safe_edit(msg: Message, text: str):
-    """Non-blocking safe message edit"""
-    try:
-        await msg.edit_text(text, parse_mode="HTML")
-    except Exception:
-        pass
-
 # ─── Main playlist handler ────────────────────────────────────────────────────
 
 async def handle_spotify_playlist(m: Message, url: str):
@@ -364,62 +425,91 @@ async def handle_spotify_playlist(m: Message, url: str):
     Route Spotify URL:
     - Single track → handle_spotify_single
     - Playlist/album → streaming group download
+
+    Wrapped in full try/except — never shows internal errors to user.
     """
-    if is_spotify_track(url):
-        await handle_spotify_single(m, url)
-        return
+    try:
+        if is_spotify_track(url):
+            await handle_spotify_single(m, url)
+            return
 
-    # Playlists: group-only
-    if m.chat.type == "private":
-        await m.reply(
-            "⚠ Spotify playlists only work in groups.",
-            parse_mode="HTML",
-        )
-        return
-
-    logger.info(f"SPOTIFY PLAYLIST: Group request from {m.from_user.id}")
-
-    # Cooldown check
-    is_cooldown, minutes_left = await user_state_manager.is_on_cooldown(m.from_user.id)
-    if is_cooldown:
-        await m.reply(
-            f"⏳ Cooldown active — {minutes_left} min remaining",
-            parse_mode="HTML",
-        )
-        return
-
-    # Bot-started check
-    has_started = await user_state_manager.has_started_bot(m.from_user.id)
-    if not has_started:
-        bot_me = await bot.get_me()
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(
-                text="🎧 Start Bot",
-                url=f"https://t.me/{bot_me.username}?start=spotify",
+        # Playlists: group-only
+        if m.chat.type == "private":
+            await _safe_reply(
+                m,
+                "⚠ Spotify playlists only work in groups.",
+                parse_mode="HTML",
             )
-        ]])
-        await m.reply(
-            "⚠ Start the bot first to receive songs in DM.\n\nTap below, then resend the playlist link 👇",
-            reply_markup=keyboard,
-            parse_mode="HTML",
-        )
-        return
+            return
 
-    # Blocked check
-    if await user_state_manager.has_blocked_bot(m.from_user.id):
-        await m.reply(
-            "🚫 You have blocked the bot — unblock and try again.",
-            parse_mode="HTML",
-        )
-        return
+        logger.info(f"SPOTIFY PLAYLIST: Group request from {m.from_user.id}")
 
-    if not config.SPOTIFY_CLIENT_ID or not config.SPOTIFY_CLIENT_SECRET:
-        await m.reply(
-            "⚠ Unable to process this link.\n\nPlease try again.",
-            parse_mode="HTML",
-        )
-        return
+        # Cooldown check
+        is_cooldown, minutes_left = await user_state_manager.is_on_cooldown(m.from_user.id)
+        if is_cooldown:
+            await _safe_reply(
+                m,
+                f"⏳ Cooldown active — {minutes_left} min remaining",
+                parse_mode="HTML",
+            )
+            return
 
+        # Bot-started check
+        has_started = await user_state_manager.has_started_bot(m.from_user.id)
+        if not has_started:
+            bot_me = await bot.get_me()
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="🎧 Start Bot",
+                    url=f"https://t.me/{bot_me.username}?start=spotify",
+                )
+            ]])
+            await _safe_reply(
+                m,
+                "⚠ Start the bot first to receive songs in DM.\n\nTap below, then resend the playlist link 👇",
+                reply_markup=keyboard,
+                parse_mode="HTML",
+            )
+            return
+
+        # Blocked check
+        if await user_state_manager.has_blocked_bot(m.from_user.id):
+            await _safe_reply(
+                m,
+                "🚫 You have blocked the bot — unblock and try again.",
+                parse_mode="HTML",
+            )
+            return
+
+        if not config.SPOTIFY_CLIENT_ID or not config.SPOTIFY_CLIENT_SECRET:
+            logger.warning("Spotify: CLIENT_ID or CLIENT_SECRET not configured")
+            await _safe_reply(
+                m,
+                "⚠ Unable to process this link.\n\nPlease try again.",
+                parse_mode="HTML",
+            )
+            return
+
+        await _run_playlist_download(m, url)
+
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.error(f"SPOTIFY PLAYLIST OUTER ERROR: {e}", exc_info=True)
+        try:
+            await _safe_reply(
+                m,
+                "⚠ Unable to process this link.\n\nPlease try again.",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+
+
+async def _run_playlist_download(m: Message, url: str):
+    """
+    Inner playlist download — wrapped separately for clean error handling.
+    """
     async with spotify_semaphore:
         # Delete user's link after 4 seconds
         async def _delete_link():
@@ -448,7 +538,7 @@ async def handle_spotify_playlist(m: Message, url: str):
                     "--client-secret", config.SPOTIFY_CLIENT_SECRET,
                     "--output", str(tmp),
                     "--format", "mp3",
-                    "--bitrate", "320k",
+                    "--bitrate", "192k",   # 192k for speed
                     "--threads", "2",
                     "--no-cache",
                     "--print-errors",
@@ -472,6 +562,7 @@ async def handle_spotify_playlist(m: Message, url: str):
                             text = line.decode(errors="replace").strip()
                             if not text:
                                 continue
+                            logger.debug(f"spotdl: {text}")
                             m2 = re.search(
                                 r"Found (\d+) songs? in .+?[:\s]+(.+?)$",
                                 text, re.IGNORECASE
@@ -482,12 +573,13 @@ async def handle_spotify_playlist(m: Message, url: str):
                                 asyncio.create_task(_safe_edit(
                                     progress_msg,
                                     format_playlist_progress(playlist_name, 0, total_hint),
+                                    parse_mode="HTML",
                                 ))
                             m3 = re.search(r"Fetching (\d+) songs?", text, re.IGNORECASE)
                             if m3 and total_hint == 0:
                                 total_hint = int(m3.group(1))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"stdout reader error: {e}")
 
                 stdout_task = asyncio.create_task(_read_stdout())
 
@@ -517,30 +609,24 @@ async def handle_spotify_playlist(m: Message, url: str):
                 if blocked:
                     await user_state_manager.mark_user_blocked(m.from_user.id)
                     await user_state_manager.apply_cooldown(m.from_user.id)
-                    try:
-                        await progress_msg.edit_text(
-                            "🚫 Blocked — cooldown applied.",
-                            parse_mode="HTML",
-                        )
-                    except Exception:
-                        pass
+                    await _safe_edit(
+                        progress_msg,
+                        "🚫 Blocked — cooldown applied.",
+                        parse_mode="HTML",
+                    )
                     return
 
                 if total_songs == 0:
-                    try:
-                        await progress_msg.edit_text(
-                            "⚠ Unable to process this link.\n\nPlease try again.",
-                            parse_mode="HTML",
-                        )
-                    except Exception:
-                        pass
+                    logger.warning(f"SPOTIFY PLAYLIST: No songs sent. returncode={proc.returncode}")
+                    await _safe_edit(
+                        progress_msg,
+                        "⚠ Unable to process this link.\n\nPlease try again.",
+                        parse_mode="HTML",
+                    )
                     return
 
                 # Delete progress message
-                try:
-                    await progress_msg.delete()
-                except Exception:
-                    pass
+                await _safe_delete(progress_msg)
 
                 # GC final summary — mention user
                 await m.answer(
@@ -569,9 +655,10 @@ async def handle_spotify_playlist(m: Message, url: str):
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.error(f"SPOTIFY PLAYLIST ERROR: {e}", exc_info=True)  # noqa: already correct
+            logger.error(f"SPOTIFY PLAYLIST ERROR: {e}", exc_info=True)
             try:
-                await progress_msg.edit_text(
+                await _safe_edit(
+                    progress_msg,
                     "⚠ Unable to process this link.\n\nPlease try again.",
                     parse_mode="HTML",
                 )

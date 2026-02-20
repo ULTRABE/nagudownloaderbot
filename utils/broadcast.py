@@ -10,9 +10,10 @@ Features:
   - Delivery report sent to admin (total sent, failed, blocked removed)
   - Runs in background (non-blocking)
   - Safe iteration — snapshot list before iterating
+  - In-memory fallback when Redis is unavailable
 """
 import asyncio
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Set
 from aiogram import Bot
 from aiogram.types import Message
 from aiogram.exceptions import (
@@ -31,6 +32,10 @@ from ui.formatting import format_broadcast_report
 USERS_SET_KEY  = "broadcast:users"
 GROUPS_SET_KEY = "broadcast:groups"
 
+# ─── In-memory fallback (when Redis is unavailable) ───────────────────────────
+_mem_users: Set[int] = set()
+_mem_groups: Set[int] = set()
+
 # ─── Semaphore for flood control ──────────────────────────────────────────────
 # Telegram allows ~30 messages/sec globally; we use 20 to be safe
 _BROADCAST_SEMAPHORE = asyncio.Semaphore(20)
@@ -39,61 +44,65 @@ _BROADCAST_SEMAPHORE = asyncio.Semaphore(20)
 
 async def register_user(user_id: int):
     """Register private user for broadcasts"""
+    _mem_users.add(user_id)  # Always add to memory
     try:
         await redis_client.sadd(USERS_SET_KEY, str(user_id))
     except Exception as e:
-        logger.debug(f"register_user failed: {e}")
+        logger.debug(f"register_user Redis failed (using memory): {e}")
 
 async def register_group(chat_id: int):
     """Register group for broadcasts"""
+    _mem_groups.add(chat_id)  # Always add to memory
     try:
         await redis_client.sadd(GROUPS_SET_KEY, str(chat_id))
     except Exception as e:
-        logger.debug(f"register_group failed: {e}")
+        logger.debug(f"register_group Redis failed (using memory): {e}")
 
 async def unregister_user(user_id: int):
     """Remove blocked/dead user from broadcast list"""
+    _mem_users.discard(user_id)
     try:
         await redis_client.srem(USERS_SET_KEY, str(user_id))
     except Exception as e:
-        logger.debug(f"unregister_user failed: {e}")
+        logger.debug(f"unregister_user Redis failed: {e}")
 
 async def unregister_group(chat_id: int):
     """Remove dead group from broadcast list"""
+    _mem_groups.discard(chat_id)
     try:
         await redis_client.srem(GROUPS_SET_KEY, str(chat_id))
     except Exception as e:
-        logger.debug(f"unregister_group failed: {e}")
+        logger.debug(f"unregister_group Redis failed: {e}")
 
 async def get_all_users() -> List[int]:
-    """Get snapshot of all registered user IDs"""
+    """Get snapshot of all registered user IDs (Redis + memory fallback)"""
+    result: Set[int] = set(_mem_users)  # Start with memory
     try:
         members = await redis_client.smembers(USERS_SET_KEY)
-        result = []
         for m in members:
             try:
-                result.append(int(m))
+                result.add(int(m))
             except (ValueError, TypeError):
                 pass
-        return result
     except Exception as e:
-        logger.error(f"get_all_users failed: {e}")
-        return []
+        logger.debug(f"get_all_users Redis failed (using memory): {e}")
+    logger.debug(f"get_all_users: {len(result)} users")
+    return list(result)
 
 async def get_all_groups() -> List[int]:
-    """Get snapshot of all registered group IDs"""
+    """Get snapshot of all registered group IDs (Redis + memory fallback)"""
+    result: Set[int] = set(_mem_groups)  # Start with memory
     try:
         members = await redis_client.smembers(GROUPS_SET_KEY)
-        result = []
         for m in members:
             try:
-                result.append(int(m))
+                result.add(int(m))
             except (ValueError, TypeError):
                 pass
-        return result
     except Exception as e:
-        logger.error(f"get_all_groups failed: {e}")
-        return []
+        logger.debug(f"get_all_groups Redis failed (using memory): {e}")
+    logger.debug(f"get_all_groups: {len(result)} groups")
+    return list(result)
 
 # ─── Send one message ─────────────────────────────────────────────────────────
 
@@ -196,7 +205,18 @@ async def run_broadcast(
     blocked_users: List[int] = []
     dead_groups: List[int] = []
 
-    logger.info(f"Broadcast started: {total_users} users, {total_groups} groups")
+    logger.info(f"Broadcast started: {total_users} users, {total_groups} groups, text={bool(text)}, media={bool(reply_to_msg)}")
+    if total_users == 0 and total_groups == 0:
+        logger.warning("Broadcast: no users or groups registered — nothing to send")
+        try:
+            await bot.send_message(
+                admin_id,
+                "📢 <b>Broadcast</b>\n\nNo users or groups registered yet.",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+        return {"total_users": 0, "total_groups": 0, "success": 0, "failed": 0, "blocked_removed": 0}
 
     # Send to private users
     for user_id in users:
