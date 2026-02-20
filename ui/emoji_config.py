@@ -76,6 +76,8 @@ def get_emoji(key: str) -> str:
     Get emoji for key.
 
     Safe behavior:
+    - Checks Redis for admin-assigned custom emoji first (async not available here,
+      so this is the sync fallback used at module load time)
     - If USE_PREMIUM is True and PREMIUM[key] is not None → return premium value
     - Otherwise → return UNICODE fallback
     - If key not found → return empty string (never crashes)
@@ -85,6 +87,40 @@ def get_emoji(key: str) -> str:
         if premium_value:
             return premium_value
     return UNICODE.get(key, "")
+
+
+async def get_emoji_async(key: str) -> str:
+    """
+    Async version of get_emoji — checks Redis for admin-assigned custom emoji.
+
+    Priority:
+    1. Redis-stored custom emoji (set via /assign command)
+    2. PREMIUM dict (if USE_PREMIUM)
+    3. UNICODE fallback
+
+    If stored value looks like a numeric ID → render as Telegram custom emoji HTML.
+    If stored value is a unicode emoji → return as-is.
+    If not found → return UNICODE fallback.
+
+    Never crashes.
+    """
+    try:
+        from utils.redis_client import redis_client
+        redis_key = f"emoji:{key}"
+        stored = await redis_client.get(redis_key)
+        if stored:
+            stored = stored.strip()
+            # If it's a numeric ID → it's a custom_emoji_id
+            if stored.isdigit():
+                fallback = UNICODE.get(key, "•")
+                return f'<tg-emoji emoji-id="{stored}">{fallback}</tg-emoji>'
+            # Otherwise it's a unicode emoji — return as-is
+            return stored
+    except Exception:
+        pass
+
+    # Fall back to static config
+    return get_emoji(key)
 
 
 # ─── Legacy direct-access names (backward compat) ─────────────────────────────
