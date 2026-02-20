@@ -71,42 +71,43 @@ class SpotifyProgress:
         Args:
             phase: Current phase (downloading, sending, complete)
         """
-        from ui.formatting import styled_text
-        
+        def _s(t: str) -> str:
+            return t
+
         if phase == "fetching":
-            return f"🎧 {styled_text('Spotify Playlist Fetched')}\n{styled_text('Starting download')}..."
-        
+            return f"🎧 {_s('Spotify Playlist Fetched')}\n{_s('Starting download')}..."
+
         if phase == "downloading":
             main_bar = self.get_main_progress_bar()
-            
+
             if self.current_song:
                 song_bar = self.get_song_progress_bar()
                 return (
-                    f"📥 {styled_text('Downloading Playlist')}\n"
+                    f"📥 {_s('Downloading Playlist')}\n"
                     f"{main_bar}\n\n"
-                    f"🎵 {styled_text('Now downloading')}:\n"
+                    f"🎵 {_s('Now downloading')}:\n"
                     f"{self.current_song}\n"
                     f"{song_bar}"
                 )
             else:
                 return (
-                    f"📥 {styled_text('Downloading Playlist')}\n"
+                    f"📥 {_s('Downloading Playlist')}\n"
                     f"{main_bar}\n\n"
-                    f"⏳ {styled_text('Preparing next track')}..."
+                    f"⏳ {_s('Preparing next track')}..."
                 )
-        
+
         if phase == "sending":
             progress_bar = create_progress_bar(self.completed_songs, self.total_songs, self.bar_length)
             return (
-                f"📤 {styled_text('Sending to DM')}\n"
+                f"📤 {_s('Sending to DM')}\n"
                 f"{progress_bar}\n\n"
-                f"✅ {styled_text('Sent')} {self.completed_songs}/{self.total_songs} {styled_text('songs')}"
+                f"✅ {_s('Sent')} {self.completed_songs}/{self.total_songs} {_s('songs')}"
             )
-        
+
         if phase == "complete":
-            return f"✅ {styled_text('All songs downloaded')}\n📤 {styled_text('Sending final batch')}..."
-        
-        return f"⏳ {styled_text('Processing')}..."
+            return f"✅ {_s('All songs downloaded')}\n📤 {_s('Sending final batch')}..."
+
+        return f"⏳ {_s('Processing')}..."
 
 class DownloadProgress:
     """Generic download progress tracker"""
