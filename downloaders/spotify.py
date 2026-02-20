@@ -40,6 +40,7 @@ from ui.formatting import (
     format_playlist_progress, format_playlist_final,
     format_playlist_dm_complete, format_delivered_with_mention,
 )
+from ui.emoji_config import get_emoji_async
 from utils.helpers import extract_song_metadata
 from utils.logger import logger
 from utils.user_state import user_state_manager
@@ -292,16 +293,17 @@ async def handle_spotify_single(m: Message, url: str):
     """
     if not config.SPOTIFY_CLIENT_ID or not config.SPOTIFY_CLIENT_SECRET:
         logger.warning("Spotify: CLIENT_ID or CLIENT_SECRET not configured")
+        _err = await get_emoji_async("ERROR")
         await _safe_reply(
             m,
-            "⚠ Unable to process this link.\n\nPlease try again.",
+            f"{_err} Unable to process this link.\n\nPlease try again.",
             parse_mode="HTML",
         )
         return
 
     user_id = m.from_user.id
     first_name = m.from_user.first_name or "User"
-    delivered_caption = format_delivered_with_mention(user_id, first_name)
+    delivered_caption = await format_delivered_with_mention(user_id, first_name)
     # Always send in same chat (group or private)
     target_chat = m.chat.id
     _t_start = time.monotonic()
@@ -328,9 +330,10 @@ async def handle_spotify_single(m: Message, url: str):
 
                 if not mp3_file or not mp3_file.exists():
                     await _safe_delete(progress)
+                    _err = await get_emoji_async("ERROR")
                     await _safe_reply(
                         m,
-                        "⚠ Unable to process this link.\n\nPlease try again.",
+                        f"{_err} Unable to process this link.\n\nPlease try again.",
                         parse_mode="HTML",
                     )
                     return
@@ -359,11 +362,10 @@ async def handle_spotify_single(m: Message, url: str):
 
                 # Log to channel
                 _elapsed = time.monotonic() - _t_start
-                _chat_type = "Group" if m.chat.type in ("group", "supergroup") else "Private"
                 asyncio.create_task(log_download(
                     user=m.from_user,
                     link=url,
-                    chat_type=_chat_type,
+                    chat=m.chat,
                     media_type="Audio (Spotify)",
                     time_taken=_elapsed,
                 ))
@@ -373,9 +375,10 @@ async def handle_spotify_single(m: Message, url: str):
     except Exception as e:
         logger.error(f"SPOTIFY SINGLE ERROR: {e}", exc_info=True)
         await _safe_delete(progress)
+        _err = await get_emoji_async("ERROR")
         await _safe_reply(
             m,
-            "⚠ Unable to process this link.\n\nPlease try again.",
+            f"{_err} Unable to process this link.\n\nPlease try again.",
             parse_mode="HTML",
         )
 
@@ -402,9 +405,10 @@ async def handle_spotify_playlist(m: Message, url: str):
         # Cooldown check
         is_cooldown, minutes_left = await user_state_manager.is_on_cooldown(m.from_user.id)
         if is_cooldown:
+            _proc = await get_emoji_async("PROCESS")
             await _safe_reply(
                 m,
-                f"⏳ Cooldown active — {minutes_left} min remaining",
+                f"{_proc} Cooldown active — {minutes_left} min remaining",
                 parse_mode="HTML",
             )
             return
@@ -419,9 +423,10 @@ async def handle_spotify_playlist(m: Message, url: str):
                     url=f"https://t.me/{bot_me.username}?start=spotify",
                 )
             ]])
+            _err = await get_emoji_async("ERROR")
             await _safe_reply(
                 m,
-                "⚠ Start the bot first to receive songs in DM.\n\nTap below, then resend the playlist link 👇",
+                f"{_err} Start the bot first to receive songs in DM.\n\nTap below, then resend the playlist link 👇",
                 reply_markup=keyboard,
                 parse_mode="HTML",
             )
@@ -438,9 +443,10 @@ async def handle_spotify_playlist(m: Message, url: str):
 
         if not config.SPOTIFY_CLIENT_ID or not config.SPOTIFY_CLIENT_SECRET:
             logger.warning("Spotify: CLIENT_ID or CLIENT_SECRET not configured")
+            _err = await get_emoji_async("ERROR")
             await _safe_reply(
                 m,
-                "⚠ Unable to process this link.\n\nPlease try again.",
+                f"{_err} Unable to process this link.\n\nPlease try again.",
                 parse_mode="HTML",
             )
             return
@@ -452,9 +458,10 @@ async def handle_spotify_playlist(m: Message, url: str):
     except Exception as e:
         logger.error(f"SPOTIFY PLAYLIST OUTER ERROR: {e}", exc_info=True)
         try:
+            _err = await get_emoji_async("ERROR")
             await _safe_reply(
                 m,
-                "⚠ Unable to process this link.\n\nPlease try again.",
+                f"{_err} Unable to process this link.\n\nPlease try again.",
                 parse_mode="HTML",
             )
         except Exception:
@@ -490,9 +497,10 @@ async def _run_playlist_download(m: Message, url: str):
 
         if not playlist_id:
             logger.error(f"SPOTIFY PLAYLIST: Could not extract ID from {url}")
+            _err = await get_emoji_async("ERROR")
             await _safe_reply(
                 m,
-                "⚠ Unable to process this link.\n\nPlease try again.",
+                f"{_err} Unable to process this link.\n\nPlease try again.",
                 parse_mode="HTML",
             )
             return
@@ -509,9 +517,10 @@ async def _run_playlist_download(m: Message, url: str):
             track_urls = await _fetch_playlist_tracks(playlist_id, is_album=is_album)
 
             if not track_urls:
+                _err = await get_emoji_async("ERROR")
                 await _safe_edit(
                     progress_msg,
-                    "⚠ Unable to process this link.\n\nPlease try again.",
+                    f"{_err} Unable to process this link.\n\nPlease try again.",
                     parse_mode="HTML",
                 )
                 return
@@ -532,9 +541,10 @@ async def _run_playlist_download(m: Message, url: str):
             first_name = (m.from_user.first_name or "there")[:32]
             safe_name = first_name.replace("<", "").replace(">", "")
             try:
+                _music = await get_emoji_async("MUSIC")
                 await bot.send_message(
                     user_id,
-                    f"🎵 <b>𝐏ʟᴀʏʟɪꜱᴛ 𝐒𝐭𝐚𝐫𝐭𝐞𝐝</b>\n\n"
+                    f"{_music} <b>𝐏ʟᴀʏʟɪꜱᴛ 𝐒𝐭𝐚𝐫𝐭𝐞ᴅ</b>\n\n"
                     f"<b>{playlist_name}</b>\n"
                     f"Songs: {total}\n\n"
                     f"Downloading now — songs will appear here one by one.",
@@ -642,7 +652,7 @@ async def _run_playlist_download(m: Message, url: str):
 
             # Final summary in group/chat
             await m.answer(
-                format_playlist_final(
+                await format_playlist_final(
                     m.from_user, playlist_name,
                     total, sent_count, failed_count
                 ),
@@ -653,12 +663,14 @@ async def _run_playlist_download(m: Message, url: str):
             try:
                 bot_me = await bot.get_me()
                 bot_username = f"@{bot_me.username}" if bot_me.username else "Nagu Downloader"
+                _complete = await get_emoji_async("COMPLETE")
+                _sp = await get_emoji_async("SPOTIFY")
                 await bot.send_message(
                     user_id,
-                    f"✅ <b>𝐏ʟᴀʏʟɪꜱᴛ 𝐂𝐨𝐦𝐩𝐥𝐞𝐭𝐞𝐝</b>\n\n"
+                    f"{_complete} <b>𝐏ʟᴀʏʟɪꜱᴛ 𝐂ᴏᴍᴘʟᴇᴛᴇᴅ</b>\n\n"
                     f"<b>{playlist_name}</b>\n"
                     f"Sent: {sent_count} / {total}\n\n"
-                    f"Thanks for using {bot_username} — enjoy your music! 🎧",
+                    f"Thanks for using {bot_username} — enjoy your music! {_sp}",
                     parse_mode="HTML",
                 )
             except Exception:
@@ -670,11 +682,10 @@ async def _run_playlist_download(m: Message, url: str):
             )
 
             # Log to channel
-            _chat_type = "Group" if m.chat.type in ("group", "supergroup") else "Private"
             asyncio.create_task(log_download(
                 user=m.from_user,
                 link=url,
-                chat_type=_chat_type,
+                chat=m.chat,
                 media_type=f"Playlist (Spotify, {sent_count}/{total})",
                 time_taken=elapsed,
             ))
@@ -684,15 +695,17 @@ async def _run_playlist_download(m: Message, url: str):
         except Exception as e:
             logger.error(f"SPOTIFY PLAYLIST ERROR: {e}", exc_info=True)
             try:
+                _err = await get_emoji_async("ERROR")
                 await _safe_edit(
                     progress_msg,
-                    "⚠ Unable to process this link.\n\nPlease try again.",
+                    f"{_err} Unable to process this link.\n\nPlease try again.",
                     parse_mode="HTML",
                 )
             except Exception:
                 try:
+                    _err = await get_emoji_async("ERROR")
                     await m.answer(
-                        "⚠ Unable to process this link.\n\nPlease try again.",
+                        f"{_err} Unable to process this link.\n\nPlease try again.",
                         parse_mode="HTML",
                     )
                 except Exception:
