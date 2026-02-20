@@ -306,34 +306,37 @@ async def format_progress(pct: int, label: str = "Preparing media...") -> str:
     Preparing media...
     """
     dl = await get_emoji_async("DOWNLOAD")
+    fast = await get_emoji_async("FAST")
     width = 10
     filled = int(width * pct / 100)
     bar = "█" * filled + "░" * (width - filled)
-    return f"{dl} <b>𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐢𝐧𝐠</b>\n\n[{bar}] {pct}%\n{label}"
+    return f"{dl} <b>𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝𝐢𝐧𝐠</b>\n\n[{bar}] {pct}%\n{fast} {label}"
 
 
 async def format_delivered() -> str:
     """Plain delivery confirmation"""
     emoji = await get_emoji_async("DELIVERED")
-    return f"{emoji} Delivered"
+    complete = await get_emoji_async("COMPLETE")
+    return f"{emoji} {complete} <b>𝐃𝐞𝐥𝐢𝐯𝐞𝐫𝐞𝐝</b>"
 
 
 async def format_error(message: str | None = None) -> str:
     """Global error message — never show debug info"""
     emoji = await get_emoji_async("ERROR")
-    return f"{emoji} Unable to process this link.\n\nPlease try again."
+    return f"{emoji} <b>𝐔𝐧𝐚𝐛𝐥𝐞 𝐭𝐨 𝐏𝐫𝐨𝐜𝐞𝐬𝐬</b>\n\nUnable to process this link.\n\nPlease try again."
 
 
 # ─── Spotify progress ─────────────────────────────────────────────────────────
 
 async def format_playlist_detected() -> str:
     music = await get_emoji_async("MUSIC")
-    return f"{music} <b>𝐏ʟᴀʏʟɪꜱᴛ 𝐃𝐞𝐭𝐞𝐜𝐭𝐞ᴅ</b>\n\nStarting download..."
+    sp = await get_emoji_async("SPOTIFY")
+    return f"{sp} <b>𝐏ʟᴀʏʟɪꜱᴛ 𝐃𝐞𝐭𝐞𝐜𝐭𝐞𝐝</b>\n\n{music} Starting download..."
 
 
 def format_playlist_progress(name: str, done: int, total: int) -> str:
     """
-    𝐏ʟᴀʏʟɪꜱᴛ: {name}
+    🎧 𝐏ʟᴀʏʟɪꜱᴛ: {name}
 
     [██████░░░░] 60%
     420 / 700
@@ -347,7 +350,7 @@ def format_playlist_progress(name: str, done: int, total: int) -> str:
     bar = "█" * filled + "░" * (width - filled)
     name_short = (name or "Playlist")[:30]
     return (
-        f"𝐏ʟᴀʏʟɪꜱᴛ: {name_short}\n\n"
+        f"🎧 <b>𝐏ʟᴀʏʟɪꜱᴛ:</b> {name_short}\n\n"
         f"[{bar}] {pct}%\n"
         f"{done} / {total}"
     )
@@ -355,17 +358,20 @@ def format_playlist_progress(name: str, done: int, total: int) -> str:
 
 async def format_playlist_final(user: User, name: str, total: int, sent: int, failed: int) -> str:
     """
-    𝐏ʟᴀʏʟɪꜱᴛ 𝐂ᴏᴍᴘʟᴇᴛᴇᴅ
+    𝐏ʟᴀʏʟɪꜱᴛ 𝐂𝐨𝐦𝐩𝐥𝐞𝐭𝐞𝐝
 
     Total: 700
     Sent: 692
     Failed: 8
     """
     complete = await get_emoji_async("COMPLETE")
+    sp = await get_emoji_async("SPOTIFY")
     safe_name = (user.first_name or "User")[:32].replace("<", "").replace(">", "")
     user_link = f'<a href="tg://user?id={user.id}">{safe_name}</a>'
+    name_short = (name or "Playlist")[:30]
     return (
-        f"{complete} 𝐏ʟᴀʏʟɪꜱᴛ 𝐂ᴏᴍᴘʟᴇᴛᴇᴅ\n\n"
+        f"{complete} <b>𝐏ʟᴀʏʟɪꜱᴛ 𝐂𝐨𝐦𝐩𝐥𝐞𝐭𝐞𝐝</b>\n\n"
+        f"{sp} <b>{name_short}</b>\n\n"
         f"Total: {total}\n"
         f"Sent: {sent}\n"
         f"Failed: {failed}\n\n"
@@ -388,17 +394,17 @@ async def format_spotify_complete(user: User, total: int, sent: int) -> str:
 def format_yt_playlist_mode(playlist_name: str) -> str:
     """Mode selection for YouTube playlist"""
     name_short = (playlist_name or "Playlist")[:40]
-    return f"𝐏ʟᴀʏʟɪꜱᴛ: {name_short}\n\nChoose Download Mode:"
+    return f"🎬 <b>𝐏ʟᴀʏʟɪꜱᴛ:</b> {name_short}\n\n<b>𝐂𝐡𝐨𝐨𝐬𝐞 𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝 𝐌𝐨𝐝𝐞:</b>"
 
 
 def format_yt_audio_quality() -> str:
     """Audio quality selection"""
-    return "𝐀ᴜᴅɪᴏ 𝐐ᴜᴀʟɪᴛʏ"
+    return "🎵 <b>𝐀𝐮𝐝𝐢𝐨 𝐐𝐮𝐚𝐥𝐢𝐭𝐲</b>\n\nChoose your preferred audio quality:"
 
 
 def format_yt_video_quality() -> str:
     """Video quality selection"""
-    return "𝐕ɪᴅᴇᴏ 𝐐ᴜᴀʟɪᴛʏ"
+    return "🎥 <b>𝐕𝐢𝐝𝐞𝐨 𝐐𝐮𝐚𝐥𝐢𝐭𝐲</b>\n\nChoose your preferred video quality:"
 
 
 def format_yt_playlist_progress(name: str, done: int, total: int) -> str:
@@ -412,7 +418,7 @@ def format_yt_playlist_progress(name: str, done: int, total: int) -> str:
     bar = "█" * filled + "░" * (width - filled)
     name_short = (name or "Playlist")[:30]
     return (
-        f"𝐏ʟᴀʏʟɪꜱᴛ: {name_short}\n\n"
+        f"🎬 <b>𝐏ʟᴀʏʟɪꜱᴛ:</b> {name_short}\n\n"
         f"[{bar}] {pct}%\n"
         f"{done} / {total}"
     )
@@ -421,9 +427,11 @@ def format_yt_playlist_progress(name: str, done: int, total: int) -> str:
 async def format_yt_playlist_final(name: str, total: int, sent: int, failed: int) -> str:
     """YouTube playlist completion message"""
     complete = await get_emoji_async("COMPLETE")
+    yt = await get_emoji_async("YT")
     name_short = (name or "Playlist")[:30]
     return (
-        f"{complete} 𝐏ʟᴀʏʟɪꜱᴛ 𝐂ᴏᴍᴘʟᴇᴛᴇᴅ\n\n"
+        f"{complete} <b>𝐏ʟᴀʏʟɪꜱᴛ 𝐂𝐨𝐦𝐩𝐥𝐞𝐭𝐞𝐝</b>\n\n"
+        f"{yt} <b>{name_short}</b>\n\n"
         f"Total: {total}\n"
         f"Sent: {sent}\n"
         f"Failed: {failed}"

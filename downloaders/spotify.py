@@ -434,9 +434,10 @@ async def handle_spotify_playlist(m: Message, url: str):
 
         # Blocked check
         if await user_state_manager.has_blocked_bot(m.from_user.id):
+            _err = await get_emoji_async("ERROR")
             await _safe_reply(
                 m,
-                "🚫 You have blocked the bot — unblock and try again.",
+                f"{_err} <b>𝐁𝐨𝐭 𝐁𝐥𝐨𝐜𝐤𝐞𝐝</b>\n\nYou have blocked the bot — unblock and try again.",
                 parse_mode="HTML",
             )
             return
@@ -506,8 +507,9 @@ async def _run_playlist_download(m: Message, url: str):
             return
 
         # Initial progress message in group/chat
+        _sp = await get_emoji_async("SPOTIFY")
         progress_msg = await m.answer(
-            f"𝐏ʟᴀʏʟɪꜱᴛ: Loading...\n\n{_bar(0)}\n0 / ?",
+            f"{_sp} <b>𝐏ʟᴀʏʟɪꜱᴛ:</b> Loading...\n\n{_bar(0)}\n0 / ?",
             parse_mode="HTML",
         )
 
@@ -530,9 +532,10 @@ async def _run_playlist_download(m: Message, url: str):
             logger.info(f"SPOTIFY PLAYLIST: {total} tracks to download")
 
             # Update progress with total count
+            _sp = await get_emoji_async("SPOTIFY")
             await _safe_edit(
                 progress_msg,
-                f"𝐏ʟᴀʏʟɪꜱᴛ: {playlist_name}\n\n{_bar(0)}\n0 / {total}",
+                f"{_sp} <b>𝐏ʟᴀʏʟɪꜱᴛ:</b> {playlist_name}\n\n{_bar(0)}\n0 / {total}",
                 parse_mode="HTML",
             )
 
@@ -544,7 +547,7 @@ async def _run_playlist_download(m: Message, url: str):
                 _music = await get_emoji_async("MUSIC")
                 await bot.send_message(
                     user_id,
-                    f"{_music} <b>𝐏ʟᴀʏʟɪꜱᴛ 𝐒𝐭𝐚𝐫𝐭𝐞ᴅ</b>\n\n"
+                    f"{_music} <b>𝐏ʟᴀʏʟɪꜱᴛ 𝐒𝐭𝐚𝐫𝐭𝐞𝐝</b>\n\n"
                     f"<b>{playlist_name}</b>\n"
                     f"Songs: {total}\n\n"
                     f"Downloading now — songs will appear here one by one.",
@@ -571,13 +574,14 @@ async def _run_playlist_download(m: Message, url: str):
                         total_done = sent_count + failed_count
                         pct = min(99, int(total_done * 100 / total)) if total > 0 else 0
                         song_num = i + 1
+                        _dl = await get_emoji_async("DOWNLOAD")
                         try:
                             await _safe_edit(
                                 progress_msg,
-                                f"𝐏ʟᴀʏʟɪꜱᴛ: {playlist_name}\n\n"
+                                f"{_sp} <b>𝐏ʟᴀʏʟɪꜱᴛ:</b> {playlist_name}\n\n"
                                 f"{_bar(pct)}\n"
                                 f"{total_done} / {total}\n\n"
-                                f"⬇️ Song {song_num}/{total}",
+                                f"{_dl} Song {song_num}/{total}",
                                 parse_mode="HTML",
                             )
                         except Exception:
@@ -619,7 +623,7 @@ async def _run_playlist_download(m: Message, url: str):
                     try:
                         await _safe_edit(
                             progress_msg,
-                            f"𝐏ʟᴀʏʟɪꜱᴛ: {playlist_name}\n\n{_bar(pct)}\n{total_done} / {total}",
+                            f"{_sp} <b>𝐏ʟᴀʏʟɪꜱᴛ:</b> {playlist_name}\n\n{_bar(pct)}\n{total_done} / {total}",
                             parse_mode="HTML",
                         )
                     except Exception:
@@ -630,9 +634,10 @@ async def _run_playlist_download(m: Message, url: str):
             if blocked:
                 await user_state_manager.mark_user_blocked(user_id)
                 await user_state_manager.apply_cooldown(user_id)
+                _err = await get_emoji_async("ERROR")
                 await _safe_edit(
                     progress_msg,
-                    "🚫 Blocked — cooldown applied.",
+                    f"{_err} <b>𝐁𝐨𝐭 𝐁𝐥𝐨𝐜𝐤𝐞𝐝</b> — cooldown applied.",
                     parse_mode="HTML",
                 )
                 return
@@ -640,7 +645,7 @@ async def _run_playlist_download(m: Message, url: str):
             # Show 100% completion in group chat
             await _safe_edit(
                 progress_msg,
-                f"𝐏ʟᴀʏʟɪꜱᴛ: {playlist_name}\n\n{_bar(100)}\n{total} / {total}",
+                f"{_sp} <b>𝐏ʟᴀʏʟɪꜱᴛ:</b> {playlist_name}\n\n{_bar(100)}\n{total} / {total}",
                 parse_mode="HTML",
             )
 
