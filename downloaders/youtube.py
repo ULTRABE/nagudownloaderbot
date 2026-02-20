@@ -1,14 +1,21 @@
 """
-YouTube Downloader — Speed-first with progress bar UX.
+YouTube Downloader — Clean UI with sticker support.
 
 Flow (normal video):
-  1. Immediately send progress message: ⬇ Downloading...
-  2. Edit with animated progress bar as download proceeds
-  3. Show inline [🎥 Video] [🎧 Audio] buttons
-  4. Both streams download in background simultaneously
-  5. User taps → send instantly if ready, else wait
-  6. Delete progress message after send
-  7. Reply to original with ✓ Delivered
+  1. Send sticker
+  2. Show: ⏳ Processing link...
+  3. Edit with progress bar as download proceeds
+  4. Show inline [🎥 Video] [🎧 Audio] buttons
+  5. Both streams download in background simultaneously
+  6. User taps → send instantly if ready, else wait
+  7. Delete sticker + progress message after send
+  8. Reply to original with ✓ Delivered — <mention>
+
+Shorts:
+  ⚡ Processing Short... → send → ✓ Delivered — <mention>
+
+YT Music:
+  🎵 Processing Audio... → send → ✓ Delivered — <mention>
 
 Cache:
   SHA256(url+format) → Telegram file_id
@@ -20,14 +27,10 @@ Cookie folder:
 Resolution rule:
   <= 120s → keep original (max 1080p)
   >  120s → 720p
-
-YT Music:
-  music.youtube.com → 320kbps MP3 + metadata
 """
 import asyncio
 import time
 import tempfile
-import re
 from pathlib import Path
 from typing import Optional
 
@@ -48,7 +51,8 @@ from utils.media_processor import (
     get_video_info,
 )
 from utils.watchdog import acquire_user_slot, release_user_slot
-from ui.formatting import format_delivered, mono
+from ui.formatting import format_delivered_with_mention
+from ui.stickers import send_sticker, delete_sticker
 
 # ─── URL detection ────────────────────────────────────────────────────────────
 
@@ -60,11 +64,11 @@ def is_youtube_music(url: str) -> bool:
 
 # ─── Progress bar helper ──────────────────────────────────────────────────────
 
-def _progress_msg(pct: int, label: str = "Downloading") -> str:
+def _progress_msg(pct: int, label: str = "Preparing media...") -> str:
     width = 10
     filled = int(width * pct / 100)
-    bar = "▓" * filled + "░" * (width - filled)
-    return f"<code>  [{bar}]  {pct}%  {label}</code>"
+    bar = "█" * filled + "░" * (width - filled)
+    return f"📥 <b>Downloading</b>\n\n[{bar}] {pct}%\n{label}"
 
 # ─── yt-dlp option builders ───────────────────────────────────────────────────
 
@@ -98,7 +102,6 @@ def _layer2_opts(tmp: Path, fmt: str) -> dict:
 def _layer3_opts(tmp: Path, fmt: str) -> dict:
     opts = _base_opts(tmp)
     opts["format"] = fmt
-    # Cookie folder — skip silently if missing
     cookie_file = get_random_cookie(config.YT_COOKIES_FOLDER)
     if cookie_file:
         opts["cookiefile"] = cookie_file
@@ -174,31 +177,45 @@ _pending: dict = {}
 
 async def handle_youtube_music(m: Message, url: str):
     """
-    YT Music → 320kbps MP3 with metadata.
-    Cache-first: if file_id cached → send instantly.
+    YT Music → 320kbps MP3.
+    🎵 Processing Audio... → send → ✓ Delivered — <mention>
     """
+    user_id = m.from_user.id
+    first_name = m.from_user.first_name or "User"
+    delivered_caption = format_delivered_with_mention(user_id, first_name)
+
     # Cache check
     cached = await url_cache.get(url, "audio")
     if cached:
         try:
-            sent = await m.reply_audio(cached)
-            await m.reply(format_delivered())
+            await bot.send_audio(
+                m.chat.id,
+                cached,
+                caption=delivered_caption,
+                parse_mode="HTML",
+                reply_to_message_id=m.message_id,
+            )
             return
         except Exception:
-            pass  # Cache miss or expired — fall through
+            pass
 
-    status = await m.answer(_progress_msg(0, "YT Music"))
+    # Send sticker
+    sticker_msg_id = await send_sticker(bot, m.chat.id, "music")
+
+    status = await m.reply("🎵 Processing Audio...", parse_mode="HTML")
 
     try:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp = Path(tmp_dir)
 
-            # Animate progress
             async def _animate():
                 for pct in (20, 50, 80):
                     await asyncio.sleep(2)
                     try:
-                        await status.edit_text(_progress_msg(pct, "Downloading"), parse_mode="HTML")
+                        await status.edit_text(
+                            _progress_msg(pct, "Downloading audio..."),
+                            parse_mode="HTML",
+                        )
                     except Exception:
                         pass
 
@@ -208,49 +225,74 @@ async def handle_youtube_music(m: Message, url: str):
             anim_task.cancel()
 
             if not audio_file:
+                await delete_sticker(bot, m.chat.id, sticker_msg_id)
                 await status.delete()
-                await m.reply(mono("  ✗  Could not process this link"))
+                await m.reply(
+                    "⚠ Unable to process this link.\n\nPlease try again.",
+                    parse_mode="HTML",
+                )
                 return
 
+            await delete_sticker(bot, m.chat.id, sticker_msg_id)
             await status.delete()
 
-            sent = await m.reply_audio(FSInputFile(audio_file))
+            sent = await bot.send_audio(
+                m.chat.id,
+                FSInputFile(audio_file),
+                caption=delivered_caption,
+                parse_mode="HTML",
+                reply_to_message_id=m.message_id,
+            )
 
-            # Cache file_id
             if sent and sent.audio:
                 await url_cache.set(url, "audio", sent.audio.file_id)
 
-            await m.reply(format_delivered())
-            logger.info(f"YT MUSIC: Sent to {m.from_user.id}")
+            logger.info(f"YT MUSIC: Sent to {user_id}")
 
     except asyncio.CancelledError:
         raise
     except Exception as e:
         logger.error(f"YT MUSIC ERROR: {e}")
+        await delete_sticker(bot, m.chat.id, sticker_msg_id)
         try:
             await status.delete()
         except Exception:
             pass
-        await m.reply(mono("  ✗  Could not process this link"))
+        await m.reply(
+            "⚠ Unable to process this link.\n\nPlease try again.",
+            parse_mode="HTML",
+        )
 
 # ─── Shorts handler ───────────────────────────────────────────────────────────
 
 async def handle_youtube_short(m: Message, url: str):
     """
-    YouTube Shorts — stream copy if possible, else veryfast encode.
-    Cache-first for instant re-delivery.
+    YouTube Shorts — ⚡ Processing Short... → send → ✓ Delivered — <mention>
     """
+    user_id = m.from_user.id
+    first_name = m.from_user.first_name or "User"
+    delivered_caption = format_delivered_with_mention(user_id, first_name)
+
     # Cache check
     cached = await url_cache.get(url, "video")
     if cached:
         try:
-            sent = await m.reply_video(cached, supports_streaming=True)
-            await m.reply(format_delivered())
+            await bot.send_video(
+                m.chat.id,
+                cached,
+                caption=delivered_caption,
+                parse_mode="HTML",
+                reply_to_message_id=m.message_id,
+                supports_streaming=True,
+            )
             return
         except Exception:
             pass
 
-    status = await m.answer(_progress_msg(0, "Shorts"))
+    # Send sticker
+    sticker_msg_id = await send_sticker(bot, m.chat.id, "youtube")
+
+    status = await m.reply("⚡ Processing Short...", parse_mode="HTML")
 
     try:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -260,7 +302,10 @@ async def handle_youtube_short(m: Message, url: str):
                 for pct in (15, 40, 70, 90):
                     await asyncio.sleep(1.5)
                     try:
-                        await status.edit_text(_progress_msg(pct, "Downloading"), parse_mode="HTML")
+                        await status.edit_text(
+                            _progress_msg(pct, "Downloading..."),
+                            parse_mode="HTML",
+                        )
                     except Exception:
                         pass
 
@@ -273,12 +318,19 @@ async def handle_youtube_short(m: Message, url: str):
             anim_task.cancel()
 
             if not video_file:
+                await delete_sticker(bot, m.chat.id, sticker_msg_id)
                 await status.delete()
-                await m.reply(mono("  ✗  Could not process this link"))
+                await m.reply(
+                    "⚠ Unable to process this link.\n\nPlease try again.",
+                    parse_mode="HTML",
+                )
                 return
 
             try:
-                await status.edit_text(_progress_msg(90, "Encoding"), parse_mode="HTML")
+                await status.edit_text(
+                    _progress_msg(90, "Encoding..."),
+                    parse_mode="HTML",
+                )
             except Exception:
                 pass
 
@@ -289,55 +341,69 @@ async def handle_youtube_short(m: Message, url: str):
             info = await get_video_info(final)
             parts = await ensure_fits_telegram(final, tmp)
 
+            await delete_sticker(bot, m.chat.id, sticker_msg_id)
             await status.delete()
 
-            for part in parts:
+            for i, part in enumerate(parts):
                 pi = await get_video_info(part)
-                sent = await m.reply_video(
+                cap = delivered_caption if i == len(parts) - 1 else f"Part {i+1}/{len(parts)}"
+                sent = await bot.send_video(
+                    m.chat.id,
                     FSInputFile(part),
+                    caption=cap,
+                    parse_mode="HTML",
+                    reply_to_message_id=m.message_id,
                     supports_streaming=True,
                     width=pi.get("width") or info.get("width") or None,
                     height=pi.get("height") or info.get("height") or None,
                     duration=int(pi.get("duration") or info.get("duration") or 0) or None,
                 )
-                # Cache first part
                 if sent and sent.video and len(parts) == 1:
                     await url_cache.set(url, "video", sent.video.file_id)
 
-            await m.reply(format_delivered())
-            logger.info(f"SHORTS: Sent to {m.from_user.id}")
+            logger.info(f"SHORTS: Sent to {user_id}")
 
     except asyncio.CancelledError:
         raise
     except Exception as e:
         logger.error(f"SHORTS ERROR: {e}")
+        await delete_sticker(bot, m.chat.id, sticker_msg_id)
         try:
             await status.delete()
         except Exception:
             pass
-        await m.reply(mono("  ✗  Could not process this link"))
+        await m.reply(
+            "⚠ Unable to process this link.\n\nPlease try again.",
+            parse_mode="HTML",
+        )
 
 # ─── Normal video handler ─────────────────────────────────────────────────────
 
 async def handle_youtube_normal(m: Message, url: str):
     """
     Normal YouTube video:
-    1. Show progress bar immediately
-    2. Start both video + audio downloads in background
-    3. Show inline [🎥 Video] [🎧 Audio] buttons
-    4. User taps → send when ready
-    5. Delete progress message after send
+    1. Send sticker
+    2. Show: ⏳ Processing link...
+    3. Edit with progress bar
+    4. Show inline [🎥 Video] [🎧 Audio] buttons
+    5. User taps → send when ready
+    6. Delete sticker + progress message after send
+    7. Caption: ✓ Delivered — <mention>
     """
-    job_key = f"yt:{m.from_user.id}:{int(time.time())}"
+    user_id = m.from_user.id
+    first_name = m.from_user.first_name or "User"
+    job_key = f"yt:{user_id}:{int(time.time())}"
 
-    # Show progress + buttons immediately
+    # Send sticker first
+    sticker_msg_id = await send_sticker(bot, m.chat.id, "youtube")
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="🎥 Video", callback_data=f"yt_video:{job_key}"),
         InlineKeyboardButton(text="🎧 Audio", callback_data=f"yt_audio:{job_key}"),
     ]])
 
-    status = await m.answer(
-        _progress_msg(0, "Downloading") + "\n\n<i>Choose format below</i>",
+    status = await m.reply(
+        "⏳ Processing link...\n\n<i>Choose format below</i>",
         reply_markup=keyboard,
         parse_mode="HTML",
     )
@@ -356,8 +422,10 @@ async def handle_youtube_normal(m: Message, url: str):
         "tmp": tmp,
         "url": url,
         "chat_id": m.chat.id,
-        "user_id": m.from_user.id,
+        "user_id": user_id,
+        "first_name": first_name,
         "status_id": status.message_id,
+        "sticker_msg_id": sticker_msg_id,
         "original_msg_id": m.message_id,
         "created_at": time.time(),
     }
@@ -375,13 +443,12 @@ async def _animate_progress(job_key: str, status: Message):
         job = _pending.get(job_key)
         if not job:
             return
-        # Stop animating if both futures done
         vf = job.get("video_future")
         af = job.get("audio_future")
         if vf and af and vf.done() and af.done():
             try:
                 await status.edit_text(
-                    _progress_msg(100, "Ready") + "\n\n<i>Choose format below</i>",
+                    _progress_msg(100, "Ready — choose format below") + "\n\n<i>Choose format below</i>",
                     reply_markup=status.reply_markup,
                     parse_mode="HTML",
                 )
@@ -390,7 +457,7 @@ async def _animate_progress(job_key: str, status: Message):
             return
         try:
             await status.edit_text(
-                _progress_msg(pct, "Downloading") + "\n\n<i>Choose format below</i>",
+                _progress_msg(pct, "Downloading...") + "\n\n<i>Choose format below</i>",
                 reply_markup=status.reply_markup,
                 parse_mode="HTML",
             )
@@ -447,29 +514,45 @@ async def cb_yt_video(callback: CallbackQuery):
 
     chat_id = job["chat_id"]
     url = job["url"]
+    user_id = job["user_id"]
+    first_name = job.get("first_name", "User")
+    original_msg_id = job.get("original_msg_id")
+    sticker_msg_id = job.get("sticker_msg_id")
+    delivered_caption = format_delivered_with_mention(user_id, first_name)
 
-    # Check cache first
+    # Cache check
     cached = await url_cache.get(url, "video")
     if cached:
         try:
             await bot.delete_message(chat_id, job["status_id"])
         except Exception:
             pass
+        await delete_sticker(bot, chat_id, sticker_msg_id)
         try:
-            sent = await bot.send_video(chat_id, cached, supports_streaming=True)
-            await bot.send_message(chat_id, format_delivered())
+            await bot.send_video(
+                chat_id,
+                cached,
+                caption=delivered_caption,
+                parse_mode="HTML",
+                reply_to_message_id=original_msg_id,
+                supports_streaming=True,
+            )
             return
         except Exception:
-            pass  # Cache stale — fall through
+            pass
 
     try:
-        # Delete status/button message
         try:
             await bot.delete_message(chat_id, job["status_id"])
         except Exception:
             pass
+        await delete_sticker(bot, chat_id, sticker_msg_id)
 
-        wait_msg = await bot.send_message(chat_id, _progress_msg(90, "Encoding"), parse_mode="HTML")
+        wait_msg = await bot.send_message(
+            chat_id,
+            _progress_msg(90, "Encoding..."),
+            parse_mode="HTML",
+        )
 
         try:
             video_file = await asyncio.wait_for(
@@ -481,7 +564,11 @@ async def cb_yt_video(callback: CallbackQuery):
                 await bot.delete_message(chat_id, wait_msg.message_id)
             except Exception:
                 pass
-            await bot.send_message(chat_id, mono("  ✗  Download timed out"))
+            await bot.send_message(
+                chat_id,
+                "⚠ Unable to process this link.\n\nPlease try again.",
+                parse_mode="HTML",
+            )
             return
 
         try:
@@ -490,7 +577,11 @@ async def cb_yt_video(callback: CallbackQuery):
             pass
 
         if not video_file or not video_file.exists():
-            await bot.send_message(chat_id, mono("  ✗  Could not process this link"))
+            await bot.send_message(
+                chat_id,
+                "⚠ Unable to process this link.\n\nPlease try again.",
+                parse_mode="HTML",
+            )
             return
 
         tmp = job["tmp"]
@@ -498,27 +589,31 @@ async def cb_yt_video(callback: CallbackQuery):
 
         for i, part in enumerate(parts):
             info = await get_video_info(part)
-            caption = f"Part {i+1}/{len(parts)}" if len(parts) > 1 else None
+            cap = delivered_caption if i == len(parts) - 1 else f"Part {i+1}/{len(parts)}"
             sent = await bot.send_video(
                 chat_id,
                 FSInputFile(part),
-                caption=caption,
+                caption=cap,
+                parse_mode="HTML",
+                reply_to_message_id=original_msg_id,
                 supports_streaming=True,
                 width=info.get("width") or None,
                 height=info.get("height") or None,
                 duration=int(info.get("duration") or 0) or None,
             )
-            # Cache single-part result
             if sent and sent.video and len(parts) == 1:
                 await url_cache.set(url, "video", sent.video.file_id)
 
-        await bot.send_message(chat_id, format_delivered())
-        logger.info(f"YT VIDEO: Sent {len(parts)} part(s) to {job['user_id']}")
+        logger.info(f"YT VIDEO: Sent {len(parts)} part(s) to {user_id}")
 
     except Exception as e:
         logger.error(f"YT VIDEO CALLBACK ERROR: {e}")
         try:
-            await bot.send_message(chat_id, mono("  ✗  Could not process this link"))
+            await bot.send_message(
+                chat_id,
+                "⚠ Unable to process this link.\n\nPlease try again.",
+                parse_mode="HTML",
+            )
         except Exception:
             pass
 
@@ -537,6 +632,11 @@ async def cb_yt_audio(callback: CallbackQuery):
 
     chat_id = job["chat_id"]
     url = job["url"]
+    user_id = job["user_id"]
+    first_name = job.get("first_name", "User")
+    original_msg_id = job.get("original_msg_id")
+    sticker_msg_id = job.get("sticker_msg_id")
+    delivered_caption = format_delivered_with_mention(user_id, first_name)
 
     # Cache check
     cached = await url_cache.get(url, "audio")
@@ -545,9 +645,15 @@ async def cb_yt_audio(callback: CallbackQuery):
             await bot.delete_message(chat_id, job["status_id"])
         except Exception:
             pass
+        await delete_sticker(bot, chat_id, sticker_msg_id)
         try:
-            await bot.send_audio(chat_id, cached)
-            await bot.send_message(chat_id, format_delivered())
+            await bot.send_audio(
+                chat_id,
+                cached,
+                caption=delivered_caption,
+                parse_mode="HTML",
+                reply_to_message_id=original_msg_id,
+            )
             return
         except Exception:
             pass
@@ -557,8 +663,13 @@ async def cb_yt_audio(callback: CallbackQuery):
             await bot.delete_message(chat_id, job["status_id"])
         except Exception:
             pass
+        await delete_sticker(bot, chat_id, sticker_msg_id)
 
-        wait_msg = await bot.send_message(chat_id, _progress_msg(90, "Processing"), parse_mode="HTML")
+        wait_msg = await bot.send_message(
+            chat_id,
+            _progress_msg(90, "Processing audio..."),
+            parse_mode="HTML",
+        )
 
         try:
             audio_file = await asyncio.wait_for(
@@ -570,7 +681,11 @@ async def cb_yt_audio(callback: CallbackQuery):
                 await bot.delete_message(chat_id, wait_msg.message_id)
             except Exception:
                 pass
-            await bot.send_message(chat_id, mono("  ✗  Download timed out"))
+            await bot.send_message(
+                chat_id,
+                "⚠ Unable to process this link.\n\nPlease try again.",
+                parse_mode="HTML",
+            )
             return
 
         try:
@@ -579,21 +694,34 @@ async def cb_yt_audio(callback: CallbackQuery):
             pass
 
         if not audio_file or not audio_file.exists():
-            await bot.send_message(chat_id, mono("  ✗  Could not process this link"))
+            await bot.send_message(
+                chat_id,
+                "⚠ Unable to process this link.\n\nPlease try again.",
+                parse_mode="HTML",
+            )
             return
 
-        sent = await bot.send_audio(chat_id, FSInputFile(audio_file))
+        sent = await bot.send_audio(
+            chat_id,
+            FSInputFile(audio_file),
+            caption=delivered_caption,
+            parse_mode="HTML",
+            reply_to_message_id=original_msg_id,
+        )
 
         if sent and sent.audio:
             await url_cache.set(url, "audio", sent.audio.file_id)
 
-        await bot.send_message(chat_id, format_delivered())
-        logger.info(f"YT AUDIO: Sent to {job['user_id']}")
+        logger.info(f"YT AUDIO: Sent to {user_id}")
 
     except Exception as e:
         logger.error(f"YT AUDIO CALLBACK ERROR: {e}")
         try:
-            await bot.send_message(chat_id, mono("  ✗  Could not process this link"))
+            await bot.send_message(
+                chat_id,
+                "⚠ Unable to process this link.\n\nPlease try again.",
+                parse_mode="HTML",
+            )
         except Exception:
             pass
 
@@ -602,21 +730,17 @@ async def cb_yt_audio(callback: CallbackQuery):
 async def handle_youtube(m: Message, url: str):
     """Route YouTube URL to appropriate handler"""
     if not await acquire_user_slot(m.from_user.id, config.MAX_CONCURRENT_PER_USER):
-        await m.reply(mono("  ⏳  You have downloads in progress. Please wait."))
+        await m.reply("⏳ You have downloads in progress. Please wait.", parse_mode="HTML")
         return
 
     try:
         if is_youtube_music(url):
-            # Music: synchronous flow, use semaphore
             async with download_semaphore:
                 await handle_youtube_music(m, url)
         elif is_youtube_short(url):
-            # Shorts: synchronous flow, use semaphore
             async with download_semaphore:
                 await handle_youtube_short(m, url)
         else:
-            # Normal: spawns background tasks that use semaphore themselves
-            # Do NOT hold semaphore here — would deadlock
             await handle_youtube_normal(m, url)
     finally:
         await release_user_slot(m.from_user.id)
