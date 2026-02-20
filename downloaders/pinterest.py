@@ -1,19 +1,23 @@
 """
-Pinterest Downloader — Fast delivery with cache + smart encode.
+Pinterest Downloader — Fixed + Clean UI.
 
 Flow:
-  1. Cache check → send instantly if hit
-  2. Resolve pin.it shortened URLs (async, no blocking subprocess)
-  3. Show progress bar
-  4. Download with yt-dlp
-  5. Stream copy if H.264/AAC + small
-  6. Else adaptive encode (veryfast, target 4–6MB)
-  7. Send as video with metadata
-  8. Reply to original with ✓ Delivered
-  9. Delete progress message
+  1. Resolve pin.it short URLs (HEAD request)
+  2. Send sticker (if enabled)
+  3. Show: 📌 Fetching Media...
+  4. Download with yt-dlp (primary + fallback)
+  5. Delete sticker + progress message
+  6. Send video — reply to original
+  7. Caption: ✓ Delivered — <mention>
+
+Pinterest URL support:
+  - pin.it short URLs (expanded via HEAD request)
+  - pinterest.com/pin/
+  - pinterest.com/video/
+
+Never crash if extraction fails — return clean error.
 """
 import asyncio
-import time
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -31,43 +35,53 @@ from utils.media_processor import (
     ensure_fits_telegram, instagram_smart_encode,
     get_video_info,
 )
-from ui.formatting import format_delivered, mono
-
-# ─── Progress bar ─────────────────────────────────────────────────────────────
-
-def _progress(pct: int, label: str = "Downloading") -> str:
-    width = 10
-    filled = int(width * pct / 100)
-    bar = "▓" * filled + "░" * (width - filled)
-    return f"<code>  [{bar}]  {pct}%  {label}</code>"
+from ui.formatting import format_delivered_with_mention
+from ui.stickers import send_sticker, delete_sticker
 
 # ─── URL resolver ─────────────────────────────────────────────────────────────
 
 async def _resolve_pin_url(url: str) -> str:
     """
     Resolve pin.it shortened URL to full Pinterest URL.
-    Uses aiohttp (non-blocking). Falls back to original on error.
+    Uses aiohttp HEAD request (non-blocking). Falls back to original on error.
     """
     if "pin.it/" not in url:
         return url
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(
+            async with session.head(
                 url,
                 allow_redirects=True,
                 timeout=aiohttp.ClientTimeout(total=10),
                 headers={"User-Agent": config.pick_user_agent()},
             ) as resp:
-                return str(resp.url)
+                resolved = str(resp.url)
+                logger.debug(f"Pinterest resolved: {url} → {resolved}")
+                return resolved
     except Exception as e:
         logger.debug(f"Pinterest URL resolve failed: {e}")
-        return url
+        # Fallback: try GET redirect
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url,
+                    allow_redirects=True,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                    headers={"User-Agent": config.pick_user_agent()},
+                ) as resp:
+                    return str(resp.url)
+        except Exception:
+            return url
 
 # ─── Download ─────────────────────────────────────────────────────────────────
 
 async def _download_pinterest(url: str, tmp: Path) -> Optional[Path]:
-    """Download Pinterest video with yt-dlp"""
-    opts = {
+    """
+    Download Pinterest video with yt-dlp.
+    Primary attempt: bestvideo+bestaudio merged to mp4.
+    Fallback: best single format.
+    """
+    base_opts = {
         "quiet": True,
         "no_warnings": True,
         "outtmpl": str(tmp / "%(title)s.%(ext)s"),
@@ -75,25 +89,61 @@ async def _download_pinterest(url: str, tmp: Path) -> Optional[Path]:
         "http_headers": {"User-Agent": config.pick_user_agent()},
         "socket_timeout": 30,
         "retries": 3,
-        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "fragment_retries": 3,
+        "ignoreerrors": False,
     }
+
+    # Primary: merge best video + audio to mp4
+    opts_primary = {
+        **base_opts,
+        "format": "bestvideo+bestaudio/best",
+        "merge_output_format": "mp4",
+        "postprocessors": [{
+            "key": "FFmpegVideoConvertor",
+            "preferedformat": "mp4",
+        }],
+    }
+
     try:
-        with YoutubeDL(opts) as ydl:
+        with YoutubeDL(opts_primary) as ydl:
             await asyncio.to_thread(lambda: ydl.download([url]))
-        files = list(tmp.glob("*.mp4")) + list(tmp.glob("*.webm"))
-        return files[0] if files else None
+        files = list(tmp.glob("*.mp4")) + list(tmp.glob("*.webm")) + list(tmp.glob("*.mkv"))
+        if files:
+            return files[0]
     except Exception as e:
-        logger.debug(f"Pinterest download failed: {e}")
-        return None
+        logger.debug(f"Pinterest primary download failed: {type(e).__name__}: {str(e)[:100]}")
+
+    # Fallback: best single format, no merge
+    opts_fallback = {
+        **base_opts,
+        "format": "best[ext=mp4]/best",
+    }
+
+    try:
+        with YoutubeDL(opts_fallback) as ydl:
+            await asyncio.to_thread(lambda: ydl.download([url]))
+        files = list(tmp.glob("*.mp4")) + list(tmp.glob("*.webm")) + list(tmp.glob("*.mkv"))
+        if files:
+            return files[0]
+    except Exception as e:
+        logger.debug(f"Pinterest fallback download failed: {type(e).__name__}: {str(e)[:100]}")
+
+    return None
 
 # ─── Main handler ─────────────────────────────────────────────────────────────
 
 async def handle_pinterest(m: Message, url: str):
     """
     Download Pinterest video pins.
-    Cache-first → stream copy → adaptive encode.
-    Reply to original with ✓ Delivered.
+    Cache-first → download → encode → send.
+    Reply to original message with ✓ Delivered — <mention>.
     """
+    user_id = m.from_user.id
+    first_name = m.from_user.first_name or "User"
+    delivered_caption = format_delivered_with_mention(user_id, first_name)
+
+    sticker_msg_id = None
+
     # Resolve shortened URL first
     if "pin.it/" in url:
         url = await _resolve_pin_url(url)
@@ -103,16 +153,26 @@ async def handle_pinterest(m: Message, url: str):
     cached = await url_cache.get(url, "video")
     if cached:
         try:
-            sent = await m.reply_video(cached, supports_streaming=True)
-            await m.reply(format_delivered())
+            await bot.send_video(
+                m.chat.id,
+                cached,
+                caption=delivered_caption,
+                parse_mode="HTML",
+                reply_to_message_id=m.message_id,
+                supports_streaming=True,
+            )
             return
         except Exception:
-            pass
+            pass  # Stale cache — fall through
 
     async with download_semaphore:
         logger.info(f"PINTEREST: {url}")
 
-        status = await m.reply(_progress(0, "Downloading"), parse_mode="HTML")
+        # Send sticker
+        sticker_msg_id = await send_sticker(bot, m.chat.id, "pinterest")
+
+        # Processing message
+        status = await m.reply("📌 Fetching Media...", parse_mode="HTML")
 
         try:
             with tempfile.TemporaryDirectory() as tmp_dir:
@@ -120,14 +180,14 @@ async def handle_pinterest(m: Message, url: str):
 
                 # Animate progress
                 async def _animate():
-                    for pct in (25, 55, 80):
-                        await asyncio.sleep(1.5)
-                        try:
-                            await status.edit_text(
-                                _progress(pct, "Downloading"), parse_mode="HTML"
-                            )
-                        except Exception:
-                            pass
+                    await asyncio.sleep(2)
+                    try:
+                        await status.edit_text(
+                            "Optimizing for fast delivery...",
+                            parse_mode="HTML",
+                        )
+                    except Exception:
+                        pass
 
                 anim_task = asyncio.create_task(_animate())
 
@@ -135,14 +195,14 @@ async def handle_pinterest(m: Message, url: str):
                 anim_task.cancel()
 
                 if not video_file:
+                    await delete_sticker(bot, m.chat.id, sticker_msg_id)
+                    sticker_msg_id = None
                     await status.delete()
-                    await m.reply(mono("  ✗  No video found at this URL"))
+                    await m.reply(
+                        "⚠ Unable to process this link.\n\nPlease try again.",
+                        parse_mode="HTML",
+                    )
                     return
-
-                try:
-                    await status.edit_text(_progress(90, "Encoding"), parse_mode="HTML")
-                except Exception:
-                    pass
 
                 # Smart encode: stream copy if compatible, else adaptive
                 encoded = tmp / "pin_enc.mp4"
@@ -151,14 +211,20 @@ async def handle_pinterest(m: Message, url: str):
 
                 parts = await ensure_fits_telegram(final, tmp)
 
+                # Delete sticker + progress
+                await delete_sticker(bot, m.chat.id, sticker_msg_id)
+                sticker_msg_id = None
                 await status.delete()
 
                 for i, part in enumerate(parts):
                     info = await get_video_info(part)
-                    caption = f"Part {i+1}/{len(parts)}" if len(parts) > 1 else None
-                    sent = await m.reply_video(
+                    cap = delivered_caption if i == len(parts) - 1 else f"Part {i+1}/{len(parts)}"
+                    sent = await bot.send_video(
+                        m.chat.id,
                         FSInputFile(part),
-                        caption=caption,
+                        caption=cap,
+                        parse_mode="HTML",
+                        reply_to_message_id=m.message_id,
                         supports_streaming=True,
                         width=info.get("width") or None,
                         height=info.get("height") or None,
@@ -167,13 +233,20 @@ async def handle_pinterest(m: Message, url: str):
                     if sent and sent.video and len(parts) == 1:
                         await url_cache.set(url, "video", sent.video.file_id)
 
-                await m.reply(format_delivered())
-                logger.info(f"PINTEREST: Sent {len(parts)} file(s) to {m.from_user.id}")
+                logger.info(f"PINTEREST: Sent {len(parts)} file(s) to {user_id}")
 
         except Exception as e:
             logger.error(f"PINTEREST ERROR: {e}")
+            await delete_sticker(bot, m.chat.id, sticker_msg_id)
+            sticker_msg_id = None
             try:
                 await status.delete()
             except Exception:
                 pass
-            await m.reply(mono("  ✗  Pinterest download failed"))
+            await m.reply(
+                "⚠ Unable to process this link.\n\nPlease try again.",
+                parse_mode="HTML",
+            )
+        finally:
+            if sticker_msg_id:
+                await delete_sticker(bot, m.chat.id, sticker_msg_id)
