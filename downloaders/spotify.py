@@ -5,9 +5,9 @@ Single track:
   Progress bar only (no text):
   [████░░░░░░] 20% → [████████░░] 80% → [██████████] 100%
   Delete progress → ✓ Delivered — <mention>
+  Sends in SAME chat (group or private).
 
-Playlist (group → DM):
-  Fetch tracks via Spotify API (page-by-page, limit=100)
+Playlist (→ DM):
   Download each track individually with spotdl
   Send to DM immediately after each track
   Update progress every 5 tracks
@@ -281,12 +281,13 @@ async def handle_spotify_single(m: Message, url: str):
     """
     Download single Spotify track.
     Works in private + group chats.
+    ALWAYS sends in the SAME chat where the link was sent.
 
     UI: Progress bar only (no text).
     [████░░░░░░] 20% → ... → [██████████] 100%
     Delete progress → ✓ Delivered — <mention>
 
-    Target: ≤ 5 seconds total.
+    Target: ≤ 6 seconds total.
     """
     if not config.SPOTIFY_CLIENT_ID or not config.SPOTIFY_CLIENT_SECRET:
         logger.warning("Spotify: CLIENT_ID or CLIENT_SECRET not configured")
@@ -297,10 +298,11 @@ async def handle_spotify_single(m: Message, url: str):
         )
         return
 
-    is_group = m.chat.type in ("group", "supergroup")
     user_id = m.from_user.id
     first_name = m.from_user.first_name or "User"
     delivered_caption = format_delivered_with_mention(user_id, first_name)
+    # Always send in same chat (group or private)
+    target_chat = m.chat.id
 
     # Send initial progress bar immediately
     progress = await _safe_reply(m, _bar(20), parse_mode="HTML")
@@ -341,46 +343,17 @@ async def handle_spotify_single(m: Message, url: str):
                 await _safe_delete(progress)
                 progress = None
 
-                if is_group:
-                    # Send to DM
-                    try:
-                        await bot.send_audio(
-                            m.from_user.id,
-                            FSInputFile(mp3_file),
-                            title=title,
-                            performer=artist,
-                            caption=delivered_caption,
-                            parse_mode="HTML",
-                        )
-                        # Reply in group
-                        await _safe_reply(m, "✓ Sent to your DM", parse_mode="HTML")
-                    except TelegramForbiddenError:
-                        bot_me = await bot.get_me()
-                        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-                            InlineKeyboardButton(
-                                text="🎧 Start Bot",
-                                url=f"https://t.me/{bot_me.username}?start=spotify",
-                            )
-                        ]])
-                        await _safe_reply(
-                            m,
-                            "⚠ Start the bot first to receive songs in DM.\n\nTap below, then resend the link 👇",
-                            reply_markup=keyboard,
-                            parse_mode="HTML",
-                        )
-                        return
-                else:
-                    # DM: send directly
-                    await bot.send_audio(
-                        m.chat.id,
-                        FSInputFile(mp3_file),
-                        title=title,
-                        performer=artist,
-                        caption=delivered_caption,
-                        parse_mode="HTML",
-                    )
+                # Send in same chat (group or private)
+                await bot.send_audio(
+                    target_chat,
+                    FSInputFile(mp3_file),
+                    title=title,
+                    performer=artist,
+                    caption=delivered_caption,
+                    parse_mode="HTML",
+                )
 
-                logger.info(f"SPOTIFY SINGLE: '{title}' by '{artist}' → {user_id}")
+                logger.info(f"SPOTIFY SINGLE: '{title}' by '{artist}' → chat {target_chat}")
 
     except asyncio.CancelledError:
         raise
@@ -398,8 +371,8 @@ async def handle_spotify_single(m: Message, url: str):
 async def handle_spotify_playlist(m: Message, url: str):
     """
     Route Spotify URL:
-    - Single track → handle_spotify_single
-    - Playlist/album → stream track-by-track via Spotify API
+    - Single track → handle_spotify_single (sends in same chat)
+    - Playlist/album → stream track-by-track via Spotify API (sends to DM)
 
     CRITICAL: Never run spotdl on full playlist URL.
     Always fetch track list via API, then call spotdl per track.
@@ -411,16 +384,7 @@ async def handle_spotify_playlist(m: Message, url: str):
             await handle_spotify_single(m, url)
             return
 
-        # Playlists: group-only
-        if m.chat.type == "private":
-            await _safe_reply(
-                m,
-                "⚠ Spotify playlists only work in groups.",
-                parse_mode="HTML",
-            )
-            return
-
-        logger.info(f"SPOTIFY PLAYLIST: Group request from {m.from_user.id}")
+        logger.info(f"SPOTIFY PLAYLIST: Request from {m.from_user.id} in {m.chat.type}")
 
         # Cooldown check
         is_cooldown, minutes_left = await user_state_manager.is_on_cooldown(m.from_user.id)
@@ -432,7 +396,7 @@ async def handle_spotify_playlist(m: Message, url: str):
             )
             return
 
-        # Bot-started check
+        # Bot-started check (needed to send DM)
         has_started = await user_state_manager.has_started_bot(m.from_user.id)
         if not has_started:
             bot_me = await bot.get_me()
@@ -489,7 +453,13 @@ async def _run_playlist_download(m: Message, url: str):
     Inner playlist download.
     Fetches tracks via Spotify API (page-by-page).
     Downloads each track individually with spotdl.
-    Sends to DM immediately after each track.
+    Sends each track to user's DM immediately.
+
+    Progress:
+    - Group chat: overall playlist progress bar (updates every 5 tracks)
+    - DM: each song sent as it's downloaded
+    - DM: start notification with playlist info
+    - DM: completion message when done
     """
     async with spotify_semaphore:
         # Delete user's link after 4 seconds
@@ -514,9 +484,9 @@ async def _run_playlist_download(m: Message, url: str):
             )
             return
 
-        # Initial progress message
+        # Initial progress message in group/chat
         progress_msg = await m.answer(
-            f"Playlist: Loading...\n\n{_bar(0)}\n0 / ?",
+            f"𝐏ʟᴀʏʟɪꜱᴛ: Loading...\n\n{_bar(0)}\n0 / ?",
             parse_mode="HTML",
         )
 
@@ -537,12 +507,28 @@ async def _run_playlist_download(m: Message, url: str):
             playlist_name = "Playlist"
             logger.info(f"SPOTIFY PLAYLIST: {total} tracks to download")
 
-            # Update progress with total
+            # Update progress with total count
             await _safe_edit(
                 progress_msg,
-                f"Playlist: {playlist_name}\n\n{_bar(0)}\n0 / {total}",
+                f"𝐏ʟᴀʏʟɪꜱᴛ: {playlist_name}\n\n{_bar(0)}\n0 / {total}",
                 parse_mode="HTML",
             )
+
+            # Send DM notification with playlist info
+            user_id = m.from_user.id
+            first_name = (m.from_user.first_name or "there")[:32]
+            safe_name = first_name.replace("<", "").replace(">", "")
+            try:
+                await bot.send_message(
+                    user_id,
+                    f"🎵 <b>𝐏ʟᴀʏʟɪꜱᴛ 𝐒𝐭𝐚𝐫𝐭𝐞𝐝</b>\n\n"
+                    f"<b>{playlist_name}</b>\n"
+                    f"Songs: {total}\n\n"
+                    f"Downloading now — songs will appear here one by one.",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
 
             sent_count = 0
             failed_count = 0
@@ -557,6 +543,23 @@ async def _run_playlist_download(m: Message, url: str):
                 try:
                     with tempfile.TemporaryDirectory() as tmp_dir:
                         tmp = Path(tmp_dir)
+
+                        # Update current song progress in group chat
+                        total_done = sent_count + failed_count
+                        pct = min(99, int(total_done * 100 / total)) if total > 0 else 0
+                        song_num = i + 1
+                        try:
+                            await _safe_edit(
+                                progress_msg,
+                                f"𝐏ʟᴀʏʟɪꜱᴛ: {playlist_name}\n\n"
+                                f"{_bar(pct)}\n"
+                                f"{total_done} / {total}\n\n"
+                                f"⬇️ Song {song_num}/{total}",
+                                parse_mode="HTML",
+                            )
+                        except Exception:
+                            pass
+
                         mp3_file = await _download_track(track_url, tmp)
 
                         if not mp3_file or not mp3_file.exists():
@@ -565,8 +568,9 @@ async def _run_playlist_download(m: Message, url: str):
                         else:
                             artist, title = extract_song_metadata(mp3_file.stem)
                             try:
+                                # Send to user's DM
                                 await bot.send_audio(
-                                    m.from_user.id,
+                                    user_id,
                                     FSInputFile(mp3_file),
                                     title=title,
                                     performer=artist,
@@ -574,7 +578,7 @@ async def _run_playlist_download(m: Message, url: str):
                                 sent_count += 1
                                 logger.info(f"SPOTIFY PLAYLIST: Sent {sent_count}/{total}: '{title}'")
                             except TelegramForbiddenError:
-                                logger.error(f"User {m.from_user.id} blocked bot")
+                                logger.error(f"User {user_id} blocked bot")
                                 blocked = True
                                 break
                             except Exception as e:
@@ -585,21 +589,24 @@ async def _run_playlist_download(m: Message, url: str):
                     logger.error(f"SPOTIFY PLAYLIST: Track {i+1} error: {e}", exc_info=True)
                     failed_count += 1
 
-                # Update progress every 5 tracks
+                # Update overall progress every 5 tracks
                 total_done = sent_count + failed_count
                 if total_done % 5 == 0 or total_done == total:
                     pct = min(100, int(total_done * 100 / total)) if total > 0 else 0
-                    await _safe_edit(
-                        progress_msg,
-                        f"Playlist: {playlist_name}\n\n{_bar(pct)}\n{total_done} / {total}",
-                        parse_mode="HTML",
-                    )
+                    try:
+                        await _safe_edit(
+                            progress_msg,
+                            f"𝐏ʟᴀʏʟɪꜱᴛ: {playlist_name}\n\n{_bar(pct)}\n{total_done} / {total}",
+                            parse_mode="HTML",
+                        )
+                    except Exception:
+                        pass
 
             elapsed = time.perf_counter() - start_time
 
             if blocked:
-                await user_state_manager.mark_user_blocked(m.from_user.id)
-                await user_state_manager.apply_cooldown(m.from_user.id)
+                await user_state_manager.mark_user_blocked(user_id)
+                await user_state_manager.apply_cooldown(user_id)
                 await _safe_edit(
                     progress_msg,
                     "🚫 Blocked — cooldown applied.",
@@ -607,10 +614,10 @@ async def _run_playlist_download(m: Message, url: str):
                 )
                 return
 
-            # Show 100% completion
+            # Show 100% completion in group chat
             await _safe_edit(
                 progress_msg,
-                f"Playlist: {playlist_name}\n\n{_bar(100)}\n{total} / {total}",
+                f"𝐏ʟᴀʏʟɪꜱᴛ: {playlist_name}\n\n{_bar(100)}\n{total} / {total}",
                 parse_mode="HTML",
             )
 
@@ -620,7 +627,7 @@ async def _run_playlist_download(m: Message, url: str):
                 await _safe_delete(progress_msg)
             asyncio.create_task(_delete_progress())
 
-            # Final summary in group
+            # Final summary in group/chat
             await m.answer(
                 format_playlist_final(
                     m.from_user, playlist_name,
@@ -629,11 +636,16 @@ async def _run_playlist_download(m: Message, url: str):
                 parse_mode="HTML",
             )
 
-            # DM completion message
+            # DM completion message — warm and refined
             try:
+                bot_me = await bot.get_me()
+                bot_username = f"@{bot_me.username}" if bot_me.username else "Nagu Downloader"
                 await bot.send_message(
-                    m.from_user.id,
-                    format_playlist_dm_complete(playlist_name),
+                    user_id,
+                    f"✅ <b>𝐏ʟᴀʏʟɪꜱᴛ 𝐂𝐨𝐦𝐩𝐥𝐞𝐭𝐞𝐝</b>\n\n"
+                    f"<b>{playlist_name}</b>\n"
+                    f"Sent: {sent_count} / {total}\n\n"
+                    f"Thanks for using {bot_username} — enjoy your music! 🎧",
                     parse_mode="HTML",
                 )
             except Exception:

@@ -15,6 +15,12 @@ Shorts:
 YT Music:
   Send sticker → silent download → delete sticker → send → ✓ Delivered — <mention>
 
+Playlist:
+  Detect → show mode selector (Audio/Video)
+  → show quality selector
+  → download each item → send to DM
+  → progress bar in original chat
+
 Cache:
   SHA256(url+format) → Telegram file_id
   If cached → send instantly, no re-download
@@ -25,8 +31,12 @@ Cookie folder:
 Resolution rule:
   <= 120s → keep original (max 1080p)
   >  120s → 720p
+
+>50MB fix:
+  Dynamic bitrate re-encode to fit under 49MB.
 """
 import asyncio
+import re
 import time
 import tempfile
 from pathlib import Path
@@ -37,6 +47,7 @@ from aiogram.types import (
     Message, FSInputFile,
     InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery,
 )
+from aiogram.exceptions import TelegramForbiddenError
 
 from core.bot import bot, dp
 from core.config import config
@@ -45,12 +56,19 @@ from utils.helpers import get_random_cookie
 from utils.logger import logger
 from utils.cache import url_cache
 from utils.media_processor import (
-    reencode_shorts, ensure_fits_telegram,
-    get_video_info,
+    reencode_shorts,
+    get_video_info, get_file_size, _run_ffmpeg,
 )
 from utils.watchdog import acquire_user_slot, release_user_slot
-from ui.formatting import format_delivered_with_mention
+from ui.formatting import (
+    format_delivered_with_mention,
+    format_yt_playlist_mode,
+    format_yt_audio_quality,
+    format_yt_video_quality,
+    format_yt_playlist_final,
+)
 from ui.stickers import send_sticker, delete_sticker
+from utils.user_state import user_state_manager
 
 # ─── URL detection ────────────────────────────────────────────────────────────
 
@@ -59,6 +77,23 @@ def is_youtube_short(url: str) -> bool:
 
 def is_youtube_music(url: str) -> bool:
     return "music.youtube.com" in url.lower()
+
+def is_youtube_playlist(url: str) -> bool:
+    """Detect YouTube playlist URLs"""
+    url_lower = url.lower()
+    # youtube.com/playlist?list=
+    if "youtube.com/playlist" in url_lower and "list=" in url_lower:
+        return True
+    # youtube.com/watch?v=...&list= (only if list= is present and it's a real playlist)
+    if ("youtube.com/watch" in url_lower or "youtu.be/" in url_lower) and "list=" in url_lower:
+        # Exclude auto-generated "related" playlists (RD prefix)
+        list_match = re.search(r"list=([^&]+)", url_lower)
+        if list_match:
+            list_id = list_match.group(1)
+            # Only treat as playlist if it's a real playlist (not RD/auto-generated)
+            if not list_id.startswith("rd") and not list_id.startswith("fl"):
+                return True
+    return False
 
 # ─── yt-dlp option builders ───────────────────────────────────────────────────
 
@@ -135,8 +170,17 @@ async def download_youtube_video(
             return result
     return None
 
-async def download_youtube_audio(url: str, tmp: Path, is_music: bool = False) -> Optional[Path]:
-    """Download YouTube/YT Music audio as 320kbps MP3"""
+async def download_youtube_video_quality(
+    url: str,
+    tmp: Path,
+    height: int = 720,
+) -> Optional[Path]:
+    """Download YouTube video at specific quality"""
+    fmt = f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/best[height<={height}][ext=mp4]/best[height<={height}]"
+    return await download_youtube_video(url, tmp, fmt=fmt)
+
+async def download_youtube_audio(url: str, tmp: Path, is_music: bool = False, quality: str = "320") -> Optional[Path]:
+    """Download YouTube/YT Music audio as MP3"""
     fmt = "bestaudio[ext=m4a]/bestaudio/best"
     layer_fns = [_layer1_opts, _layer2_opts]
     layer_fns.append(_layer3_music_opts if is_music else _layer3_opts)
@@ -146,7 +190,7 @@ async def download_youtube_audio(url: str, tmp: Path, is_music: bool = False) ->
         opts["postprocessors"] = [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "mp3",
-            "preferredquality": "320",
+            "preferredquality": quality,
         }]
         opts["outtmpl"] = str(tmp / "%(title)s.%(ext)s")
         try:
@@ -159,6 +203,121 @@ async def download_youtube_audio(url: str, tmp: Path, is_music: bool = False) ->
             logger.debug(f"Audio layer failed: {str(e)[:80]}")
 
     return None
+
+async def download_youtube_audio_192k(url: str, tmp: Path) -> Optional[Path]:
+    """Download YouTube audio as 192k MP3 (fast mode)"""
+    fmt = "bestaudio[ext=m4a]/bestaudio/best"
+    for layer_fn in [_layer1_opts, _layer2_opts, _layer3_opts]:
+        opts = layer_fn(tmp, fmt)
+        opts["postprocessors"] = [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "192",
+        }]
+        opts["postprocessor_args"] = {
+            "FFmpegExtractAudio": ["-acodec", "libmp3lame", "-b:a", "192k", "-preset", "ultrafast", "-threads", "4"]
+        }
+        opts["outtmpl"] = str(tmp / "%(title)s.%(ext)s")
+        try:
+            with YoutubeDL(opts) as ydl:
+                await asyncio.to_thread(lambda: ydl.download([url]))
+            mp3_files = list(tmp.glob("*.mp3"))
+            if mp3_files:
+                return mp3_files[0]
+        except Exception as e:
+            logger.debug(f"Audio 192k layer failed: {str(e)[:80]}")
+    return None
+
+# ─── Ensure video fits Telegram (>50MB fix) ───────────────────────────────────
+
+async def ensure_video_fits_telegram(video_path: Path, tmp_dir: Path) -> Optional[Path]:
+    """
+    Ensure video fits Telegram 49MB limit.
+    Uses dynamic bitrate calculation.
+    Falls back to 720p if still too large.
+    Never silently fails.
+    """
+    TG_LIMIT = 49 * 1024 * 1024
+    size = get_file_size(video_path)
+
+    if size <= TG_LIMIT:
+        # Ensure MP4 + faststart
+        if video_path.suffix.lower() not in (".mp4",):
+            remuxed = tmp_dir / f"remuxed_{video_path.stem}.mp4"
+            args = [
+                "-y", "-i", str(video_path),
+                "-c", "copy",
+                "-movflags", "+faststart",
+                str(remuxed),
+            ]
+            rc, _ = await _run_ffmpeg(args)
+            if rc == 0 and remuxed.exists():
+                return remuxed
+        return video_path
+
+    logger.info(f"YT VIDEO: {size/1024/1024:.1f}MB exceeds 49MB limit, re-encoding")
+
+    info = await get_video_info(video_path)
+    duration = info.get("duration") or 60.0
+
+    # Dynamic bitrate: target 45MB
+    target_size_mb = 45
+    bitrate = int((target_size_mb * 8 * 1024) / max(duration, 1))
+    bitrate = max(bitrate, 300)  # minimum 300kbps
+
+    encoded = tmp_dir / f"enc_{video_path.stem}.mp4"
+    args = [
+        "-y", "-i", str(video_path),
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-b:v", f"{bitrate}k",
+        "-maxrate", f"{bitrate}k",
+        "-bufsize", f"{bitrate * 2}k",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-movflags", "+faststart",
+        "-threads", "4",
+        str(encoded),
+    ]
+    rc, err = await _run_ffmpeg(args)
+
+    if rc == 0 and encoded.exists():
+        enc_size = get_file_size(encoded)
+        if enc_size <= TG_LIMIT:
+            logger.info(f"YT VIDEO: Re-encoded to {enc_size/1024/1024:.1f}MB")
+            return encoded
+        logger.warning(f"YT VIDEO: Re-encoded still {enc_size/1024/1024:.1f}MB, trying 720p fallback")
+
+    # Fallback: 720p re-encode
+    fallback = tmp_dir / f"fallback_{video_path.stem}.mp4"
+    orig_height = info.get("height") or 1080
+    target_h = min(orig_height, 720)
+    bitrate_720 = int((target_size_mb * 8 * 1024) / max(duration, 1))
+    bitrate_720 = max(bitrate_720, 300)
+
+    args_720 = [
+        "-y", "-i", str(video_path),
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-vf", f"scale=-2:{target_h}",
+        "-b:v", f"{bitrate_720}k",
+        "-maxrate", f"{bitrate_720}k",
+        "-bufsize", f"{bitrate_720 * 2}k",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-movflags", "+faststart",
+        "-threads", "4",
+        str(fallback),
+    ]
+    rc2, err2 = await _run_ffmpeg(args_720)
+
+    if rc2 == 0 and fallback.exists():
+        fb_size = get_file_size(fallback)
+        logger.info(f"YT VIDEO: 720p fallback {fb_size/1024/1024:.1f}MB")
+        return fallback
+
+    logger.error(f"YT VIDEO: Could not compress to fit Telegram limit")
+    return video_path  # Return original — let Telegram reject it with proper error
 
 # ─── Safe reply helpers ───────────────────────────────────────────────────────
 
@@ -349,31 +508,27 @@ async def handle_youtube_short(m: Message, url: str):
             ok = await reencode_shorts(video_file, encoded)
             final = encoded if ok and encoded.exists() else video_file
 
+            # Ensure fits Telegram
+            final = await ensure_video_fits_telegram(final, tmp) or final
+
             info = await get_video_info(final)
-            parts = await ensure_fits_telegram(final, tmp)
 
             await delete_sticker(bot, m.chat.id, sticker_msg_id)
             sticker_msg_id = None
 
-            for i, part in enumerate(parts):
-                if not part.exists():
-                    logger.warning(f"YT SHORT: Part {i} does not exist, skipping")
-                    continue
-                pi = await get_video_info(part)
-                cap = delivered_caption if i == len(parts) - 1 else f"Part {i+1}/{len(parts)}"
-                sent = await _safe_send_video(
-                    m.chat.id,
-                    m.message_id,
-                    video=FSInputFile(part),
-                    caption=cap,
-                    parse_mode="HTML",
-                    supports_streaming=True,
-                    width=pi.get("width") or info.get("width") or None,
-                    height=pi.get("height") or info.get("height") or None,
-                    duration=int(pi.get("duration") or info.get("duration") or 0) or None,
-                )
-                if sent and sent.video and len(parts) == 1:
-                    await url_cache.set(url, "video", sent.video.file_id)
+            sent = await _safe_send_video(
+                m.chat.id,
+                m.message_id,
+                video=FSInputFile(final),
+                caption=delivered_caption,
+                parse_mode="HTML",
+                supports_streaming=True,
+                width=info.get("width") or None,
+                height=info.get("height") or None,
+                duration=int(info.get("duration") or 0) or None,
+            )
+            if sent and sent.video:
+                await url_cache.set(url, "video", sent.video.file_id)
 
             logger.info(f"SHORTS: Sent to {user_id}")
 
@@ -567,29 +722,26 @@ async def cb_yt_video(callback: CallbackQuery):
             return
 
         tmp = job["tmp"]
-        parts = await ensure_fits_telegram(video_file, tmp)
 
-        for i, part in enumerate(parts):
-            if not part.exists():
-                logger.warning(f"YT VIDEO: Part {i} does not exist, skipping")
-                continue
-            info = await get_video_info(part)
-            cap = delivered_caption if i == len(parts) - 1 else f"Part {i+1}/{len(parts)}"
-            sent = await _safe_send_video(
-                chat_id,
-                original_msg_id,
-                video=FSInputFile(part),
-                caption=cap,
-                parse_mode="HTML",
-                supports_streaming=True,
-                width=info.get("width") or None,
-                height=info.get("height") or None,
-                duration=int(info.get("duration") or 0) or None,
-            )
-            if sent and sent.video and len(parts) == 1:
-                await url_cache.set(url, "video", sent.video.file_id)
+        # Ensure fits Telegram (>50MB fix)
+        final_video = await ensure_video_fits_telegram(video_file, tmp) or video_file
 
-        logger.info(f"YT VIDEO: Sent {len(parts)} part(s) to {user_id}")
+        info = await get_video_info(final_video)
+        sent = await _safe_send_video(
+            chat_id,
+            original_msg_id,
+            video=FSInputFile(final_video),
+            caption=delivered_caption,
+            parse_mode="HTML",
+            supports_streaming=True,
+            width=info.get("width") or None,
+            height=info.get("height") or None,
+            duration=int(info.get("duration") or 0) or None,
+        )
+        if sent and sent.video:
+            await url_cache.set(url, "video", sent.video.file_id)
+
+        logger.info(f"YT VIDEO: Sent to {user_id}")
 
     except Exception as e:
         logger.error(f"YT VIDEO CALLBACK ERROR: {e}", exc_info=True)
@@ -692,6 +844,494 @@ async def cb_yt_audio(callback: CallbackQuery):
         except Exception:
             pass
 
+# ─── YouTube Playlist handler ─────────────────────────────────────────────────
+
+# Semaphore: max 1 concurrent playlist job
+_playlist_semaphore = asyncio.Semaphore(1)
+
+# Pending playlist jobs store
+_playlist_pending: dict = {}
+
+async def _get_playlist_info(url: str) -> dict:
+    """Fetch playlist metadata (name, entries) using yt-dlp"""
+    try:
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "extract_flat": True,
+            "playlistend": 200,  # limit to 200 items
+            "proxy": config.pick_proxy(),
+            "http_headers": {"User-Agent": config.pick_user_agent()},
+            "socket_timeout": 30,
+        }
+        cookie_file = get_random_cookie(config.YT_COOKIES_FOLDER)
+        if cookie_file:
+            opts["cookiefile"] = cookie_file
+
+        def _extract():
+            with YoutubeDL(opts) as ydl:
+                return ydl.extract_info(url, download=False)
+
+        info = await asyncio.to_thread(_extract)
+        if not info:
+            return {}
+
+        entries = info.get("entries") or []
+        title = info.get("title") or info.get("playlist_title") or "Playlist"
+        return {"title": title, "entries": entries, "count": len(entries)}
+    except Exception as e:
+        logger.error(f"YT PLAYLIST INFO ERROR: {e}", exc_info=True)
+        return {}
+
+
+async def handle_youtube_playlist(m: Message, url: str):
+    """
+    YouTube Playlist handler:
+    1. Fetch playlist info
+    2. Show mode selector (Audio/Video)
+    3. After mode selected → show quality selector
+    4. After quality selected → download and send to DM
+    """
+    user_id = m.from_user.id
+    job_key = f"ytpl:{user_id}:{int(time.time())}"
+
+    # Check if user has started bot (needed for DM)
+    has_started = await user_state_manager.has_started_bot(user_id)
+    if not has_started:
+        bot_me = await bot.get_me()
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text="▶️ Start Bot",
+                url=f"https://t.me/{bot_me.username}?start=playlist",
+            )
+        ]])
+        await _safe_reply_text(
+            m,
+            "Start bot to receive playlist in DM",
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+        return
+
+    # Fetch playlist info
+    try:
+        status_msg = await _safe_reply_text(m, "𝐋𝐨𝐚𝐝𝐢𝐧𝐠 𝐩𝐥𝐚𝐲𝐥𝐢𝐬𝐭...", parse_mode="HTML")
+    except Exception:
+        status_msg = None
+
+    playlist_info = await _get_playlist_info(url)
+
+    if not playlist_info or not playlist_info.get("entries"):
+        if status_msg:
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+        await _safe_reply_text(
+            m,
+            "⚠ Unable to process this link.\n\nPlease try again.",
+            parse_mode="HTML",
+        )
+        return
+
+    playlist_name = playlist_info.get("title", "Playlist")[:40]
+    entries = playlist_info.get("entries", [])
+    total = len(entries)
+
+    # Store playlist job
+    _playlist_pending[job_key] = {
+        "url": url,
+        "playlist_name": playlist_name,
+        "entries": entries,
+        "total": total,
+        "chat_id": m.chat.id,
+        "user_id": user_id,
+        "first_name": m.from_user.first_name or "User",
+        "original_msg_id": m.message_id,
+        "created_at": time.time(),
+    }
+
+    # Delete loading message
+    if status_msg:
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+
+    # Show mode selector
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🎵 Audio", callback_data=f"ytpl_audio:{job_key}"),
+        InlineKeyboardButton(text="🎬 Video", callback_data=f"ytpl_video:{job_key}"),
+    ]])
+
+    await _safe_reply_text(
+        m,
+        format_yt_playlist_mode(playlist_name),
+        reply_markup=keyboard,
+        parse_mode="HTML",
+    )
+
+    # Cleanup after 10 minutes
+    asyncio.create_task(_cleanup_playlist_pending(job_key, delay=600))
+
+
+async def _cleanup_playlist_pending(job_key: str, delay: int = 600):
+    """Clean up playlist pending job after timeout"""
+    await asyncio.sleep(delay)
+    _playlist_pending.pop(job_key, None)
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("ytpl_audio:"))
+async def cb_ytpl_audio(callback: CallbackQuery):
+    """Audio mode selected for playlist"""
+    job_key = callback.data.split(":", 1)[1]
+    job = _playlist_pending.get(job_key)
+
+    if not job:
+        await callback.answer("Session expired. Send the link again.", show_alert=True)
+        return
+
+    await callback.answer()
+
+    # Show audio quality selector
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="192k (Fast)", callback_data=f"ytpl_aq:192:{job_key}"),
+        InlineKeyboardButton(text="320k (High)", callback_data=f"ytpl_aq:320:{job_key}"),
+        InlineKeyboardButton(text="Hi-Res (Best)", callback_data=f"ytpl_aq:hires:{job_key}"),
+    ]])
+
+    try:
+        await callback.message.edit_text(
+            format_yt_audio_quality(),
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("ytpl_video:"))
+async def cb_ytpl_video(callback: CallbackQuery):
+    """Video mode selected for playlist"""
+    job_key = callback.data.split(":", 1)[1]
+    job = _playlist_pending.get(job_key)
+
+    if not job:
+        await callback.answer("Session expired. Send the link again.", show_alert=True)
+        return
+
+    await callback.answer()
+
+    # Show video quality selector
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="360p", callback_data=f"ytpl_vq:360:{job_key}"),
+        InlineKeyboardButton(text="480p", callback_data=f"ytpl_vq:480:{job_key}"),
+        InlineKeyboardButton(text="720p", callback_data=f"ytpl_vq:720:{job_key}"),
+    ]])
+
+    try:
+        await callback.message.edit_text(
+            format_yt_video_quality(),
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("ytpl_aq:"))
+async def cb_ytpl_audio_quality(callback: CallbackQuery):
+    """Audio quality selected — start playlist download"""
+    parts = callback.data.split(":", 2)
+    if len(parts) < 3:
+        await callback.answer("Invalid selection.", show_alert=True)
+        return
+
+    quality = parts[1]  # "192", "320", or "hires"
+    job_key = parts[2]
+    job = _playlist_pending.get(job_key)
+
+    if not job:
+        await callback.answer("Session expired. Send the link again.", show_alert=True)
+        return
+
+    await callback.answer("🎵 Starting download...")
+
+    # Delete quality selector message
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
+    # Start playlist download in background
+    asyncio.create_task(_run_yt_playlist_audio(callback, job_key, job, quality))
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("ytpl_vq:"))
+async def cb_ytpl_video_quality(callback: CallbackQuery):
+    """Video quality selected — start playlist download"""
+    parts = callback.data.split(":", 2)
+    if len(parts) < 3:
+        await callback.answer("Invalid selection.", show_alert=True)
+        return
+
+    height = int(parts[1])  # 360, 480, or 720
+    job_key = parts[2]
+    job = _playlist_pending.get(job_key)
+
+    if not job:
+        await callback.answer("Session expired. Send the link again.", show_alert=True)
+        return
+
+    await callback.answer("🎬 Starting download...")
+
+    # Delete quality selector message
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
+    # Start playlist download in background
+    asyncio.create_task(_run_yt_playlist_video(callback, job_key, job, height))
+
+
+def _bar(pct: int) -> str:
+    """Progress bar"""
+    width = 10
+    filled = int(width * pct / 100)
+    return f"[{'█' * filled}{'░' * (width - filled)}] {pct}%"
+
+
+async def _run_yt_playlist_audio(callback: CallbackQuery, job_key: str, job: dict, quality: str):
+    """
+    Download YouTube playlist as audio and send to DM.
+    """
+    async with _playlist_semaphore:
+        chat_id = job["chat_id"]
+        user_id = job["user_id"]
+        playlist_name = job["playlist_name"]
+        entries = job["entries"]
+        total = len(entries)
+
+        # Send progress message in original chat
+        try:
+            progress_msg = await bot.send_message(
+                chat_id,
+                f"𝐏ʟᴀʏʟɪꜱᴛ: {playlist_name}\n\n{_bar(0)}\n0 / {total}",
+                parse_mode="HTML",
+            )
+        except Exception:
+            progress_msg = None
+
+        sent_count = 0
+        failed_count = 0
+
+        for i, entry in enumerate(entries):
+            if not entry:
+                failed_count += 1
+                continue
+
+            entry_url = entry.get("url") or entry.get("webpage_url")
+            if not entry_url:
+                # Try to construct URL from id
+                entry_id = entry.get("id")
+                if entry_id:
+                    entry_url = f"https://www.youtube.com/watch?v={entry_id}"
+                else:
+                    failed_count += 1
+                    continue
+
+            try:
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    tmp = Path(tmp_dir)
+
+                    if quality == "hires":
+                        audio_file = await download_youtube_audio(entry_url, tmp, quality="320")
+                    elif quality == "320":
+                        audio_file = await download_youtube_audio(entry_url, tmp, quality="320")
+                    else:  # 192k fast
+                        audio_file = await download_youtube_audio_192k(entry_url, tmp)
+
+                    if not audio_file or not audio_file.exists():
+                        failed_count += 1
+                        logger.warning(f"YT PLAYLIST AUDIO: Track {i+1}/{total} failed")
+                    else:
+                        try:
+                            await bot.send_audio(
+                                user_id,
+                                FSInputFile(audio_file),
+                                title=entry.get("title") or audio_file.stem,
+                            )
+                            sent_count += 1
+                            logger.info(f"YT PLAYLIST AUDIO: Sent {sent_count}/{total}")
+                        except TelegramForbiddenError:
+                            logger.error(f"User {user_id} blocked bot")
+                            break
+                        except Exception as e:
+                            logger.error(f"YT PLAYLIST AUDIO: Send failed: {e}")
+                            failed_count += 1
+
+            except Exception as e:
+                logger.error(f"YT PLAYLIST AUDIO: Track {i+1} error: {e}", exc_info=True)
+                failed_count += 1
+
+            # Update progress every 5 items
+            total_done = sent_count + failed_count
+            if progress_msg and (total_done % 5 == 0 or total_done == total):
+                pct = min(100, int(total_done * 100 / total)) if total > 0 else 0
+                try:
+                    await progress_msg.edit_text(
+                        f"𝐏ʟᴀʏʟɪꜱᴛ: {playlist_name}\n\n{_bar(pct)}\n{total_done} / {total}",
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+
+        # Show completion
+        if progress_msg:
+            try:
+                await progress_msg.edit_text(
+                    format_yt_playlist_final(playlist_name, total, sent_count, failed_count),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+
+            # Delete after 5 seconds
+            async def _del():
+                await asyncio.sleep(5)
+                try:
+                    await progress_msg.delete()
+                except Exception:
+                    pass
+            asyncio.create_task(_del())
+
+        # DM completion
+        try:
+            await bot.send_message(user_id, "𝐏ʟᴀʏʟɪꜱᴛ 𝐃𝐞𝐥𝐢𝐯𝐞𝐫𝐞𝐝.", parse_mode="HTML")
+        except Exception:
+            pass
+
+        logger.info(f"YT PLAYLIST AUDIO: Done — {sent_count} sent, {failed_count} failed")
+        _playlist_pending.pop(job_key, None)
+
+
+async def _run_yt_playlist_video(callback: CallbackQuery, job_key: str, job: dict, height: int):
+    """
+    Download YouTube playlist as video and send to DM.
+    """
+    async with _playlist_semaphore:
+        chat_id = job["chat_id"]
+        user_id = job["user_id"]
+        playlist_name = job["playlist_name"]
+        entries = job["entries"]
+        total = len(entries)
+
+        # Send progress message in original chat
+        try:
+            progress_msg = await bot.send_message(
+                chat_id,
+                f"𝐏ʟᴀʏʟɪꜱᴛ: {playlist_name}\n\n{_bar(0)}\n0 / {total}",
+                parse_mode="HTML",
+            )
+        except Exception:
+            progress_msg = None
+
+        sent_count = 0
+        failed_count = 0
+
+        for i, entry in enumerate(entries):
+            if not entry:
+                failed_count += 1
+                continue
+
+            entry_url = entry.get("url") or entry.get("webpage_url")
+            if not entry_url:
+                entry_id = entry.get("id")
+                if entry_id:
+                    entry_url = f"https://www.youtube.com/watch?v={entry_id}"
+                else:
+                    failed_count += 1
+                    continue
+
+            try:
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    tmp = Path(tmp_dir)
+
+                    video_file = await download_youtube_video_quality(entry_url, tmp, height=height)
+
+                    if not video_file or not video_file.exists():
+                        failed_count += 1
+                        logger.warning(f"YT PLAYLIST VIDEO: Item {i+1}/{total} failed")
+                    else:
+                        # Ensure fits Telegram
+                        final_video = await ensure_video_fits_telegram(video_file, tmp) or video_file
+                        info = await get_video_info(final_video)
+
+                        try:
+                            await bot.send_video(
+                                user_id,
+                                FSInputFile(final_video),
+                                title=entry.get("title") or "",
+                                supports_streaming=True,
+                                width=info.get("width") or None,
+                                height=info.get("height") or None,
+                                duration=int(info.get("duration") or 0) or None,
+                            )
+                            sent_count += 1
+                            logger.info(f"YT PLAYLIST VIDEO: Sent {sent_count}/{total}")
+                        except TelegramForbiddenError:
+                            logger.error(f"User {user_id} blocked bot")
+                            break
+                        except Exception as e:
+                            logger.error(f"YT PLAYLIST VIDEO: Send failed: {e}")
+                            failed_count += 1
+
+            except Exception as e:
+                logger.error(f"YT PLAYLIST VIDEO: Item {i+1} error: {e}", exc_info=True)
+                failed_count += 1
+
+            # Update progress every 5 items
+            total_done = sent_count + failed_count
+            if progress_msg and (total_done % 5 == 0 or total_done == total):
+                pct = min(100, int(total_done * 100 / total)) if total > 0 else 0
+                try:
+                    await progress_msg.edit_text(
+                        f"𝐏ʟᴀʏʟɪꜱᴛ: {playlist_name}\n\n{_bar(pct)}\n{total_done} / {total}",
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+
+        # Show completion
+        if progress_msg:
+            try:
+                await progress_msg.edit_text(
+                    format_yt_playlist_final(playlist_name, total, sent_count, failed_count),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+
+            # Delete after 5 seconds
+            async def _del():
+                await asyncio.sleep(5)
+                try:
+                    await progress_msg.delete()
+                except Exception:
+                    pass
+            asyncio.create_task(_del())
+
+        # DM completion
+        try:
+            await bot.send_message(user_id, "𝐏ʟᴀʏʟɪꜱᴛ 𝐃𝐞𝐥𝐢𝐯𝐞𝐫𝐞𝐝.", parse_mode="HTML")
+        except Exception:
+            pass
+
+        logger.info(f"YT PLAYLIST VIDEO: Done — {sent_count} sent, {failed_count} failed")
+        _playlist_pending.pop(job_key, None)
+
+
 # ─── Main entry point ─────────────────────────────────────────────────────────
 
 async def handle_youtube(m: Message, url: str):
@@ -714,6 +1354,8 @@ async def handle_youtube(m: Message, url: str):
         elif is_youtube_short(url):
             async with download_semaphore:
                 await handle_youtube_short(m, url)
+        elif is_youtube_playlist(url):
+            await handle_youtube_playlist(m, url)
         else:
             await handle_youtube_normal(m, url)
     finally:
