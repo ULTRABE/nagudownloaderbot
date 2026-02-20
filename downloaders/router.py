@@ -737,24 +737,17 @@ async def on_bot_added_to_group(m: Message):
         logger.error(f"Group registration error: {e}")
 
 
-# ─── Link handler ─────────────────────────────────────────────────────────────
+# ─── Universal link routing ───────────────────────────────────────────────────
 
-@dp.message(F.text.regexp(LINK_RE))
-async def handle_link(m: Message):
-    """Route incoming links to appropriate downloader"""
-    # Extract first URL from message
-    match = LINK_RE.search(m.text or "")
-    if not match:
-        return
-    url = match.group(0).strip()
-    logger.info(f"LINK: {url[:60]} from {m.from_user.id}")
+async def _route_url(m: Message, url: str) -> None:
+    """Route a URL to the appropriate downloader."""
+    url_lower = url.lower()
 
     # Register group
     if m.chat.type in ("group", "supergroup"):
         await register_group(m.chat.id)
 
     # Delete user's link message after 5 seconds (except Spotify playlists)
-    url_lower = url.lower()
     is_spotify_playlist_link = (
         "spotify.com" in url_lower and
         ("/playlist/" in url_lower or "/album/" in url_lower)
@@ -773,13 +766,12 @@ async def handle_link(m: Message):
             await handle_instagram(m, url)
         elif (
             "youtube.com" in url_lower or
-            "youtu.be" in url_lower or
-            "music.youtube.com" in url_lower
+            "youtu.be" in url_lower
         ):
             await handle_youtube(m, url)
         elif "pinterest.com" in url_lower or "pin.it" in url_lower:
             await handle_pinterest(m, url)
-        elif "spotify.com" in url_lower:
+        elif "spotify.com" in url_lower or url_lower.startswith("spotify:"):
             await handle_spotify_playlist(m, url)
         else:
             _err = await get_emoji_async("ERROR")
@@ -801,6 +793,40 @@ async def handle_link(m: Message):
             )
         except Exception:
             pass
+
+
+@dp.message(F.text.regexp(LINK_RE))
+async def handle_link(m: Message):
+    """Route incoming text links to appropriate downloader"""
+    match = LINK_RE.search(m.text or "")
+    if not match:
+        return
+    url = match.group(0).strip()
+    logger.info(f"LINK: {url[:60]} from {m.from_user.id}")
+    await _route_url(m, url)
+
+
+@dp.message(F.caption.regexp(LINK_RE))
+async def handle_caption_link(m: Message):
+    """Route links found in message captions (forwarded messages, etc.)"""
+    match = LINK_RE.search(m.caption or "")
+    if not match:
+        return
+    url = match.group(0).strip()
+    logger.info(f"LINK (caption): {url[:60]} from {m.from_user.id}")
+    await _route_url(m, url)
+
+
+@dp.message()
+async def fallback_handler(m: Message):
+    """
+    Catch-all fallback — silently ignores non-link messages.
+    Prevents 'Update not handled' flood in logs.
+    """
+    # Only log if it looks like a link attempt (has http but didn't match)
+    text = m.text or m.caption or ""
+    if text and ("http" in text.lower() or "spotify:" in text.lower()):
+        logger.debug(f"Fallback: unmatched message from {m.from_user.id}: {text[:60]}")
 
 
 def register_download_handlers():
