@@ -177,16 +177,23 @@ async def cmd_ping(m: Message):
     """Health check — anyone can use"""
     t0 = time.monotonic()
     try:
-        sent = await m.reply("🏓 Pong!", parse_mode="HTML")
+        sent = await m.reply("🏓 Pong...", parse_mode="HTML")
         elapsed_ms = int((time.monotonic() - t0) * 1000)
         try:
-            await sent.edit_text(f"🏓 Pong! <code>{elapsed_ms}ms</code>", parse_mode="HTML")
+            await sent.edit_text(
+                f"🏓 Pong — <b>{elapsed_ms} ms</b>",
+                parse_mode="HTML",
+            )
         except Exception:
             pass
     except Exception:
         elapsed_ms = int((time.monotonic() - t0) * 1000)
         try:
-            await bot.send_message(m.chat.id, f"🏓 Pong! <code>{elapsed_ms}ms</code>", parse_mode="HTML")
+            await bot.send_message(
+                m.chat.id,
+                f"🏓 Pong — <b>{elapsed_ms} ms</b>",
+                parse_mode="HTML",
+            )
         except Exception:
             pass
 
@@ -299,13 +306,12 @@ async def cmd_stats(m: Message):
 
     users  = await get_all_users()
     groups = await get_all_groups()
-    lines = [
-        "  BOT  STATS",
-        "---",
-        f"  Users   ·  {len(users)}",
-        f"  Groups  ·  {len(groups)}",
-    ]
-    await _safe_reply(m, code_panel(lines, width=32), parse_mode="HTML")
+    text = (
+        "📊 <b>Bot Stats</b>\n\n"
+        f"Users: {len(users)}\n"
+        f"Groups: {len(groups)}"
+    )
+    await _safe_reply(m, text, parse_mode="HTML")
 
 
 @dp.message(Command("broadcast"))
@@ -318,7 +324,7 @@ async def cmd_broadcast(m: Message):
     if len(parts) < 2 or not parts[1].strip():
         await _safe_reply(
             m,
-            mono("  Usage: /broadcast Your message here"),
+            "Usage: /broadcast Your message here",
             parse_mode="HTML",
         )
         return
@@ -339,7 +345,7 @@ async def cmd_broadcast_media(m: Message):
         return
 
     if not m.reply_to_message:
-        await _safe_reply(m, mono("  Reply to a media message to broadcast it."), parse_mode="HTML")
+        await _safe_reply(m, "Reply to a media message to broadcast it.", parse_mode="HTML")
         return
 
     reply = m.reply_to_message
@@ -349,7 +355,7 @@ async def cmd_broadcast_media(m: Message):
     ])
 
     if not has_media and not reply.text:
-        await _safe_reply(m, mono("  Reply to a message with media or text."), parse_mode="HTML")
+        await _safe_reply(m, "Reply to a message with media or text.", parse_mode="HTML")
         return
 
     await _safe_reply(m, format_broadcast_started(), parse_mode="HTML")
