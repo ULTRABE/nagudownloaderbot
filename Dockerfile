@@ -38,6 +38,11 @@ COPY ui/ ./ui/
 COPY utils/ ./utils/
 COPY workers/ ./workers/
 
+# Copy cookie folders (required for yt-dlp authentication)
+# Folder names contain spaces — quote them explicitly
+COPY ["yt cookies/", "./yt cookies/"]
+COPY ["yt music cookies/", "./yt music cookies/"]
+
 # Create temp directory
 RUN mkdir -p /tmp/downloads
 

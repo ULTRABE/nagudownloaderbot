@@ -13,13 +13,14 @@ Features:
 - Health endpoint
 """
 import asyncio
-import glob
 import os
 import shutil
 import signal
 import tempfile
 import traceback
 from pathlib import Path
+
+from aiogram.exceptions import TelegramConflictError
 
 from aiohttp import web
 
@@ -107,7 +108,13 @@ async def main():
     logger.info("=" * 60)
     logger.info("NAGU DOWNLOADER BOT - STARTING")
     logger.info("=" * 60)
-    
+
+    # Log runtime environment for diagnostics
+    import sys
+    logger.info(f"✓ Python: {sys.version.split()[0]}")
+    logger.info(f"✓ Working directory: {os.getcwd()}")
+    logger.info(f"✓ Script directory: {Path(__file__).resolve().parent}")
+
     # Validate configuration
     try:
         config.validate()
@@ -147,18 +154,22 @@ async def main():
     logger.info(f"✓ Premium emojis: {'enabled' if config.BOT_HAS_PREMIUM else 'disabled'}")
     logger.info(f"✓ Download timeout: {config.DOWNLOAD_TIMEOUT}s")
     
-    # Check cookie folders
-    if os.path.exists(config.YT_COOKIES_FOLDER):
-        yt_cookies = len(glob.glob(f"{config.YT_COOKIES_FOLDER}/*.txt"))
-        logger.info(f"✓ YT cookies: {yt_cookies} files")
+    # Check cookie folders (paths are absolute, resolved from project root)
+    yt_cookie_path = Path(config.YT_COOKIES_FOLDER)
+    logger.info(f"✓ YT cookies path: {yt_cookie_path}")
+    if yt_cookie_path.exists():
+        yt_cookies = len(list(yt_cookie_path.glob("*.txt")))
+        logger.info(f"✓ YT cookies: {yt_cookies} files found")
     else:
-        logger.warning(f"⚠ YT cookies folder not found: {config.YT_COOKIES_FOLDER}")
-    
-    if os.path.exists(config.YT_MUSIC_COOKIES_FOLDER):
-        music_cookies = len(glob.glob(f"{config.YT_MUSIC_COOKIES_FOLDER}/*.txt"))
-        logger.info(f"✓ YT Music cookies: {music_cookies} files")
+        logger.warning(f"⚠ YT cookies folder not found: {yt_cookie_path}")
+
+    yt_music_cookie_path = Path(config.YT_MUSIC_COOKIES_FOLDER)
+    logger.info(f"✓ YT Music cookies path: {yt_music_cookie_path}")
+    if yt_music_cookie_path.exists():
+        music_cookies = len(list(yt_music_cookie_path.glob("*.txt")))
+        logger.info(f"✓ YT Music cookies: {music_cookies} files found")
     else:
-        logger.warning(f"⚠ YT Music cookies folder not found: {config.YT_MUSIC_COOKIES_FOLDER}")
+        logger.warning(f"⚠ YT Music cookies folder not found: {yt_music_cookie_path}")
     
     # Register handlers
     register_download_handlers()
@@ -183,12 +194,32 @@ async def main():
     logger.info("=" * 60)
 
     async def _polling_with_restart():
-        """Polling wrapper — restarts on unexpected errors, never crashes"""
+        """
+        Polling wrapper — restarts on unexpected errors, never crashes.
+
+        TelegramConflictError means another bot instance is already polling.
+        In that case we back off with increasing delays (5s → 10s → 20s → 30s)
+        and retry — the other instance may be a stale Railway deployment that
+        will terminate on its own once the new one is healthy.
+        """
+        conflict_backoff = 5  # seconds; doubles each retry, capped at 30s
         while not _shutdown_event.is_set():
             try:
+                conflict_backoff = 5  # reset on successful start
                 await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
             except asyncio.CancelledError:
                 break
+            except TelegramConflictError as e:
+                # Another instance is polling — wait and retry with backoff.
+                # Do NOT crash; the conflicting instance will stop when the
+                # previous Railway deployment is terminated.
+                logger.warning(
+                    f"TelegramConflictError: another bot instance is polling. "
+                    f"Retrying in {conflict_backoff}s... ({e})"
+                )
+                if not _shutdown_event.is_set():
+                    await asyncio.sleep(conflict_backoff)
+                    conflict_backoff = min(conflict_backoff * 2, 30)
             except Exception as e:
                 tb = traceback.format_exc()
                 logger.error(f"Polling crashed: {e}\n{tb}")
