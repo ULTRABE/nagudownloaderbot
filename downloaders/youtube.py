@@ -1015,9 +1015,13 @@ async def _get_playlist_info(url: str) -> dict:
     Uses YT Music cookies folder when URL is from music.youtube.com,
     otherwise uses standard YT cookies folder.
     Resolves cookie path from config (absolute path — works on Railway).
+
+    For music.youtube.com playlists, uses android_music extractor client
+    which has better compatibility with YT Music playlist extraction.
     """
     try:
         is_yt_music_url = "music.youtube.com" in url.lower()
+        logger.info(f"YT PLAYLIST INFO: Fetching {'YT Music' if is_yt_music_url else 'YouTube'} playlist: {url[:80]}")
 
         opts = {
             "quiet": True,
@@ -1035,9 +1039,13 @@ async def _get_playlist_info(url: str) -> dict:
             cookie_file = get_random_cookie(config.YT_MUSIC_COOKIES_FOLDER)
             if cookie_file:
                 opts["cookiefile"] = cookie_file
-                logger.debug(f"YT PLAYLIST INFO: Using YT Music cookie: {cookie_file}")
+                logger.info(f"YT PLAYLIST INFO: Using YT Music cookie: {cookie_file}")
             else:
-                logger.debug("YT PLAYLIST INFO: No YT Music cookies found, proceeding without")
+                logger.info("YT PLAYLIST INFO: No YT Music cookies found, proceeding without")
+            # Use android_music client for better YT Music compatibility
+            opts["extractor_args"] = {
+                "youtube": {"player_client": ["android_music", "web"]}
+            }
         else:
             cookie_file = get_random_cookie(config.YT_COOKIES_FOLDER)
             if cookie_file:
@@ -1056,7 +1064,12 @@ async def _get_playlist_info(url: str) -> dict:
         # Filter out None entries (unavailable videos)
         entries = [e for e in entries if e]
         title = info.get("title") or info.get("playlist_title") or "Playlist"
-        logger.info(f"YT PLAYLIST INFO: '{title}' — {len(entries)} entries")
+        logger.info(f"YT PLAYLIST INFO: '{title}' — {len(entries)} entries found")
+
+        if not entries:
+            logger.warning(f"YT PLAYLIST INFO: No entries found for {url[:80]}")
+            return {}
+
         return {"title": title, "entries": entries, "count": len(entries)}
     except Exception as e:
         logger.error(f"YT PLAYLIST INFO ERROR: {e}", exc_info=True)
@@ -1073,10 +1086,14 @@ async def handle_youtube_playlist(m: Message, url: str):
     """
     user_id = m.from_user.id
     job_key = f"ytpl:{user_id}:{int(time.time())}"
+    is_yt_music = "music.youtube.com" in url.lower()
+    logger.info(f"YT PLAYLIST: Request from {user_id} — {'YT Music' if is_yt_music else 'YouTube'} — {url[:60]}")
 
     # Check if user has started bot (needed for DM)
+    # Note: has_started_bot returns True on Redis failure (safe default)
     has_started = await user_state_manager.has_started_bot(user_id)
     if not has_started:
+        logger.info(f"YT PLAYLIST: User {user_id} has not started bot — showing start prompt")
         bot_me = await bot.get_me()
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(
@@ -1103,6 +1120,10 @@ async def handle_youtube_playlist(m: Message, url: str):
     playlist_info = await _get_playlist_info(url)
 
     if not playlist_info or not playlist_info.get("entries"):
+        logger.error(
+            f"YT PLAYLIST: Failed to get playlist info for {url[:60]} "
+            f"(is_yt_music={is_yt_music}). yt-dlp returned no entries."
+        )
         if status_msg:
             try:
                 await status_msg.delete()

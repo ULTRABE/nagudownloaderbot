@@ -69,7 +69,7 @@ _NORMAL = {
     "error":     "❌",
     "loading":   "⏳",
     "spotify":   "🎵",
-    "youtube":   "▶️",
+    "youtube":   "🎬",
     "instagram": "📸",
     "pinterest": "📌",
     "star":      "⭐",
