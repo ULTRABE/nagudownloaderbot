@@ -151,7 +151,20 @@ async def main():
     else:
         logger.warning("⚠ ADMIN_IDS not configured — /broadcast and admin commands will not work")
         logger.warning("  Set ADMIN_IDS env var to comma-separated Telegram user IDs")
-    logger.info(f"✓ Premium emojis: {'enabled' if config.BOT_HAS_PREMIUM else 'disabled'}")
+    # Check premium emoji state from Redis (actual source of truth)
+    # get_emoji_async() reads Redis keys like "emoji:SUCCESS", "emoji:YT", etc.
+    # If any are set, premium custom emojis are active.
+    try:
+        _sample_emoji = await redis_client.get("emoji:SUCCESS")
+        if _sample_emoji:
+            logger.info(f"✓ Premium emojis: enabled (Redis-backed, e.g. SUCCESS={_sample_emoji.strip()})")
+        else:
+            # No Redis emoji keys set — using static PREMIUM dict from ui/emoji_config.py
+            from ui.emoji_config import USE_PREMIUM
+            logger.info(f"✓ Premium emojis: {'enabled (static config)' if USE_PREMIUM else 'disabled'}")
+    except Exception:
+        from ui.emoji_config import USE_PREMIUM
+        logger.info(f"✓ Premium emojis: {'enabled (static config)' if USE_PREMIUM else 'disabled'}")
     logger.info(f"✓ Download timeout: {config.DOWNLOAD_TIMEOUT}s")
     
     # Check cookie folders (paths are absolute, resolved from project root)
