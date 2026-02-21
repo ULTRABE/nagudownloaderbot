@@ -39,7 +39,7 @@ from workers.task_queue import spotify_semaphore
 from ui.formatting import (
     format_playlist_progress, format_playlist_final,
     format_playlist_dm_complete, format_delivered_with_mention,
-    safe_caption,
+    safe_caption, build_safe_media_caption,
 )
 from ui.emoji_config import get_emoji_async
 from utils.helpers import extract_song_metadata
@@ -371,7 +371,9 @@ async def handle_spotify_single(m: Message, url: str):
 
     user_id = m.from_user.id
     first_name = m.from_user.first_name or "User"
-    delivered_caption = await format_delivered_with_mention(user_id, first_name)
+    # Build sanitized caption via centralized builder — prevents ENTITY_TEXT_INVALID
+    delivered_emoji = await get_emoji_async("DELIVERED")
+    delivered_caption = build_safe_media_caption(user_id, first_name, delivered_emoji)
     # Always send in same chat (group or private)
     target_chat = m.chat.id
     _t_start = time.monotonic()
@@ -416,23 +418,26 @@ async def handle_spotify_single(m: Message, url: str):
                 await _safe_delete(progress)
                 progress = None
 
-                # Send in same chat (group or private)
-                # Use safe_caption to prevent ENTITY_TEXT_INVALID
-                safe_cap = safe_caption(delivered_caption)
+                # Send in same chat (group or private).
+                # Caption already sanitized via build_safe_media_caption().
+                # Retry once without caption on ENTITY_TEXT_INVALID — never silently drop.
                 try:
                     await bot.send_audio(
                         target_chat,
                         FSInputFile(mp3_file),
                         title=title,
                         performer=artist,
-                        caption=safe_cap,
+                        caption=delivered_caption,
                         parse_mode="HTML",
                     )
                 except Exception as _send_err:
                     _err_str = str(_send_err).lower()
                     if "entity_text_invalid" in _err_str or "bad request" in _err_str:
-                        # Caption broken — retry without caption
-                        logger.warning(f"SPOTIFY SINGLE: ENTITY_TEXT_INVALID, retrying without caption. Error: {_send_err}")
+                        # Caption still broken after sanitization — retry once without caption
+                        logger.warning(
+                            f"SPOTIFY SINGLE: ENTITY_TEXT_INVALID after sanitization, "
+                            f"retrying without caption. Error: {_send_err}"
+                        )
                         await bot.send_audio(
                             target_chat,
                             FSInputFile(mp3_file),
@@ -678,13 +683,21 @@ async def _run_playlist_download(m: Message, url: str):
                             logger.warning(f"SPOTIFY PLAYLIST: Track {i+1}/{total} failed: {track_url}")
                         else:
                             artist, title = extract_song_metadata(mp3_file.stem)
+                            # Build sanitized per-track caption — prevents ENTITY_TEXT_INVALID
+                            track_caption = build_safe_media_caption(
+                                user_id,
+                                m.from_user.first_name or "User",
+                                await get_emoji_async("DELIVERED"),
+                            )
                             try:
-                                # Send to user's DM
+                                # Send to user's DM with sanitized caption
                                 await bot.send_audio(
                                     user_id,
                                     FSInputFile(mp3_file),
                                     title=title,
                                     performer=artist,
+                                    caption=track_caption,
+                                    parse_mode="HTML",
                                 )
                                 sent_count += 1
                                 logger.info(f"SPOTIFY PLAYLIST: Sent {sent_count}/{total}: '{title}'")
@@ -692,9 +705,33 @@ async def _run_playlist_download(m: Message, url: str):
                                 logger.error(f"User {user_id} blocked bot")
                                 blocked = True
                                 break
-                            except Exception as e:
-                                logger.error(f"SPOTIFY PLAYLIST: Send failed for '{title}': {e}")
-                                failed_count += 1
+                            except Exception as _send_err:
+                                _err_str = str(_send_err).lower()
+                                if "entity_text_invalid" in _err_str or "bad request" in _err_str:
+                                    # Caption broken — retry once without caption
+                                    logger.warning(
+                                        f"SPOTIFY PLAYLIST: ENTITY_TEXT_INVALID for '{title}', "
+                                        f"retrying without caption"
+                                    )
+                                    try:
+                                        await bot.send_audio(
+                                            user_id,
+                                            FSInputFile(mp3_file),
+                                            title=title,
+                                            performer=artist,
+                                        )
+                                        sent_count += 1
+                                        logger.info(f"SPOTIFY PLAYLIST: Sent (no caption) {sent_count}/{total}: '{title}'")
+                                    except TelegramForbiddenError:
+                                        logger.error(f"User {user_id} blocked bot")
+                                        blocked = True
+                                        break
+                                    except Exception as e2:
+                                        logger.error(f"SPOTIFY PLAYLIST: Send retry failed for '{title}': {e2}")
+                                        failed_count += 1
+                                else:
+                                    logger.error(f"SPOTIFY PLAYLIST: Send failed for '{title}': {_send_err}")
+                                    failed_count += 1
 
                 except Exception as e:
                     logger.error(f"SPOTIFY PLAYLIST: Track {i+1} error: {e}", exc_info=True)
