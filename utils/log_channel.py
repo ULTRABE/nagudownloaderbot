@@ -38,6 +38,7 @@ Log format:
 """
 from __future__ import annotations
 
+import html
 from typing import Optional, Any
 
 from core.config import LOG_CHANNEL_ID, LOG_CHANNEL_LINK
@@ -45,12 +46,13 @@ from utils.logger import logger
 
 
 def _build_user_mention(user: Any) -> str:
-    """Build a clickable HTML user mention."""
+    """Build a clickable HTML user mention — properly HTML-escaped."""
     user_id = getattr(user, "id", 0)
     first_name = (getattr(user, "first_name", None) or "User")[:32]
     last_name = (getattr(user, "last_name", None) or "").strip()
     full_name = f"{first_name} {last_name}".strip()[:48]
-    safe_name = full_name.replace("<", "").replace(">", "").replace("&", "&amp;")
+    # html.escape handles &, <, >, " — all characters that break HTML parsing
+    safe_name = html.escape(full_name, quote=True)
     return f'<a href="tg://user?id={user_id}">{safe_name}</a>'
 
 
@@ -71,7 +73,7 @@ def _build_chat_display(chat: Any) -> str:
         return "Private"
 
     title = (getattr(chat, "title", None) or "Group")[:64]
-    safe_title = title.replace("<", "").replace(">", "").replace("&", "&amp;")
+    safe_title = html.escape(title, quote=True)
     username = getattr(chat, "username", None)
 
     if username:

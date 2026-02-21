@@ -66,6 +66,7 @@ from ui.formatting import (
     format_yt_audio_quality,
     format_yt_video_quality,
     format_yt_playlist_final,
+    safe_caption,
 )
 from ui.stickers import send_sticker, delete_sticker
 from ui.emoji_config import get_emoji_async
@@ -339,8 +340,16 @@ async def ensure_video_fits_telegram(video_path: Path, tmp_dir: Path) -> Optiona
 
 async def _safe_send_video(chat_id: int, reply_to_msg_id: Optional[int], **kwargs) -> Optional[Message]:
     """
-    Try to send video with reply. If message not found, send without reply.
+    Try to send video with reply.
+    Fallback chain:
+      1. With reply_to_message_id
+      2. Without reply (if reply target not found)
+      3. Without caption (if ENTITY_TEXT_INVALID — bad HTML in caption)
     """
+    # Sanitize caption before sending
+    if "caption" in kwargs and kwargs["caption"]:
+        kwargs["caption"] = safe_caption(kwargs["caption"])
+
     try:
         return await bot.send_video(
             chat_id,
@@ -349,19 +358,59 @@ async def _safe_send_video(chat_id: int, reply_to_msg_id: Optional[int], **kwarg
         )
     except Exception as e:
         err_str = str(e).lower()
+
+        # Reply target gone — retry without reply
         if "message to be replied not found" in err_str or "replied message not found" in err_str:
             try:
                 return await bot.send_video(chat_id, **kwargs)
             except Exception as e2:
+                err_str2 = str(e2).lower()
+                # Caption still broken — strip it and retry
+                if "entity_text_invalid" in err_str2 or "bad request" in err_str2:
+                    logger.warning(f"YT send_video: caption invalid, retrying without caption")
+                    kwargs.pop("caption", None)
+                    kwargs.pop("parse_mode", None)
+                    try:
+                        return await bot.send_video(chat_id, **kwargs)
+                    except Exception as e3:
+                        logger.error(f"YT send_video no-caption fallback failed: {e3}")
+                        return None
                 logger.error(f"YT send_video fallback failed: {e2}")
                 return None
+
+        # Caption entity error — strip caption and retry (with and without reply)
+        if "entity_text_invalid" in err_str or "bad request" in err_str:
+            logger.warning(f"YT send_video: ENTITY_TEXT_INVALID, retrying without caption. Error: {e}")
+            kwargs.pop("caption", None)
+            kwargs.pop("parse_mode", None)
+            try:
+                return await bot.send_video(
+                    chat_id,
+                    reply_to_message_id=reply_to_msg_id,
+                    **kwargs,
+                )
+            except Exception as e2:
+                try:
+                    return await bot.send_video(chat_id, **kwargs)
+                except Exception as e3:
+                    logger.error(f"YT send_video no-caption fallback failed: {e3}")
+                    return None
+
         logger.error(f"YT send_video failed: {e}")
         return None
 
 async def _safe_send_audio(chat_id: int, reply_to_msg_id: Optional[int], **kwargs) -> Optional[Message]:
     """
-    Try to send audio with reply. If message not found, send without reply.
+    Try to send audio with reply.
+    Fallback chain:
+      1. With reply_to_message_id
+      2. Without reply (if reply target not found)
+      3. Without caption (if ENTITY_TEXT_INVALID — bad HTML in caption)
     """
+    # Sanitize caption before sending
+    if "caption" in kwargs and kwargs["caption"]:
+        kwargs["caption"] = safe_caption(kwargs["caption"])
+
     try:
         return await bot.send_audio(
             chat_id,
@@ -370,12 +419,43 @@ async def _safe_send_audio(chat_id: int, reply_to_msg_id: Optional[int], **kwarg
         )
     except Exception as e:
         err_str = str(e).lower()
+
+        # Reply target gone — retry without reply
         if "message to be replied not found" in err_str or "replied message not found" in err_str:
             try:
                 return await bot.send_audio(chat_id, **kwargs)
             except Exception as e2:
+                err_str2 = str(e2).lower()
+                if "entity_text_invalid" in err_str2 or "bad request" in err_str2:
+                    logger.warning(f"YT send_audio: caption invalid, retrying without caption")
+                    kwargs.pop("caption", None)
+                    kwargs.pop("parse_mode", None)
+                    try:
+                        return await bot.send_audio(chat_id, **kwargs)
+                    except Exception as e3:
+                        logger.error(f"YT send_audio no-caption fallback failed: {e3}")
+                        return None
                 logger.error(f"YT send_audio fallback failed: {e2}")
                 return None
+
+        # Caption entity error — strip caption and retry
+        if "entity_text_invalid" in err_str or "bad request" in err_str:
+            logger.warning(f"YT send_audio: ENTITY_TEXT_INVALID, retrying without caption. Error: {e}")
+            kwargs.pop("caption", None)
+            kwargs.pop("parse_mode", None)
+            try:
+                return await bot.send_audio(
+                    chat_id,
+                    reply_to_message_id=reply_to_msg_id,
+                    **kwargs,
+                )
+            except Exception as e2:
+                try:
+                    return await bot.send_audio(chat_id, **kwargs)
+                except Exception as e3:
+                    logger.error(f"YT send_audio no-caption fallback failed: {e3}")
+                    return None
+
         logger.error(f"YT send_audio failed: {e}")
         return None
 
@@ -1176,10 +1256,11 @@ async def _run_yt_playlist_audio(callback: CallbackQuery, job_key: str, job: dic
     """
     Download YouTube playlist as audio and send to DM.
     """
+    import html as _html
     async with _playlist_semaphore:
         chat_id = job["chat_id"]
         user_id = job["user_id"]
-        playlist_name = job["playlist_name"]
+        playlist_name = _html.escape(str(job["playlist_name"] or "Playlist")[:40])
         entries = job["entries"]
         total = len(entries)
 
@@ -1322,10 +1403,11 @@ async def _run_yt_playlist_video(callback: CallbackQuery, job_key: str, job: dic
     """
     Download YouTube playlist as video and send to DM.
     """
+    import html as _html
     async with _playlist_semaphore:
         chat_id = job["chat_id"]
         user_id = job["user_id"]
-        playlist_name = job["playlist_name"]
+        playlist_name = _html.escape(str(job["playlist_name"] or "Playlist")[:40])
         entries = job["entries"]
         total = len(entries)
 

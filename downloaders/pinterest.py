@@ -38,7 +38,7 @@ from utils.media_processor import (
     ensure_fits_telegram, instagram_smart_encode,
     get_video_info,
 )
-from ui.formatting import format_delivered_with_mention
+from ui.formatting import format_delivered_with_mention, safe_caption
 from ui.stickers import send_sticker, delete_sticker
 from ui.emoji_config import get_emoji_async
 from utils.log_channel import log_download
@@ -168,8 +168,16 @@ async def _download_pinterest(url: str, tmp: Path) -> List[Path]:
 
 async def _safe_reply_video(m: Message, **kwargs) -> Optional[Message]:
     """
-    Try to reply to original message. If message not found, send normally.
+    Try to reply to original message.
+    Fallback chain:
+      1. With reply_to_message_id
+      2. Without reply (if reply target not found)
+      3. Without caption (if ENTITY_TEXT_INVALID — bad HTML in caption)
     """
+    # Sanitize caption before sending
+    if "caption" in kwargs and kwargs["caption"]:
+        kwargs["caption"] = safe_caption(kwargs["caption"])
+
     try:
         return await bot.send_video(
             m.chat.id,
@@ -178,12 +186,43 @@ async def _safe_reply_video(m: Message, **kwargs) -> Optional[Message]:
         )
     except Exception as e:
         err_str = str(e).lower()
-        if "message to be replied not found" in err_str or "bad request" in err_str:
+
+        # Reply target gone — retry without reply
+        if "message to be replied not found" in err_str or "replied message not found" in err_str:
             try:
                 return await bot.send_video(m.chat.id, **kwargs)
             except Exception as e2:
+                err_str2 = str(e2).lower()
+                if "entity_text_invalid" in err_str2 or "bad request" in err_str2:
+                    logger.warning(f"PIN send_video: caption invalid, retrying without caption")
+                    kwargs.pop("caption", None)
+                    kwargs.pop("parse_mode", None)
+                    try:
+                        return await bot.send_video(m.chat.id, **kwargs)
+                    except Exception as e3:
+                        logger.error(f"PIN send_video no-caption fallback failed: {e3}")
+                        return None
                 logger.error(f"PIN send_video fallback failed: {e2}")
                 return None
+
+        # Caption entity error — strip caption and retry
+        if "entity_text_invalid" in err_str or "bad request" in err_str:
+            logger.warning(f"PIN send_video: ENTITY_TEXT_INVALID, retrying without caption. Error: {e}")
+            kwargs.pop("caption", None)
+            kwargs.pop("parse_mode", None)
+            try:
+                return await bot.send_video(
+                    m.chat.id,
+                    reply_to_message_id=m.message_id,
+                    **kwargs,
+                )
+            except Exception as e2:
+                try:
+                    return await bot.send_video(m.chat.id, **kwargs)
+                except Exception as e3:
+                    logger.error(f"PIN send_video no-caption fallback failed: {e3}")
+                    return None
+
         logger.error(f"PIN send_video failed: {e}")
         return None
 
