@@ -67,6 +67,7 @@ from ui.formatting import (
     format_yt_video_quality,
     format_yt_playlist_final,
     safe_caption,
+    build_safe_media_caption,
 )
 from ui.stickers import send_sticker, delete_sticker
 from ui.emoji_config import get_emoji_async
@@ -488,7 +489,9 @@ async def handle_youtube_music(m: Message, url: str):
     """
     user_id = m.from_user.id
     first_name = m.from_user.first_name or "User"
-    delivered_caption = await format_delivered_with_mention(user_id, first_name)
+    # Build sanitized caption via centralized builder — prevents ENTITY_TEXT_INVALID
+    delivered_emoji = await get_emoji_async("DELIVERED")
+    delivered_caption = build_safe_media_caption(user_id, first_name, delivered_emoji)
     _t_start = time.monotonic()
 
     # Cache check
@@ -573,7 +576,9 @@ async def handle_youtube_short(m: Message, url: str):
     """
     user_id = m.from_user.id
     first_name = m.from_user.first_name or "User"
-    delivered_caption = await format_delivered_with_mention(user_id, first_name)
+    # Build sanitized caption via centralized builder — prevents ENTITY_TEXT_INVALID
+    delivered_emoji = await get_emoji_async("DELIVERED")
+    delivered_caption = build_safe_media_caption(user_id, first_name, delivered_emoji)
     _t_start = time.monotonic()
 
     # Cache check
@@ -796,7 +801,9 @@ async def cb_yt_video(callback: CallbackQuery):
     first_name = job.get("first_name", "User")
     original_msg_id = job.get("original_msg_id")
     sticker_msg_id = job.get("sticker_msg_id")
-    delivered_caption = await format_delivered_with_mention(user_id, first_name)
+    # Build sanitized caption via centralized builder — prevents ENTITY_TEXT_INVALID
+    delivered_emoji = await get_emoji_async("DELIVERED")
+    delivered_caption = build_safe_media_caption(user_id, first_name, delivered_emoji)
 
     # Delete status message and sticker immediately
     try:
@@ -908,7 +915,9 @@ async def cb_yt_audio(callback: CallbackQuery):
     first_name = job.get("first_name", "User")
     original_msg_id = job.get("original_msg_id")
     sticker_msg_id = job.get("sticker_msg_id")
-    delivered_caption = await format_delivered_with_mention(user_id, first_name)
+    # Build sanitized caption via centralized builder — prevents ENTITY_TEXT_INVALID
+    delivered_emoji = await get_emoji_async("DELIVERED")
+    delivered_caption = build_safe_media_caption(user_id, first_name, delivered_emoji)
 
     # Delete status message and sticker immediately
     try:
@@ -1000,8 +1009,16 @@ _playlist_semaphore = asyncio.Semaphore(1)
 _playlist_pending: dict = {}
 
 async def _get_playlist_info(url: str) -> dict:
-    """Fetch playlist metadata (name, entries) using yt-dlp"""
+    """
+    Fetch playlist metadata (name, entries) using yt-dlp.
+
+    Uses YT Music cookies folder when URL is from music.youtube.com,
+    otherwise uses standard YT cookies folder.
+    Resolves cookie path from config (absolute path — works on Railway).
+    """
     try:
+        is_yt_music_url = "music.youtube.com" in url.lower()
+
         opts = {
             "quiet": True,
             "no_warnings": True,
@@ -1010,10 +1027,21 @@ async def _get_playlist_info(url: str) -> dict:
             "proxy": config.pick_proxy(),
             "http_headers": {"User-Agent": config.pick_user_agent()},
             "socket_timeout": 30,
+            "ignoreerrors": True,  # skip unavailable entries, don't abort
         }
-        cookie_file = get_random_cookie(config.YT_COOKIES_FOLDER)
-        if cookie_file:
-            opts["cookiefile"] = cookie_file
+
+        # Use correct cookie folder based on URL type
+        if is_yt_music_url:
+            cookie_file = get_random_cookie(config.YT_MUSIC_COOKIES_FOLDER)
+            if cookie_file:
+                opts["cookiefile"] = cookie_file
+                logger.debug(f"YT PLAYLIST INFO: Using YT Music cookie: {cookie_file}")
+            else:
+                logger.debug("YT PLAYLIST INFO: No YT Music cookies found, proceeding without")
+        else:
+            cookie_file = get_random_cookie(config.YT_COOKIES_FOLDER)
+            if cookie_file:
+                opts["cookiefile"] = cookie_file
 
         def _extract():
             with YoutubeDL(opts) as ydl:
@@ -1021,10 +1049,14 @@ async def _get_playlist_info(url: str) -> dict:
 
         info = await asyncio.to_thread(_extract)
         if not info:
+            logger.warning(f"YT PLAYLIST INFO: yt-dlp returned None for {url[:80]}")
             return {}
 
         entries = info.get("entries") or []
+        # Filter out None entries (unavailable videos)
+        entries = [e for e in entries if e]
         title = info.get("title") or info.get("playlist_title") or "Playlist"
+        logger.info(f"YT PLAYLIST INFO: '{title}' — {len(entries)} entries")
         return {"title": title, "entries": entries, "count": len(entries)}
     except Exception as e:
         logger.error(f"YT PLAYLIST INFO ERROR: {e}", exc_info=True)
@@ -1254,15 +1286,26 @@ def _bar(pct: int) -> str:
 
 async def _run_yt_playlist_audio(callback: CallbackQuery, job_key: str, job: dict, quality: str):
     """
-    Download YouTube playlist as audio and send to DM.
+    Download YouTube / YT Music playlist as audio and send to DM.
+
+    Uses YT Music cookies when URL is from music.youtube.com.
+    Sanitized caption per track via build_safe_media_caption().
+    Single-track failure does NOT abort the playlist.
     """
     import html as _html
     async with _playlist_semaphore:
         chat_id = job["chat_id"]
         user_id = job["user_id"]
+        first_name = job.get("first_name", "User")
+        playlist_url = job.get("url", "")
+        is_yt_music_playlist = "music.youtube.com" in playlist_url.lower()
         playlist_name = _html.escape(str(job["playlist_name"] or "Playlist")[:40])
         entries = job["entries"]
         total = len(entries)
+
+        # Build sanitized caption once (same requester for all tracks)
+        delivered_emoji = await get_emoji_async("DELIVERED")
+        track_caption = build_safe_media_caption(user_id, first_name, delivered_emoji)
 
         # Send progress message in original chat
         _music = await get_emoji_async("MUSIC")
@@ -1290,8 +1333,12 @@ async def _run_yt_playlist_audio(callback: CallbackQuery, job_key: str, job: dic
 
         sent_count = 0
         failed_count = 0
+        blocked = False
 
         for i, entry in enumerate(entries):
+            if blocked:
+                break
+
             if not entry:
                 failed_count += 1
                 continue
@@ -1301,7 +1348,11 @@ async def _run_yt_playlist_audio(callback: CallbackQuery, job_key: str, job: dic
                 # Try to construct URL from id
                 entry_id = entry.get("id")
                 if entry_id:
-                    entry_url = f"https://www.youtube.com/watch?v={entry_id}"
+                    # Use music.youtube.com URL for YT Music playlists
+                    if is_yt_music_playlist:
+                        entry_url = f"https://music.youtube.com/watch?v={entry_id}"
+                    else:
+                        entry_url = f"https://www.youtube.com/watch?v={entry_id}"
                 else:
                     failed_count += 1
                     continue
@@ -1310,31 +1361,60 @@ async def _run_yt_playlist_audio(callback: CallbackQuery, job_key: str, job: dic
                 with tempfile.TemporaryDirectory() as tmp_dir:
                     tmp = Path(tmp_dir)
 
-                    if quality == "hires":
-                        audio_file = await download_youtube_audio(entry_url, tmp, quality="320")
-                    elif quality == "320":
+                    # Use YT Music download path for music playlist entries
+                    if is_yt_music_playlist:
+                        audio_file = await download_youtube_audio(
+                            entry_url, tmp, is_music=True, quality="320"
+                        )
+                    elif quality == "hires" or quality == "320":
                         audio_file = await download_youtube_audio(entry_url, tmp, quality="320")
                     else:  # 192k fast
                         audio_file = await download_youtube_audio_192k(entry_url, tmp)
 
                     if not audio_file or not audio_file.exists():
                         failed_count += 1
-                        logger.warning(f"YT PLAYLIST AUDIO: Track {i+1}/{total} failed")
+                        logger.warning(f"YT PLAYLIST AUDIO: Track {i+1}/{total} failed: {entry_url[:60]}")
                     else:
                         try:
                             await bot.send_audio(
                                 user_id,
                                 FSInputFile(audio_file),
                                 title=entry.get("title") or audio_file.stem,
+                                caption=track_caption,
+                                parse_mode="HTML",
                             )
                             sent_count += 1
                             logger.info(f"YT PLAYLIST AUDIO: Sent {sent_count}/{total}")
                         except TelegramForbiddenError:
                             logger.error(f"User {user_id} blocked bot")
+                            blocked = True
                             break
-                        except Exception as e:
-                            logger.error(f"YT PLAYLIST AUDIO: Send failed: {e}")
-                            failed_count += 1
+                        except Exception as _send_err:
+                            _err_str = str(_send_err).lower()
+                            if "entity_text_invalid" in _err_str or "bad request" in _err_str:
+                                # Retry once without caption
+                                logger.warning(
+                                    f"YT PLAYLIST AUDIO: ENTITY_TEXT_INVALID for track {i+1}, "
+                                    f"retrying without caption"
+                                )
+                                try:
+                                    await bot.send_audio(
+                                        user_id,
+                                        FSInputFile(audio_file),
+                                        title=entry.get("title") or audio_file.stem,
+                                    )
+                                    sent_count += 1
+                                    logger.info(f"YT PLAYLIST AUDIO: Sent (no caption) {sent_count}/{total}")
+                                except TelegramForbiddenError:
+                                    logger.error(f"User {user_id} blocked bot")
+                                    blocked = True
+                                    break
+                                except Exception as e2:
+                                    logger.error(f"YT PLAYLIST AUDIO: Send retry failed: {e2}")
+                                    failed_count += 1
+                            else:
+                                logger.error(f"YT PLAYLIST AUDIO: Send failed: {_send_err}")
+                                failed_count += 1
 
             except Exception as e:
                 logger.error(f"YT PLAYLIST AUDIO: Track {i+1} error: {e}", exc_info=True)

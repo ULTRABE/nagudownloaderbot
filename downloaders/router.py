@@ -39,6 +39,7 @@ from downloaders.youtube import handle_youtube
 from downloaders.spotify import handle_spotify_playlist
 from ui.formatting import (
     format_welcome,
+    build_start_keyboard,
     format_help,
     format_help_video,
     format_help_music,
@@ -58,6 +59,7 @@ from ui.formatting import (
     code_panel,
     mono,
     safe_caption,
+    build_safe_media_caption,
     _escape as _html_escape,
 )
 from ui.emoji_config import get_emoji_async
@@ -139,13 +141,20 @@ async def _safe_reply(m: Message, text: str, **kwargs) -> None:
 
 @dp.message(CommandStart())
 async def start_command(m: Message):
-    """Start command — register user, show welcome"""
+    """
+    Start command — register user, show branded welcome UI.
+
+    UI structure:
+      Header → Tagline → Platforms → Instruction
+      Inline keyboard: Download | Status | Help | Settings |
+                       Updates | Support | Owner | Add Me To Group
+
+    All values dynamic — no hardcoded links or usernames.
+    Keyboard built via centralized build_start_keyboard().
+    """
     logger.info(f"START: User {m.from_user.id}")
 
     from utils.user_state import user_state_manager
-
-    # Check if this is a first-time start
-    is_first_time = not await user_state_manager.has_started_bot(m.from_user.id)
 
     await user_state_manager.mark_user_started(m.from_user.id)
     await user_state_manager.mark_user_unblocked(m.from_user.id)
@@ -153,54 +162,22 @@ async def start_command(m: Message):
     if m.chat.type == "private":
         await register_user(m.from_user.id)
 
-    # First-time welcome — extra warm greeting
-    if is_first_time:
-        first_name = (m.from_user.first_name or "there")[:32]
-        safe_name = _html_escape(first_name)
-        _wave = await get_emoji_async("WAVE")
-        _complete = await get_emoji_async("COMPLETE")
-        first_time_msg = (
-            f"{_wave} <b>Hey {safe_name}, welcome to Nagu Downloader!</b>\n\n"
-            f"𝐓𝐡𝐚𝐧𝐤𝐬 𝐟𝐨𝐫 𝐬𝐭𝐚𝐫𝐭𝐢𝐧𝐠 𝐭𝐡𝐞 𝐛𝐨𝐭! {_complete}\n\n"
-            "You're all set to receive music, videos and playlists directly here.\n\n"
-            "ꜱᴇɴᴅ ᴀɴʏ ʟɪɴᴋ ꜰʀᴏᴍ:\n"
-            "• YouTube — Videos, Shorts, Music\n"
-            "• Spotify — Tracks &amp; Playlists\n"
-            "• Instagram — Reels &amp; Posts\n"
-            "• Pinterest — Video Pins"
-        )
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="➕ Add to Group", url=f"https://t.me/{(await bot.get_me()).username}?startgroup=true"),
-            InlineKeyboardButton(text="📊 Status", callback_data="status"),
-        ]])
-        picture_path = _ASSETS_DIR / "picture.png"
-        if picture_path.exists():
-            try:
-                await m.reply_photo(
-                    FSInputFile(picture_path),
-                    caption=first_time_msg,
-                    parse_mode="HTML",
-                    reply_markup=keyboard,
-                )
-                return
-            except Exception as e:
-                logger.error(f"Failed to send start image: {e}")
-        await _safe_reply(m, first_time_msg, parse_mode="HTML", reply_markup=keyboard)
-        return
+    # Fetch bot username dynamically — never hardcoded
+    try:
+        bot_me = await bot.get_me()
+        bot_username = bot_me.username or ""
+    except Exception:
+        bot_username = ""
 
-    caption = await format_welcome(m.from_user, m.from_user.id)
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="➕ Add to Group", url=f"https://t.me/{(await bot.get_me()).username}?startgroup=true"),
-        InlineKeyboardButton(text="📊 Status", callback_data="status"),
-    ]])
+    welcome_text = await format_welcome(m.from_user, m.from_user.id)
+    keyboard = await build_start_keyboard(bot_username)
 
     picture_path = _ASSETS_DIR / "picture.png"
     if picture_path.exists():
         try:
             await m.reply_photo(
                 FSInputFile(picture_path),
-                caption=caption,
+                caption=welcome_text,
                 parse_mode="HTML",
                 reply_markup=keyboard,
             )
@@ -208,7 +185,59 @@ async def start_command(m: Message):
         except Exception as e:
             logger.error(f"Failed to send start image: {e}")
 
-    await _safe_reply(m, caption, parse_mode="HTML", reply_markup=keyboard)
+    await _safe_reply(m, welcome_text, parse_mode="HTML", reply_markup=keyboard)
+
+
+# ─── Inline button callbacks (start keyboard) ─────────────────────────────────
+
+@dp.callback_query(lambda c: c.data == "cb_download")
+async def cb_download(callback):
+    """Download button — show instruction"""
+    await callback.answer()
+    _dl = await get_emoji_async("DOWNLOAD")
+    try:
+        await callback.message.reply(
+            f"{_dl} <b>How to Download</b>\n\n"
+            "Paste any supported link directly in the chat.\n\n"
+            "Supported:\n"
+            "• YouTube — Videos, Shorts, Music\n"
+            "• Spotify — Tracks &amp; Playlists\n"
+            "• Instagram — Reels &amp; Posts\n"
+            "• Pinterest — Video Pins",
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
+
+@dp.callback_query(lambda c: c.data == "cb_help")
+async def cb_help(callback):
+    """Help button — show help message"""
+    await callback.answer()
+    try:
+        await callback.message.reply(
+            await format_help(),
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
+
+@dp.callback_query(lambda c: c.data == "cb_settings")
+async def cb_settings(callback):
+    """Settings button — show available settings info"""
+    await callback.answer()
+    _info = await get_emoji_async("INFO")
+    try:
+        await callback.message.reply(
+            f"{_info} <b>Settings</b>\n\n"
+            "Use /assign to configure custom emojis (admin only).\n"
+            "Use /status to check bot status.\n"
+            "Use /myinfo to view your account info.",
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
 
 
 # ─── /help ────────────────────────────────────────────────────────────────────
