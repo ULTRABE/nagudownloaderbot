@@ -68,8 +68,8 @@ UNICODE = DEFAULT_EMOJIS
 # ─── Premium overrides (set emoji string; None = use DEFAULT) ─────────────────
 PREMIUM: dict[str, str | None] = {
     # Platform
-    "YT":          "🔥",
-    "INSTA":       "✨",
+    "YT":          "🎬",
+    "INSTA":       "📸",
     "PINTEREST":   "📌",
     "MUSIC":       "🎵",
     "VIDEO":       "🎥",
