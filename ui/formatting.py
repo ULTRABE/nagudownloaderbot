@@ -17,10 +17,50 @@ Emoji keys (all uppercase in DB):
   STAR, FIRE, ROCKET, CROWN, DIAMOND, ZAP, WAVE
 """
 from __future__ import annotations
+import html
+import re
 from typing import List
 from aiogram.types import User
 
 from ui.emoji_config import get_emoji, get_emoji_async
+
+# ─── Telegram limits ──────────────────────────────────────────────────────────
+
+TG_CAPTION_LIMIT = 1024   # Telegram hard cap for captions
+TG_MESSAGE_LIMIT = 4096   # Telegram hard cap for messages
+
+
+def _escape(text: str) -> str:
+    """
+    Properly HTML-escape a plain-text string for use inside Telegram HTML captions.
+    Escapes &, <, >, " so they cannot break the HTML parser.
+    """
+    return html.escape(str(text), quote=True)
+
+
+def safe_caption(text: str, limit: int = TG_CAPTION_LIMIT) -> str:
+    """
+    Sanitize a caption string before sending to Telegram.
+
+    - Trims to `limit` characters (default 1024 — Telegram caption limit)
+    - Ensures the string is a plain str (not None / bytes)
+    - Does NOT strip HTML tags — callers are responsible for valid HTML
+
+    Use this on every caption before passing to send_video / send_audio /
+    send_document.  The function is intentionally lightweight so it can be
+    called inline without overhead.
+    """
+    if not text:
+        return ""
+    text = str(text)
+    if len(text) > limit:
+        # Trim safely — avoid cutting in the middle of an HTML tag
+        # Strip trailing incomplete tag if present
+        trimmed = text[:limit]
+        # Remove any dangling open tag at the end
+        trimmed = re.sub(r"<[^>]*$", "", trimmed)
+        return trimmed
+    return text
 
 
 # ─── Global header ────────────────────────────────────────────────────────────
@@ -41,11 +81,11 @@ def ui_title(text: str) -> str:
 
 
 def mention(user: User) -> str:
-    """Clickable HTML user mention"""
+    """Clickable HTML user mention — properly HTML-escaped."""
     if not user:
         return "Unknown"
     name = (user.first_name or "User")[:32]
-    safe = name.replace("<", "").replace(">", "")
+    safe = _escape(name)
     return f'<a href="tg://user?id={user.id}">{safe}</a>'
 
 
@@ -53,17 +93,24 @@ async def format_delivered_with_mention(user_id: int, first_name: str) -> str:
     """
     Returns a clean delivered caption with clickable user mention.
     Output: ✓ Delivered — <Name>
+
+    Uses html.escape() on the display name so that characters like & " ' < >
+    in the user's first name cannot break Telegram's HTML parser and cause
+    ENTITY_TEXT_INVALID errors.
     """
     emoji = await get_emoji_async("DELIVERED")
-    safe_name = (first_name or "User")[:32].replace("<", "").replace(">", "")
-    return f'{emoji} Delivered — <a href="tg://user?id={user_id}">{safe_name}</a>'
+    # html.escape handles &, <, >, " — all characters that break HTML parsing
+    safe_name = _escape((first_name or "User")[:32])
+    raw = f'{emoji} Delivered — <a href="tg://user?id={user_id}">{safe_name}</a>'
+    return safe_caption(raw)
 
 
 def format_delivered_with_mention_sync(user_id: int, first_name: str) -> str:
     """Sync fallback for format_delivered_with_mention."""
     emoji = get_emoji("DELIVERED")
-    safe_name = (first_name or "User")[:32].replace("<", "").replace(">", "")
-    return f'{emoji} Delivered — <a href="tg://user?id={user_id}">{safe_name}</a>'
+    safe_name = _escape((first_name or "User")[:32])
+    raw = f'{emoji} Delivered — <a href="tg://user?id={user_id}">{safe_name}</a>'
+    return safe_caption(raw)
 
 
 def format_user_id(user_id: int) -> str:
@@ -237,17 +284,17 @@ def format_help_info() -> str:
 async def format_myinfo(user: User, chat_title: str = None) -> str:
     """Account info"""
     user_emoji = await get_emoji_async("USER")
-    username = f"@{user.username}" if user.username else "—"
+    username = f"@{_escape(user.username)}" if user.username else "—"
     chat_type = "private" if not chat_title else "group"
-    safe_name = (user.first_name or "—")[:32].replace("<", "").replace(">", "")
+    safe_name = _escape((user.first_name or "—")[:32])
     user_link = f'<a href="tg://user?id={user.id}">{safe_name}</a>'
     return _h(
         f"{user_emoji} 𝐀ᴄᴄᴏᴜɴᴛ 𝐈ɴꜰᴏ\n\n"
         f"𝐍ᴀᴍᴇ: {user_link}\n"
-        f"𝐋ᴀꜱᴛ 𝐍ᴀᴍᴇ: {(user.last_name or '—')[:32]}\n"
+        f"𝐋ᴀꜱᴛ 𝐍ᴀᴍᴇ: {_escape((user.last_name or '—')[:32])}\n"
         f"𝐔ꜱᴇʀɴᴀᴍᴇ: {username}\n"
         f"𝐈ᴅ: <code>{user.id}</code>\n"
-        f"𝐋ᴀɴɢᴜᴀɢᴇ: {user.language_code or '—'}\n"
+        f"𝐋ᴀɴɢᴜᴀɢᴇ: {_escape(user.language_code or '—')}\n"
         f"𝐂ʜᴀᴛ 𝐓ʏᴘᴇ: {chat_type}"
     )
 
@@ -257,10 +304,10 @@ async def format_myinfo(user: User, chat_title: str = None) -> str:
 async def format_id(user: User, label: str = "YOUR  ID") -> str:
     """User ID info"""
     id_emoji = await get_emoji_async("ID")
-    username = f"@{user.username}" if user.username else "—"
+    username = f"@{_escape(user.username)}" if user.username else "—"
     is_other = "USER" in label.upper()
     title = "𝐔ꜱᴇʀ 𝐈ᴅ" if is_other else "𝐘ᴏᴜʀ 𝐈ᴅ"
-    safe_name = (user.first_name or "—")[:32].replace("<", "").replace(">", "")
+    safe_name = _escape((user.first_name or "—")[:32])
     user_link = f'<a href="tg://user?id={user.id}">{safe_name}</a>'
     return _h(
         f"{id_emoji} {title}\n\n"
@@ -344,9 +391,9 @@ async def format_playlist_final(user: User, name: str, total: int, sent: int, fa
     """Spotify playlist completion"""
     crown   = await get_emoji_async("CROWN")
     success = await get_emoji_async("SUCCESS")
-    safe_name = (user.first_name or "User")[:32].replace("<", "").replace(">", "")
+    safe_name = _escape((user.first_name or "User")[:32])
     user_link = f'<a href="tg://user?id={user.id}">{safe_name}</a>'
-    name_short = (name or "Playlist")[:30]
+    name_short = _escape((name or "Playlist")[:30])
     return _h(
         f"{crown} 𝐏ʟᴀʏʟɪꜱᴛ 𝐅ɪɴɪꜱʜᴇᴅ\n\n"
         f"𝐍ᴀᴍᴇ: {name_short}\n"
@@ -515,8 +562,9 @@ async def format_user_info(user: User) -> str:
 async def format_download_complete(user: User) -> str:
     """Legacy compat — returns delivered confirmation with mention"""
     emoji = await get_emoji_async("SUCCESS")
-    safe_name = (user.first_name or "User")[:32].replace("<", "").replace(">", "")
-    return f'{emoji} Delivered — <a href="tg://user?id={user.id}">{safe_name}</a>'
+    safe_name = _escape((user.first_name or "User")[:32])
+    raw = f'{emoji} Delivered — <a href="tg://user?id={user.id}">{safe_name}</a>'
+    return safe_caption(raw)
 
 
 def format_audio_info(title: str = "", artist: str = "", duration: str = "") -> str:
