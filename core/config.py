@@ -18,7 +18,16 @@ class Config:
     def __init__(self):
         # Bot credentials
         self.BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-        
+
+        # Owner / Support / Updates (used in /start UI)
+        # OWNER_ID: Telegram user ID of the bot owner (int)
+        _owner_raw = os.getenv("OWNER_ID", "")
+        self.OWNER_ID: Optional[int] = int(_owner_raw.strip()) if _owner_raw.strip().isdigit() else None
+        # GROUP_LINK: Support group invite link (e.g. https://t.me/+abc123)
+        self.GROUP_LINK: str = os.getenv("GROUP_LINK", "")
+        # UPDATE_CHANNEL: Update channel username or invite link (e.g. https://t.me/mychannel)
+        self.UPDATE_CHANNEL: str = os.getenv("UPDATE_CHANNEL", "")
+
         # Spotify API
         self.SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID", "")
         self.SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET", "")

@@ -19,8 +19,9 @@ Emoji keys (all uppercase in DB):
 from __future__ import annotations
 import html
 import re
-from typing import List
-from aiogram.types import User
+import unicodedata
+from typing import List, Optional
+from aiogram.types import User, InlineKeyboardMarkup, InlineKeyboardButton
 
 from ui.emoji_config import get_emoji, get_emoji_async
 
@@ -40,27 +41,61 @@ def _escape(text: str) -> str:
 
 def safe_caption(text: str, limit: int = TG_CAPTION_LIMIT) -> str:
     """
-    Sanitize a caption string before sending to Telegram.
+    Centralized caption sanitizer — MUST be called on every caption before
+    sending to Telegram to prevent ENTITY_TEXT_INVALID errors.
 
-    - Trims to `limit` characters (default 1024 — Telegram caption limit)
-    - Ensures the string is a plain str (not None / bytes)
-    - Does NOT strip HTML tags — callers are responsible for valid HTML
+    Rules:
+    - Converts to str (handles None / bytes)
+    - Strips mixed markdown characters that break HTML parse_mode
+    - Removes control characters (except newline/tab)
+    - Trims to `limit` characters (default 1024 — Telegram caption hard cap)
+    - Removes dangling open HTML tags at the truncation boundary
+    - Returns empty string only if input is empty/None
 
-    Use this on every caption before passing to send_video / send_audio /
-    send_document.  The function is intentionally lightweight so it can be
-    called inline without overhead.
+    IMPORTANT: This function does NOT re-escape already-escaped HTML.
+    Callers must ensure user-provided text is escaped via _escape() before
+    embedding in HTML templates.
     """
     if not text:
         return ""
     text = str(text)
+
+    # Strip mixed markdown characters that conflict with HTML parse_mode
+    # These cause ENTITY_TEXT_INVALID when Telegram tries to parse HTML
+    # but finds markdown-style formatting mixed in.
+    text = re.sub(r"(?<!\w)[*_`~]{1,3}(?!\w)", "", text)
+
+    # Remove control characters (except \n \t \r which are valid in captions)
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
+
+    # Trim to limit — avoid cutting in the middle of an HTML tag
     if len(text) > limit:
-        # Trim safely — avoid cutting in the middle of an HTML tag
-        # Strip trailing incomplete tag if present
         trimmed = text[:limit]
-        # Remove any dangling open tag at the end
+        # Remove any dangling open tag at the truncation boundary
         trimmed = re.sub(r"<[^>]*$", "", trimmed)
         return trimmed
+
     return text
+
+
+def build_safe_media_caption(user_id: int, first_name: str, delivered_emoji: str = "✓") -> str:
+    """
+    Build a sanitized media caption with requester attribution.
+
+    Format:
+        ✓ Delivered — <Name>
+
+    - Escapes all user-provided text (first_name)
+    - Uses HTML parse_mode only
+    - Passes through safe_caption() for final length/tag check
+    - Never raises — returns plain fallback on any error
+    """
+    try:
+        safe_name = _escape((first_name or "User")[:32])
+        raw = f'{delivered_emoji} Delivered — <a href="tg://user?id={user_id}">{safe_name}</a>'
+        return safe_caption(raw)
+    except Exception:
+        return "✓ Delivered"
 
 
 # ─── Global header ────────────────────────────────────────────────────────────
@@ -222,21 +257,95 @@ async def format_error(message: str | None = None) -> str:
 # ─── /start ───────────────────────────────────────────────────────────────────
 
 async def format_welcome(user: User, user_id: int) -> str:
-    """Welcome message"""
-    wave = await get_emoji_async("WAVE")
+    """
+    Branded welcome message for /start.
+
+    Structure:
+      Header → Tagline → Platforms → Instruction
+
+    All platform emojis fetched dynamically from emoji config (Redis → PREMIUM → DEFAULT).
+    No hardcoded emojis. No hardcoded links.
+    """
     yt   = await get_emoji_async("YT")
     ig   = await get_emoji_async("INSTA")
     sp   = await get_emoji_async("SPOTIFY")
     pin  = await get_emoji_async("PINTEREST")
-    return _h(
-        f"{wave} 𝐖ᴇʟᴄᴏᴍᴇ\n\n"
-        "ꜱᴇɴᴅ ᴀ ʟɪɴᴋ ꜰʀᴏᴍ:\n\n"
-        f"{yt} 𝐘ᴏᴜ𝐓ᴜʙᴇ\n"
-        f"{ig} 𝐈ɴꜱᴛᴀɢʀᴀᴍ\n"
-        f"{sp} 𝐒ᴘᴏᴛɪꜰʏ\n"
-        f"{pin} 𝐏ɪɴᴛᴇʀᴇꜱᴛ\n\n"
-        "𝐉ᴜꜱᴛ ᴘᴀꜱᴛᴇ ᴛʜᴇ ʟɪɴᴋ."
+    zap  = await get_emoji_async("ZAP")
+
+    return (
+        "◇—◇ <b>𝐍𝐀𝐆𝐔 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑 𝐁𝐎𝐓</b> ◇—◇\n\n"
+        f"{zap} <b>Fast &amp; Powerful Media Downloader</b>\n\n"
+        "Download videos &amp; audio from:\n\n"
+        f"{yt} YouTube\n"
+        f"{ig} Instagram\n"
+        f"{sp} Spotify\n"
+        f"{pin} Pinterest\n\n"
+        "Paste a link and I'll handle the rest."
     )
+
+
+async def build_start_keyboard(bot_username: str) -> InlineKeyboardMarkup:
+    """
+    Centralized /start inline keyboard builder.
+
+    Layout:
+      Row 1: 📥 Download  |  📊 Status
+      Row 2: 📜 Help      |  ⚙ Settings
+      Row 3: 📢 Updates   |  💬 Support   (hidden if not configured)
+      Row 4: 👑 Owner                     (hidden if OWNER_ID not set)
+      Row 5: ➕ Add Me To Group           (URL button — appears BLUE)
+
+    Rules:
+    - URL buttons appear blue in Telegram.
+    - Callback buttons appear gray.
+    - ➕ Add Me To Group MUST be a URL button.
+    - Support/Updates hidden if not configured.
+    - Owner uses tg://user?id=OWNER_ID (no hardcoded username).
+    - bot_username must be passed dynamically — never hardcoded.
+    """
+    from core.config import config
+
+    rows = []
+
+    # Row 1: Download | Status
+    rows.append([
+        InlineKeyboardButton(text="📥 Download", callback_data="cb_download"),
+        InlineKeyboardButton(text="📊 Status",   callback_data="status"),
+    ])
+
+    # Row 2: Help | Settings
+    rows.append([
+        InlineKeyboardButton(text="📜 Help",     callback_data="cb_help"),
+        InlineKeyboardButton(text="⚙ Settings",  callback_data="cb_settings"),
+    ])
+
+    # Row 3: Updates | Support (only if configured)
+    row3 = []
+    if config.UPDATE_CHANNEL:
+        row3.append(InlineKeyboardButton(text="📢 Updates", url=config.UPDATE_CHANNEL))
+    if config.GROUP_LINK:
+        row3.append(InlineKeyboardButton(text="💬 Support", url=config.GROUP_LINK))
+    if row3:
+        rows.append(row3)
+
+    # Row 4: Owner (only if OWNER_ID configured)
+    if config.OWNER_ID:
+        rows.append([
+            InlineKeyboardButton(
+                text="👑 Owner",
+                url=f"tg://user?id={config.OWNER_ID}",
+            )
+        ])
+
+    # Row 5: Add Me To Group — URL button (appears BLUE in Telegram)
+    rows.append([
+        InlineKeyboardButton(
+            text="➕ Add Me To Group",
+            url=f"https://t.me/{bot_username}?startgroup=true",
+        )
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 # ─── /help ────────────────────────────────────────────────────────────────────
