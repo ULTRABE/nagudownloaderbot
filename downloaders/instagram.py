@@ -29,7 +29,7 @@ from utils.media_processor import (
     get_video_info,
 )
 from utils.watchdog import acquire_user_slot, release_user_slot
-from ui.formatting import format_delivered_with_mention, safe_caption
+from ui.formatting import format_delivered_with_mention, safe_caption, build_safe_media_caption
 from ui.stickers import send_sticker, delete_sticker
 from ui.emoji_config import get_emoji_async
 from utils.log_channel import log_download
@@ -189,7 +189,10 @@ async def handle_instagram(m: Message, url: str):
     import time as _time_mod
     user_id = m.from_user.id
     first_name = m.from_user.first_name or "User"
-    delivered_caption = await format_delivered_with_mention(user_id, first_name)
+    # Build sanitized caption via centralized builder — prevents ENTITY_TEXT_INVALID
+    from ui.emoji_config import get_emoji_async as _get_emoji
+    delivered_emoji = await _get_emoji("DELIVERED")
+    delivered_caption = build_safe_media_caption(user_id, first_name, delivered_emoji)
     _t_start = _time_mod.monotonic()
 
     sticker_msg_id = None
