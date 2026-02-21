@@ -54,6 +54,8 @@ from ui.formatting import (
     EMOJI_POSITIONS,
     code_panel,
     mono,
+    safe_caption,
+    _escape as _html_escape,
 )
 from ui.emoji_config import get_emoji_async
 from utils.logger import logger
@@ -151,7 +153,7 @@ async def start_command(m: Message):
     # First-time welcome — extra warm greeting
     if is_first_time:
         first_name = (m.from_user.first_name or "there")[:32]
-        safe_name = first_name.replace("<", "").replace(">", "")
+        safe_name = _html_escape(first_name)
         _wave = await get_emoji_async("WAVE")
         _complete = await get_emoji_async("COMPLETE")
         first_time_msg = (
@@ -290,17 +292,30 @@ async def cmd_mp3(m: Message):
             except Exception:
                 pass
 
-            # Send audio
-            safe_name = first_name[:32].replace("<", "").replace(">", "")
+            # Send audio — use safe_caption to prevent ENTITY_TEXT_INVALID
+            safe_name = _html_escape(first_name[:32])
             success_emoji = await get_emoji_async("SUCCESS")
-            caption = f'{success_emoji} Delivered — <a href="tg://user?id={user_id}">{safe_name}</a>'
-            t_start = time.monotonic()
-            await bot.send_audio(
-                m.chat.id,
-                FSInputFile(audio_path),
-                caption=caption,
-                parse_mode="HTML",
+            caption = safe_caption(
+                f'{success_emoji} Delivered — <a href="tg://user?id={user_id}">{safe_name}</a>'
             )
+            t_start = time.monotonic()
+            try:
+                await bot.send_audio(
+                    m.chat.id,
+                    FSInputFile(audio_path),
+                    caption=caption,
+                    parse_mode="HTML",
+                )
+            except Exception as _send_err:
+                _err_str = str(_send_err).lower()
+                if "entity_text_invalid" in _err_str or "bad request" in _err_str:
+                    logger.warning(f"MP3 send_audio: ENTITY_TEXT_INVALID, retrying without caption")
+                    await bot.send_audio(
+                        m.chat.id,
+                        FSInputFile(audio_path),
+                    )
+                else:
+                    raise
             elapsed = time.monotonic() - t_start
 
             # Delete progress
