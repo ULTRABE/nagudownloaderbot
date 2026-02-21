@@ -39,6 +39,7 @@ from workers.task_queue import spotify_semaphore
 from ui.formatting import (
     format_playlist_progress, format_playlist_final,
     format_playlist_dm_complete, format_delivered_with_mention,
+    safe_caption,
 )
 from ui.emoji_config import get_emoji_async
 from utils.helpers import extract_song_metadata
@@ -416,14 +417,30 @@ async def handle_spotify_single(m: Message, url: str):
                 progress = None
 
                 # Send in same chat (group or private)
-                await bot.send_audio(
-                    target_chat,
-                    FSInputFile(mp3_file),
-                    title=title,
-                    performer=artist,
-                    caption=delivered_caption,
-                    parse_mode="HTML",
-                )
+                # Use safe_caption to prevent ENTITY_TEXT_INVALID
+                safe_cap = safe_caption(delivered_caption)
+                try:
+                    await bot.send_audio(
+                        target_chat,
+                        FSInputFile(mp3_file),
+                        title=title,
+                        performer=artist,
+                        caption=safe_cap,
+                        parse_mode="HTML",
+                    )
+                except Exception as _send_err:
+                    _err_str = str(_send_err).lower()
+                    if "entity_text_invalid" in _err_str or "bad request" in _err_str:
+                        # Caption broken — retry without caption
+                        logger.warning(f"SPOTIFY SINGLE: ENTITY_TEXT_INVALID, retrying without caption. Error: {_send_err}")
+                        await bot.send_audio(
+                            target_chat,
+                            FSInputFile(mp3_file),
+                            title=title,
+                            performer=artist,
+                        )
+                    else:
+                        raise
 
                 logger.info(f"SPOTIFY SINGLE: '{title}' by '{artist}' → chat {target_chat}")
 
@@ -610,7 +627,6 @@ async def _run_playlist_download(m: Message, url: str):
             # Send DM notification with playlist info
             user_id = m.from_user.id
             first_name = (m.from_user.first_name or "there")[:32]
-            safe_name = first_name.replace("<", "").replace(">", "")
             try:
                 _music = await get_emoji_async("MUSIC")
                 await bot.send_message(
