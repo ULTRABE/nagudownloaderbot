@@ -140,7 +140,7 @@ async def _fetch_playlist_tracks_api(playlist_id: str, is_album: bool = False) -
     """
     token = await _get_spotify_token()
     if not token:
-        logger.error("Spotify: no token available for playlist fetch")
+        logger.error("SPOTIFY API: No token available — check SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET env vars")
         return []
 
     track_urls: List[str] = []
@@ -486,14 +486,16 @@ async def handle_spotify_playlist(m: Message, url: str):
     """
     try:
         if is_spotify_track(url):
+            logger.info(f"SPOTIFY: Routing track URL to single handler: {url[:60]}")
             await handle_spotify_single(m, url)
             return
 
-        logger.info(f"SPOTIFY PLAYLIST: Request from {m.from_user.id} in {m.chat.type}")
+        logger.info(f"SPOTIFY PLAYLIST: Request from {m.from_user.id} in {m.chat.type} — URL: {url[:60]}")
 
         # Cooldown check
         is_cooldown, minutes_left = await user_state_manager.is_on_cooldown(m.from_user.id)
         if is_cooldown:
+            logger.info(f"SPOTIFY PLAYLIST: User {m.from_user.id} on cooldown ({minutes_left} min)")
             _proc = await get_emoji_async("PROCESS")
             await _safe_reply(
                 m,
@@ -503,8 +505,10 @@ async def handle_spotify_playlist(m: Message, url: str):
             return
 
         # Bot-started check (needed to send DM)
+        # Note: has_started_bot returns True on Redis failure (safe default)
         has_started = await user_state_manager.has_started_bot(m.from_user.id)
         if not has_started:
+            logger.info(f"SPOTIFY PLAYLIST: User {m.from_user.id} has not started bot — showing start prompt")
             bot_me = await bot.get_me()
             sp = await get_emoji_async("SPOTIFY")
             keyboard = InlineKeyboardMarkup(inline_keyboard=[[
@@ -524,6 +528,7 @@ async def handle_spotify_playlist(m: Message, url: str):
 
         # Blocked check
         if await user_state_manager.has_blocked_bot(m.from_user.id):
+            logger.info(f"SPOTIFY PLAYLIST: User {m.from_user.id} has blocked bot")
             _err = await get_emoji_async("ERROR")
             await _safe_reply(
                 m,
@@ -533,7 +538,7 @@ async def handle_spotify_playlist(m: Message, url: str):
             return
 
         if not config.SPOTIFY_CLIENT_ID or not config.SPOTIFY_CLIENT_SECRET:
-            logger.warning("Spotify: CLIENT_ID or CLIENT_SECRET not configured")
+            logger.warning("SPOTIFY PLAYLIST: CLIENT_ID or CLIENT_SECRET not configured — cannot process")
             _err = await get_emoji_async("ERROR")
             await _safe_reply(
                 m,
@@ -542,6 +547,7 @@ async def handle_spotify_playlist(m: Message, url: str):
             )
             return
 
+        logger.info(f"SPOTIFY PLAYLIST: All checks passed, starting download for user {m.from_user.id}")
         await _run_playlist_download(m, url)
 
     except asyncio.CancelledError:
@@ -605,10 +611,15 @@ async def _run_playlist_download(m: Message, url: str):
 
         try:
             # Fetch track list via Spotify API (with spotdl fallback for curated playlists)
-            logger.info(f"SPOTIFY PLAYLIST: Fetching tracks for {playlist_id}")
+            logger.info(f"SPOTIFY PLAYLIST: Fetching tracks for playlist_id={playlist_id} is_album={is_album}")
             track_urls = await _fetch_playlist_tracks(playlist_id, is_album=is_album, playlist_url=url)
 
             if not track_urls:
+                logger.error(
+                    f"SPOTIFY PLAYLIST: No tracks found for {url[:60]} "
+                    f"(playlist_id={playlist_id}, is_album={is_album}). "
+                    f"Check SPOTIFY_CLIENT_ID/SECRET and API access."
+                )
                 _err = await get_emoji_async("ERROR")
                 await _safe_edit(
                     progress_msg,

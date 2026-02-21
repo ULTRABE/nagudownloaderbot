@@ -44,21 +44,18 @@ class UserStateManager:
     
     async def has_started_bot(self, user_id: int) -> bool:
         """
-        Check if user has started the bot
-        
-        Args:
-            user_id: User ID
-        
-        Returns:
-            True if user has started bot
+        Check if user has started the bot.
+
+        Safe default: returns True on Redis failure so users are never
+        blocked from downloading due to a Redis connectivity issue.
         """
         try:
             key = self._get_started_key(user_id)
             result = await redis_client.get(key)
             return result == "1"
         except Exception as e:
-            logger.error(f"Failed to check user started: {e}")
-            return False
+            logger.warning(f"has_started_bot: Redis error for {user_id}, defaulting to True: {e}")
+            return True  # Safe default — don't block users due to Redis issues
     
     async def mark_user_blocked(self, user_id: int) -> bool:
         """
