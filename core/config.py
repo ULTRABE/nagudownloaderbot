@@ -4,6 +4,10 @@ import random
 from pathlib import Path
 from typing import List, Optional
 
+# ─── Project root (directory containing this file's parent) ──────────────────
+# Resolves to the project root regardless of working directory at runtime.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 # ─── Log Channel (production) ─────────────────────────────────────────────────
 LOG_CHANNEL_ID: int = -1003792200194
 LOG_CHANNEL_LINK: str = "https://t.me/+VpCBN-vtPjVmYTI1"
@@ -35,9 +39,11 @@ class Config:
         ) if admin_ids_str else set()
         
         # Cookie files and folders
-        self.IG_COOKIES = "cookies_instagram.txt"
-        self.YT_COOKIES_FOLDER = "yt cookies"
-        self.YT_MUSIC_COOKIES_FOLDER = "yt music cookies"
+        # Use absolute paths resolved from the project root so the bot finds
+        # cookies regardless of the working directory at runtime (e.g. Railway).
+        self.IG_COOKIES = str(_PROJECT_ROOT / "cookies_instagram.txt")
+        self.YT_COOKIES_FOLDER = str(_PROJECT_ROOT / "yt cookies")
+        self.YT_MUSIC_COOKIES_FOLDER = str(_PROJECT_ROOT / "yt music cookies")
         
         # Stickers
         self.IG_STICKER = os.getenv("IG_STICKER", "CAACAgIAAxkBAAEadEdpekZa1-2qYm-1a3dX0JmM_Z9uDgAC4wwAAjAT0Euml6TE9QhYWzgE")
@@ -54,10 +60,10 @@ class Config:
         ]
         
         # Performance settings
-        self.MAX_CONCURRENT_DOWNLOADS = 8
-        self.MAX_CONCURRENT_MUSIC = 3
-        self.MAX_CONCURRENT_SPOTIFY = 2    # Limit to 2 concurrent playlist downloads
-        self.MAX_CONCURRENT_PER_USER = 2   # Max simultaneous jobs per user
+        self.MAX_CONCURRENT_DOWNLOADS = 12
+        self.MAX_CONCURRENT_MUSIC = 7
+        self.MAX_CONCURRENT_SPOTIFY = 6    # Limit concurrent playlist downloads
+        self.MAX_CONCURRENT_PER_USER = 6   # Max simultaneous jobs per user
         
         # Timeout settings (seconds)
         self.DOWNLOAD_TIMEOUT = 600        # 10 minutes max per download (large playlists)
@@ -65,7 +71,8 @@ class Config:
         self.SEND_TIMEOUT = 60             # 1 minute max for Telegram send
         
         # Premium emoji support
-        self.BOT_HAS_PREMIUM = os.getenv("BOT_HAS_PREMIUM", "false").lower() in ("true", "1", "yes")
+        # Default: enabled. Set BOT_HAS_PREMIUM=false to disable.
+        self.BOT_HAS_PREMIUM = os.getenv("BOT_HAS_PREMIUM", "true").lower() in ("true", "1", "yes")
         
         # Retry settings
         self.MAX_RETRIES = 2               # Max retry attempts
