@@ -15,6 +15,9 @@ import time
 import traceback
 from pathlib import Path
 
+# Absolute path to assets directory — works regardless of CWD at runtime
+_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
+
 from aiogram import F
 from aiogram.types import (
     Message, FSInputFile,
@@ -170,7 +173,7 @@ async def start_command(m: Message):
             InlineKeyboardButton(text="➕ Add to Group", url=f"https://t.me/{(await bot.get_me()).username}?startgroup=true"),
             InlineKeyboardButton(text="📊 Status", callback_data="status"),
         ]])
-        picture_path = Path("assets/picture.png")
+        picture_path = _ASSETS_DIR / "picture.png"
         if picture_path.exists():
             try:
                 await m.reply_photo(
@@ -192,7 +195,7 @@ async def start_command(m: Message):
         InlineKeyboardButton(text="📊 Status", callback_data="status"),
     ]])
 
-    picture_path = Path("assets/picture.png")
+    picture_path = _ASSETS_DIR / "picture.png"
     if picture_path.exists():
         try:
             await m.reply_photo(

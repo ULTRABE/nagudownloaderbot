@@ -37,6 +37,7 @@ COPY downloaders/ ./downloaders/
 COPY ui/ ./ui/
 COPY utils/ ./utils/
 COPY workers/ ./workers/
+COPY assets/ ./assets/
 
 # Copy cookie folders (required for yt-dlp authentication)
 # Folder names contain spaces — quote them explicitly
