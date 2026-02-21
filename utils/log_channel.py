@@ -118,7 +118,8 @@ async def log_download(
             chat_display = "Unknown"
 
         # Truncate link for display (keep full URL, just cap at 300 chars)
-        display_link = link[:300] if len(link) > 300 else link
+        # html.escape prevents malformed URLs from breaking the HTML parser
+        display_link = html.escape(link[:300] if len(link) > 300 else link, quote=False)
 
         text = (
             "📥 𝐃ᴏᴡɴʟᴏᴀᴅᴇʀ 𝐁ᴏᴛ 𝐋ᴏɢ 𝐂ʜᴀɴɴᴇʟ\n\n"

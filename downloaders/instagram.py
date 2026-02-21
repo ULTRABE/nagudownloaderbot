@@ -11,7 +11,6 @@ Flow:
 No progress messages for Instagram.
 """
 import asyncio
-import glob
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -61,14 +60,14 @@ def _layer2_opts(tmp: Path) -> dict:
     return opts
 
 def _layer3_opts(tmp: Path) -> dict:
-    """Cookie-based fallback — skip silently if no cookies"""
+    """Cookie-based fallback — skip silently if no cookies.
+    Uses absolute path from config so it works regardless of CWD (Railway).
+    """
     opts = _base_opts(tmp)
-    ig_cookies = (
-        glob.glob("cookies_instagram*.txt") +
-        [f for f in glob.glob("*.txt") if "instagram" in f.lower()]
-    )
-    if ig_cookies:
-        opts["cookiefile"] = ig_cookies[0]
+    # config.IG_COOKIES is an absolute path resolved from the project root
+    ig_cookie = config.IG_COOKIES
+    if ig_cookie and Path(ig_cookie).exists():
+        opts["cookiefile"] = ig_cookie
     return opts
 
 async def _try_download(url: str, opts: dict) -> Optional[Path]:
