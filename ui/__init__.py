@@ -4,7 +4,7 @@ from .formatting import (
     # Core primitives
     mention, format_user_id, format_delivered_with_mention,
     mono, bold, code_panel,
-    # Legacy compat
+    # Legacy compat stubs
     quoted_block, styled_text, premium_panel,
     # Download status
     format_delivered, format_downloading, format_progress, format_processing,

@@ -140,6 +140,12 @@ async def main():
     # Initialize archive manager
     init_archive_manager(bot)
     
+    # Initialize proxy manager — validates all proxies on startup
+    from utils.proxy_manager import proxy_manager
+    await proxy_manager.initialize()
+    _pstats = proxy_manager.get_stats()
+    logger.info(f"✓ Proxies: {_pstats['live']}/{_pstats['total']} alive")
+    
     # Log configuration
     logger.info(f"✓ Max concurrent downloads: {config.MAX_CONCURRENT_DOWNLOADS}")
     logger.info(f"✓ Max concurrent music: {config.MAX_CONCURRENT_MUSIC}")

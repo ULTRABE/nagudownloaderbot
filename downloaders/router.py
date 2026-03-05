@@ -41,9 +41,6 @@ from ui.formatting import (
     format_welcome,
     build_start_keyboard,
     format_help,
-    format_help_video,
-    format_help_music,
-    format_help_info,
     format_admin_panel,
     format_id,
     format_chatid,
@@ -56,7 +53,6 @@ from ui.formatting import (
     format_assign_updated,
     format_stats,
     EMOJI_POSITIONS,
-    code_panel,
     mono,
     safe_caption,
     build_safe_media_caption,
@@ -73,6 +69,7 @@ from utils.broadcast import (
 )
 from utils.redis_client import redis_client
 from utils.log_channel import log_download
+from utils.proxy_manager import proxy_manager
 
 # Link regex — improved to catch more URL formats
 LINK_RE = re.compile(r"https?://[^\s<>\"']+")
@@ -123,19 +120,21 @@ async def global_error_handler(event: ErrorEvent) -> bool:
 
 # ─── Safe reply helper ────────────────────────────────────────────────────────
 
-async def _safe_reply(m: Message, text: str, **kwargs) -> None:
-    """Reply with fallback to plain send if original message was deleted."""
+async def _safe_reply(m: Message, text: str, **kwargs):
+    """Reply with fallback to plain send if original message was deleted.
+    Returns the sent Message object, or None on total failure."""
     try:
-        await m.reply(text, **kwargs)
+        return await m.reply(text, **kwargs)
     except Exception as e:
         err_str = str(e).lower()
         if "message to be replied not found" in err_str or "replied message not found" in err_str:
             try:
-                await bot.send_message(m.chat.id, text, **kwargs)
+                return await bot.send_message(m.chat.id, text, **kwargs)
             except Exception:
-                pass
+                return None
         else:
             logger.error(f"Reply failed: {e}")
+            return None
 
 # ─── /start ───────────────────────────────────────────────────────────────────
 
@@ -612,6 +611,142 @@ async def cmd_broadcast_media(m: Message):
     )
 
 
+# ─── Proxy management commands ─────────────────────────────────────────────────
+
+@dp.message(Command("addpxy"))
+async def cmd_addpxy(m: Message):
+    """
+    Add proxies to the pool. Admin only.
+    Usage: /addpxy ip:port ip:port ...
+    Accepts space, newline, or comma separated proxies.
+    Validates each one before adding.
+    """
+    if not _is_admin(m.from_user.id):
+        _err = await get_emoji_async("ERROR")
+        await _safe_reply(m, f"{_err} 𝐀ᴅᴍɪɴ 𝐎ɴʟʏ", parse_mode="HTML")
+        return
+
+    # Parse proxies from message text
+    parts = (m.text or "").split(None, 1)
+    if len(parts) < 2 or not parts[1].strip():
+        _info = await get_emoji_async("INFO")
+        await _safe_reply(
+            m,
+            f"{_info} <b>Add Proxies</b>\n\n"
+            f"/addpxy ip:port ip:port ...\n\n"
+            f"Separate with spaces, commas, or newlines.",
+            parse_mode="HTML",
+        )
+        return
+
+    raw_text = parts[1].strip()
+    # Split by comma, newline, or space
+    import re as _re
+    raw_list = _re.split(r"[,\s]+", raw_text)
+    raw_list = [p.strip() for p in raw_list if p.strip()]
+
+    if not raw_list:
+        _err = await get_emoji_async("ERROR")
+        await _safe_reply(m, f"{_err} No valid proxies found in message.", parse_mode="HTML")
+        return
+
+    _proc = await get_emoji_async("PROCESS")
+    status = await _safe_reply(m, f"{_proc} Validating {len(raw_list)} proxies...", parse_mode="HTML")
+
+    added, failed = await proxy_manager.add_proxies(raw_list)
+    stats = proxy_manager.get_stats()
+
+    _success = await get_emoji_async("SUCCESS")
+    result_text = (
+        f"{_success} <b>Proxies Added</b>\n\n"
+        f"✅ Added: {added}\n"
+        f"❌ Failed: {failed}\n\n"
+        f"Pool: {stats['live']} live / {stats['total']} total"
+    )
+    try:
+        if status:
+            await status.edit_text(result_text, parse_mode="HTML")
+        else:
+            await _safe_reply(m, result_text, parse_mode="HTML")
+    except Exception:
+        await _safe_reply(m, result_text, parse_mode="HTML")
+
+
+@dp.message(Command("rm"))
+async def cmd_rm(m: Message):
+    """
+    Remove a proxy from the pool. Admin only.
+    Usage: /rm ip:port
+    """
+    if not _is_admin(m.from_user.id):
+        _err = await get_emoji_async("ERROR")
+        await _safe_reply(m, f"{_err} 𝐀ᴅᴍɪɴ 𝐎ɴʟʏ", parse_mode="HTML")
+        return
+
+    parts = (m.text or "").split(None, 1)
+    if len(parts) < 2 or not parts[1].strip():
+        _info = await get_emoji_async("INFO")
+        await _safe_reply(
+            m,
+            f"{_info} <b>Remove Proxy</b>\n\n/rm ip:port",
+            parse_mode="HTML",
+        )
+        return
+
+    proxy_str = parts[1].strip()
+    ok = await proxy_manager.remove_proxy(proxy_str)
+    stats = proxy_manager.get_stats()
+
+    if ok:
+        _success = await get_emoji_async("SUCCESS")
+        await _safe_reply(
+            m,
+            f"{_success} Proxy removed.\n\nPool: {stats['live']} live / {stats['total']} total",
+            parse_mode="HTML",
+        )
+    else:
+        _err = await get_emoji_async("ERROR")
+        await _safe_reply(m, f"{_err} Proxy not found in pool.", parse_mode="HTML")
+
+
+@dp.message(Command("clean"))
+async def cmd_clean(m: Message):
+    """
+    Scan all proxies and remove dead ones. Admin only.
+    Usage: /clean
+    """
+    if not _is_admin(m.from_user.id):
+        _err = await get_emoji_async("ERROR")
+        await _safe_reply(m, f"{_err} 𝐀ᴅᴍɪɴ 𝐎ɴʟʏ", parse_mode="HTML")
+        return
+
+    stats_before = proxy_manager.get_stats()
+    _proc = await get_emoji_async("PROCESS")
+    status = await _safe_reply(
+        m,
+        f"{_proc} Scanning {stats_before['total']} proxies... This may take a minute.",
+        parse_mode="HTML",
+    )
+
+    alive, removed = await proxy_manager.clean()
+    stats = proxy_manager.get_stats()
+
+    _success = await get_emoji_async("SUCCESS")
+    result_text = (
+        f"{_success} <b>Proxy Cleanup Done</b>\n\n"
+        f"✅ Alive: {alive}\n"
+        f"🗑 Removed: {removed}\n\n"
+        f"Pool: {stats['live']} live"
+    )
+    try:
+        if status:
+            await status.edit_text(result_text, parse_mode="HTML")
+        else:
+            await _safe_reply(m, result_text, parse_mode="HTML")
+    except Exception:
+        await _safe_reply(m, result_text, parse_mode="HTML")
+
+
 # ─── /assign — Visual emoji assignment system ─────────────────────────────────
 
 # Redis key prefix for emoji assignments
@@ -713,6 +848,13 @@ async def handle_assign_emoji(m: Message):
 
     # Only process if this user has a pending assignment
     if m.from_user.id not in _assign_pending:
+        return
+
+    # Skip messages that look like URLs — let link handlers process them
+    _text = (m.text or "").strip()
+    if _text.startswith("http://") or _text.startswith("https://"):
+        # Cancel pending assignment so admin can restart via /assign later
+        _assign_pending.pop(m.from_user.id, None)
         return
 
     key = _assign_pending.pop(m.from_user.id, None)
