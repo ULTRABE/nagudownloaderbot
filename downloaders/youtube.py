@@ -47,6 +47,7 @@ from core.config import config
 from workers.task_queue import download_semaphore
 from utils.helpers import get_random_cookie
 from utils.logger import logger
+from utils.proxy_manager import proxy_manager
 from utils.cache import url_cache
 from utils.media_processor import (
     reencode_shorts,
@@ -81,7 +82,7 @@ def _base_opts(tmp: Path) -> dict:
         "no_warnings": True,
         "noprogress": True,
         "outtmpl": str(tmp / "%(title)s.%(ext)s"),
-        "proxy": config.pick_proxy(),
+        "proxy": proxy_manager.pick_proxy(),
         "http_headers": {"User-Agent": config.pick_user_agent()},
         "socket_timeout": 45,
         "retries": 5,
