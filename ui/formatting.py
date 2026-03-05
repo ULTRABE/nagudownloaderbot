@@ -431,9 +431,10 @@ async def format_id(user: User, label: str = "YOUR  ID") -> str:
 async def format_chatid(chat_id: int, chat_title: str, chat_type: str) -> str:
     """Chat ID info"""
     info = await get_emoji_async("INFO")
+    safe_title = _escape(chat_title[:32])
     return _h(
         f"{info} 𝐂ʜᴀᴛ 𝐈ᴅ\n\n"
-        f"𝐂ʜᴀᴛ: {chat_title[:32]}\n"
+        f"𝐂ʜᴀᴛ: {safe_title}\n"
         f"𝐓ʏᴘᴇ: {chat_type}\n"
         f"𝐈ᴅ: <code>{chat_id}</code>"
     )
@@ -487,7 +488,7 @@ def format_playlist_progress(name: str, done: int, total: int) -> str:
     width = 10
     filled = int(width * pct / 100)
     bar = "█" * filled + "░" * (width - filled)
-    name_short = (name or "Playlist")[:30]
+    name_short = _escape((name or "Playlist")[:30])
     return (
         f"{HEADER}\n\n"
         f"🎧 𝐏ʟᴀʏʟɪꜱᴛ: {name_short}\n\n"
@@ -528,7 +529,7 @@ async def format_spotify_complete(user: User, total: int, sent: int) -> str:
 
 def format_yt_playlist_mode(playlist_name: str) -> str:
     """Mode selection for YouTube playlist"""
-    name_short = (playlist_name or "Playlist")[:40]
+    name_short = _escape((playlist_name or "Playlist")[:40])
     return f"{HEADER}\n\n🎬 𝐏ʟᴀʏʟɪꜱᴛ: {name_short}\n\n𝐂ʜᴏᴏꜱᴇ 𝐃ᴏᴡɴʟᴏᴀᴅ 𝐌ᴏᴅᴇ:"
 
 
@@ -551,7 +552,7 @@ def format_yt_playlist_progress(name: str, done: int, total: int) -> str:
     width = 10
     filled = int(width * pct / 100)
     bar = "█" * filled + "░" * (width - filled)
-    name_short = (name or "Playlist")[:30]
+    name_short = _escape((name or "Playlist")[:30])
     return (
         f"{HEADER}\n\n"
         f"🎬 𝐏ʟᴀʏʟɪꜱᴛ: {name_short}\n\n"
@@ -564,7 +565,7 @@ async def format_yt_playlist_final(name: str, total: int, sent: int, failed: int
     """YouTube playlist completion message"""
     crown   = await get_emoji_async("CROWN")
     success = await get_emoji_async("SUCCESS")
-    name_short = (name or "Playlist")[:30]
+    name_short = _escape((name or "Playlist")[:30])
     return _h(
         f"{crown} 𝐏ʟᴀʏʟɪꜱᴛ 𝐅ɪɴɪꜱʜᴇᴅ\n\n"
         f"𝐍ᴀᴍᴇ: {name_short}\n"
