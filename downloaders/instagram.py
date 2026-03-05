@@ -26,7 +26,7 @@ from utils.logger import logger
 from utils.proxy_manager import proxy_manager
 from utils.cache import url_cache
 from utils.media_processor import (
-    ensure_fits_telegram, instagram_smart_encode,
+    ensure_fits_telegram,
     get_video_info,
 )
 from utils.watchdog import acquire_user_slot, release_user_slot
@@ -45,10 +45,10 @@ def _base_opts(tmp: Path) -> dict:
         "outtmpl": str(tmp / "%(title)s.%(ext)s"),
         "proxy": proxy_manager.pick_proxy(),
         "http_headers": {"User-Agent": config.pick_user_agent()},
-        "socket_timeout": 45,
-        "retries": 5,
-        "fragment_retries": 5,
-        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best",
+        "socket_timeout": 20,
+        "retries": 3,
+        "fragment_retries": 3,
+        "format": "best[ext=mp4]/best",
     }
 
 def _layer1_opts(tmp: Path) -> dict:
@@ -243,17 +243,8 @@ async def handle_instagram(m: Message, url: str):
                         )
                         return
 
-                    # Smart encode
-                    encoded = tmp / "ig_enc.mp4"
-                    ok = await instagram_smart_encode(video_file, encoded)
-                    final = encoded if ok and encoded.exists() else video_file
-
-                    # File size check
-                    file_size_mb = final.stat().st_size / (1024 * 1024)
-                    if file_size_mb > config.TG_VIDEO_LIMIT_MB * 2:
-                        logger.warning(f"IG: File too large ({file_size_mb:.1f}MB), splitting")
-
-                    parts = await ensure_fits_telegram(final, tmp)
+                    # Skip re-encoding — just ensure fits Telegram
+                    parts = await ensure_fits_telegram(video_file, tmp)
 
                     # Delete sticker before sending
                     await delete_sticker(bot, m.chat.id, sticker_msg_id)

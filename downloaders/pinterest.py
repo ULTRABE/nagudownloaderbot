@@ -1,27 +1,28 @@
 """
-Pinterest Downloader — Silent delivery with carousel + private pin support.
+Pinterest Downloader — Ultra-fast delivery with photo + video + carousel support.
 
 Flow:
-  1. Resolve pin.it short URLs (HEAD request)
-  2. Validate URL
-  3. Send sticker (if enabled)
-  4. Download silently (no progress messages)
-  5. Delete sticker after delivery
-  6. Send video(s) — reply to original (with fallback to plain send)
-  7. Caption: ✓ Delivered — <mention>
+  1. Resolve pin.it short URLs
+  2. Cache check → instant if cached
+  3. Send sticker
+  4. Download (single-stream, no merge, no re-encode)
+  5. Delete sticker → send media → ✓ Delivered — "mention"
 
-Pinterest URL support:
-  - pin.it short URLs (expanded via HEAD request)
-  - pinterest.com/pin/
-  - pinterest.com/video/
-  - Carousel pins (multiple media items)
-  - Private pins (graceful error)
+Supports:
+  - Video pins (sent as video)
+  - Photo pins (sent as photo)
+  - Carousel pins (multiple media)
+  - pin.it short URLs
 
-No progress messages for Pinterest.
+Speed optimized:
+  - Single-stream format (no merge)
+  - No re-encoding (stream copy only)
+  - 15s timeout, 2 retries
 """
 import asyncio
 import re
 import tempfile
+import time
 from pathlib import Path
 from typing import Optional, List
 
@@ -35,79 +36,62 @@ from workers.task_queue import download_semaphore
 from utils.logger import logger
 from utils.proxy_manager import proxy_manager
 from utils.cache import url_cache
-from utils.media_processor import (
-    ensure_fits_telegram, instagram_smart_encode,
-    get_video_info,
-)
+from utils.media_processor import ensure_fits_telegram, get_video_info
 from utils.watchdog import acquire_user_slot, release_user_slot
-from ui.formatting import format_delivered_with_mention, safe_caption
+from ui.formatting import safe_caption, build_safe_media_caption
 from ui.stickers import send_sticker, delete_sticker
 from ui.emoji_config import get_emoji_async
 from utils.log_channel import log_download
 
-# ─── URL validation ───────────────────────────────────────────────────────────
-
-_PINTEREST_URL_RE = re.compile(
-    r"https?://(www\.)?(pinterest\.(com|co\.\w+|fr|de|es|it|pt|ru|jp|kr|nz|au|ca|mx|cl|ar|br|in|ph|id|vn|th|tr|se|no|dk|fi|nl|be|at|ch|pl|cz|hu|ro|bg|hr|sk|si|lt|lv|ee|gr|cy|mt|lu|ie|is|li|mc|sm|va|ad|ba|rs|me|mk|al|xk|ge|am|az|by|md|ua|kz|kg|tj|tm|uz|mn|af|pk|bd|lk|np|bt|mv|mm|kh|la|vn|bn|tl|pg|fj|sb|vu|ws|to|ki|nr|pw|fm|mh|ck|nu|tk|wf|pf|nc|gu|mp|as|vi|pr|um|mq|gp|re|yt|pm|bl|mf|gf|sr|gy|aw|cw|sx|bq|ai|vg|ky|tc|ms|ag|dm|lc|vc|bb|tt|gd|kn|jm|ht|do|cu|bs|bz|gt|hn|sv|ni|cr|pa|co|ve|ec|pe|bo|py|uy|cl|ar|br)|pin\.it)/",
-    re.IGNORECASE,
-)
+# ─── URL helpers ──────────────────────────────────────────────────────────────
 
 def _is_valid_pinterest_url(url: str) -> bool:
-    """Validate that URL is a Pinterest URL"""
     url_lower = url.lower()
     return "pinterest." in url_lower or "pin.it/" in url_lower
 
 def _sanitize_filename(name: str) -> str:
-    """Remove unsafe characters from filename"""
-    # Remove characters that are unsafe for filenames
     safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name)
-    # Collapse multiple underscores/spaces
     safe = re.sub(r'[_\s]+', '_', safe).strip('_')
-    return safe[:100] or "pinterest_video"
-
-# ─── URL resolver ─────────────────────────────────────────────────────────────
+    return safe[:100] or "pin"
 
 async def _resolve_pin_url(url: str) -> str:
-    """
-    Resolve pin.it shortened URL to full Pinterest URL.
-    Uses aiohttp HEAD request (non-blocking). Falls back to original on error.
-    """
+    """Resolve pin.it → full Pinterest URL via HEAD redirect."""
     if "pin.it/" not in url:
         return url
     try:
         async with aiohttp.ClientSession() as session:
             async with session.head(
-                url,
-                allow_redirects=True,
-                timeout=aiohttp.ClientTimeout(total=10),
+                url, allow_redirects=True,
+                timeout=aiohttp.ClientTimeout(total=8),
                 headers={"User-Agent": config.pick_user_agent()},
             ) as resp:
-                resolved = str(resp.url)
-                logger.debug(f"Pinterest resolved: {url} → {resolved}")
-                return resolved
-    except Exception as e:
-        logger.debug(f"Pinterest URL resolve failed (HEAD): {e}")
-        # Fallback: try GET redirect
+                return str(resp.url)
+    except Exception:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    url,
-                    allow_redirects=True,
-                    timeout=aiohttp.ClientTimeout(total=10),
+                    url, allow_redirects=True,
+                    timeout=aiohttp.ClientTimeout(total=8),
                     headers={"User-Agent": config.pick_user_agent()},
                 ) as resp:
                     return str(resp.url)
-        except Exception as e2:
-            logger.debug(f"Pinterest URL resolve failed (GET): {e2}")
+        except Exception:
             return url
 
-# ─── Download ─────────────────────────────────────────────────────────────────
+# ─── Download (fast, single-stream) ──────────────────────────────────────────
+
+def _is_image(path: Path) -> bool:
+    """Check if file is an image by extension."""
+    return path.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp", ".gif")
+
+def _is_video(path: Path) -> bool:
+    """Check if file is a video by extension."""
+    return path.suffix.lower() in (".mp4", ".webm", ".mkv", ".mov", ".m4v")
 
 async def _download_pinterest(url: str, tmp: Path) -> List[Path]:
     """
-    Download Pinterest video(s) with yt-dlp.
-    Supports single videos and carousel pins (multiple media).
-    Returns list of downloaded file paths.
+    Download Pinterest media — videos AND photos.
+    Single-stream format for speed. No merge.
     """
     safe_title = _sanitize_filename("pin_%(id)s")
     base_opts = {
@@ -117,122 +101,93 @@ async def _download_pinterest(url: str, tmp: Path) -> List[Path]:
         "outtmpl": str(tmp / f"{safe_title}.%(ext)s"),
         "proxy": proxy_manager.pick_proxy(),
         "http_headers": {"User-Agent": config.pick_user_agent()},
-        "socket_timeout": 45,
-        "retries": 5,
-        "fragment_retries": 5,
-        "ignoreerrors": True,  # Don't crash on private/unavailable items in carousel
-    }
-
-    # Primary: merge best video + audio to mp4
-    opts_primary = {
-        **base_opts,
-        "format": "bestvideo+bestaudio/best",
-        "merge_output_format": "mp4",
-        "postprocessors": [{
-            "key": "FFmpegVideoConvertor",
-            "preferedformat": "mp4",
-        }],
-    }
-
-    try:
-        with YoutubeDL(opts_primary) as ydl:
-            await asyncio.to_thread(lambda: ydl.download([url]))
-        files = (
-            list(tmp.glob("*.mp4")) + list(tmp.glob("*.webm")) +
-            list(tmp.glob("*.mkv")) + list(tmp.glob("*.mov"))
-        )
-        if files:
-            return sorted(files)
-    except Exception as e:
-        logger.debug(f"Pinterest primary download failed: {type(e).__name__}: {str(e)[:100]}")
-
-    # Fallback: best single format, no merge
-    opts_fallback = {
-        **base_opts,
-        "format": "best[ext=mp4]/best",
+        "socket_timeout": 15,
+        "retries": 2,
+        "fragment_retries": 2,
         "ignoreerrors": True,
+        "writethumbnail": False,
     }
 
+    # Try single-stream first (fastest)
+    opts = {**base_opts, "format": "best[ext=mp4]/best"}
     try:
-        with YoutubeDL(opts_fallback) as ydl:
+        with YoutubeDL(opts) as ydl:
             await asyncio.to_thread(lambda: ydl.download([url]))
-        files = (
-            list(tmp.glob("*.mp4")) + list(tmp.glob("*.webm")) +
-            list(tmp.glob("*.mkv")) + list(tmp.glob("*.mov"))
-        )
-        if files:
-            return sorted(files)
     except Exception as e:
-        logger.debug(f"Pinterest fallback download failed: {type(e).__name__}: {str(e)[:100]}")
+        logger.debug(f"Pinterest download failed: {type(e).__name__}: {str(e)[:100]}")
 
-    return []
+    # Collect ALL downloaded files — videos and images
+    files = sorted(
+        list(tmp.glob("*.mp4")) + list(tmp.glob("*.webm")) +
+        list(tmp.glob("*.mkv")) + list(tmp.glob("*.mov")) +
+        list(tmp.glob("*.jpg")) + list(tmp.glob("*.jpeg")) +
+        list(tmp.glob("*.png")) + list(tmp.glob("*.webp")) +
+        list(tmp.glob("*.gif"))
+    )
+    return files
 
-# ─── Safe reply helpers ───────────────────────────────────────────────────────
+# ─── Safe send helpers ────────────────────────────────────────────────────────
 
 async def _safe_reply_video(m: Message, **kwargs) -> Optional[Message]:
-    """
-    Try to reply to original message.
-    Fallback chain:
-      1. With reply_to_message_id
-      2. Without reply (if reply target not found)
-      3. Without caption (if ENTITY_TEXT_INVALID — bad HTML in caption)
-    """
-    # Sanitize caption before sending
+    """Send video with reply fallback chain."""
     if "caption" in kwargs and kwargs["caption"]:
         kwargs["caption"] = safe_caption(kwargs["caption"])
-
     try:
-        return await bot.send_video(
-            m.chat.id,
-            reply_to_message_id=m.message_id,
-            **kwargs,
-        )
+        return await bot.send_video(m.chat.id, reply_to_message_id=m.message_id, **kwargs)
     except Exception as e:
         err_str = str(e).lower()
-
-        # Reply target gone — retry without reply
         if "message to be replied not found" in err_str or "replied message not found" in err_str:
             try:
                 return await bot.send_video(m.chat.id, **kwargs)
             except Exception as e2:
-                err_str2 = str(e2).lower()
-                if "entity_text_invalid" in err_str2 or "bad request" in err_str2:
-                    logger.warning(f"PIN send_video: caption invalid, retrying without caption")
+                if "entity_text_invalid" in str(e2).lower():
                     kwargs.pop("caption", None)
                     kwargs.pop("parse_mode", None)
                     try:
                         return await bot.send_video(m.chat.id, **kwargs)
-                    except Exception as e3:
-                        logger.error(f"PIN send_video no-caption fallback failed: {e3}")
+                    except Exception:
                         return None
-                logger.error(f"PIN send_video fallback failed: {e2}")
                 return None
-
-        # Caption entity error — strip caption and retry
-        if "entity_text_invalid" in err_str or "bad request" in err_str:
-            logger.warning(f"PIN send_video: ENTITY_TEXT_INVALID, retrying without caption. Error: {e}")
+        if "entity_text_invalid" in err_str:
             kwargs.pop("caption", None)
             kwargs.pop("parse_mode", None)
             try:
-                return await bot.send_video(
-                    m.chat.id,
-                    reply_to_message_id=m.message_id,
-                    **kwargs,
-                )
-            except Exception as e2:
+                return await bot.send_video(m.chat.id, reply_to_message_id=m.message_id, **kwargs)
+            except Exception:
                 try:
                     return await bot.send_video(m.chat.id, **kwargs)
-                except Exception as e3:
-                    logger.error(f"PIN send_video no-caption fallback failed: {e3}")
+                except Exception:
                     return None
-
         logger.error(f"PIN send_video failed: {e}")
         return None
 
+async def _safe_reply_photo(m: Message, **kwargs) -> Optional[Message]:
+    """Send photo with reply fallback chain."""
+    if "caption" in kwargs and kwargs["caption"]:
+        kwargs["caption"] = safe_caption(kwargs["caption"])
+    try:
+        return await bot.send_photo(m.chat.id, reply_to_message_id=m.message_id, **kwargs)
+    except Exception as e:
+        err_str = str(e).lower()
+        if "message to be replied not found" in err_str or "replied message not found" in err_str:
+            try:
+                return await bot.send_photo(m.chat.id, **kwargs)
+            except Exception:
+                return None
+        if "entity_text_invalid" in err_str:
+            kwargs.pop("caption", None)
+            kwargs.pop("parse_mode", None)
+            try:
+                return await bot.send_photo(m.chat.id, reply_to_message_id=m.message_id, **kwargs)
+            except Exception:
+                try:
+                    return await bot.send_photo(m.chat.id, **kwargs)
+                except Exception:
+                    return None
+        logger.error(f"PIN send_photo failed: {e}")
+        return None
+
 async def _safe_reply_text(m: Message, text: str, **kwargs) -> Optional[Message]:
-    """
-    Try to reply to original message. If message not found, send normally.
-    """
     try:
         return await m.reply(text, **kwargs)
     except Exception as e:
@@ -240,20 +195,16 @@ async def _safe_reply_text(m: Message, text: str, **kwargs) -> Optional[Message]
         if "message to be replied not found" in err_str or "bad request" in err_str:
             try:
                 return await bot.send_message(m.chat.id, text, **kwargs)
-            except Exception as e2:
-                logger.error(f"PIN send_message fallback failed: {e2}")
+            except Exception:
                 return None
-        logger.error(f"PIN reply failed: {e}")
         return None
 
 # ─── Main handler ─────────────────────────────────────────────────────────────
 
 async def handle_pinterest(m: Message, url: str):
     """
-    Download Pinterest video pins (single + carousel).
-    Cache-first → download → encode → send.
-    Silent processing — no progress messages.
-    Reply to original message with ✓ Delivered — <mention>.
+    Download Pinterest pins — videos, photos, carousels.
+    Ultra-fast: single-stream, no re-encode, cache-first.
     """
     if not await acquire_user_slot(m.from_user.id, config.MAX_CONCURRENT_PER_USER):
         _proc = await get_emoji_async("PROCESS")
@@ -263,124 +214,101 @@ async def handle_pinterest(m: Message, url: str):
             pass
         return
 
-    import time as _time_mod
     user_id = m.from_user.id
     first_name = m.from_user.first_name or "User"
-    delivered_caption = await format_delivered_with_mention(user_id, first_name)
-    _t_start = _time_mod.monotonic()
+    delivered_emoji = await get_emoji_async("DELIVERED")
+    delivered_caption = build_safe_media_caption(user_id, first_name, delivered_emoji)
+    _t_start = time.monotonic()
 
     sticker_msg_id = None
 
     try:
-        # Validate URL
         if not _is_valid_pinterest_url(url):
             _err = await get_emoji_async("ERROR")
-            await _safe_reply_text(
-                m,
-                f"{_err} Unable to process this link.\n\nPlease try again.",
-                parse_mode="HTML",
-            )
+            await _safe_reply_text(m, f"{_err} Unable to process this link.\n\nPlease try again.", parse_mode="HTML")
             return
 
-        # Resolve shortened URL first
+        # Resolve pin.it shortened URL
         if "pin.it/" in url:
             url = await _resolve_pin_url(url)
-            logger.info(f"PINTEREST: Resolved to {url}")
 
-        # Cache check (single video only)
+        # Cache check
         cached = await url_cache.get(url, "video")
         if cached:
             try:
-                sent = await _safe_reply_video(
-                    m,
-                    video=cached,
-                    caption=delivered_caption,
-                    parse_mode="HTML",
-                    supports_streaming=True,
-                )
+                sent = await _safe_reply_video(m, video=cached, caption=delivered_caption, parse_mode="HTML", supports_streaming=True)
                 if sent:
                     return
             except Exception:
-                pass  # Stale cache — fall through
+                pass
+
+        # Also check photo cache
+        cached_photo = await url_cache.get(url, "photo")
+        if cached_photo:
+            try:
+                sent = await _safe_reply_photo(m, photo=cached_photo, caption=delivered_caption, parse_mode="HTML")
+                if sent:
+                    return
+            except Exception:
+                pass
 
         async with download_semaphore:
             logger.info(f"PINTEREST: {url}")
-
-            # Send sticker — no progress text message
             sticker_msg_id = await send_sticker(bot, m.chat.id, "pinterest")
 
             try:
                 with tempfile.TemporaryDirectory() as tmp_dir:
                     tmp = Path(tmp_dir)
+                    files = await _download_pinterest(url, tmp)
 
-                    video_files = await _download_pinterest(url, tmp)
-
-                    if not video_files:
+                    if not files:
                         await delete_sticker(bot, m.chat.id, sticker_msg_id)
                         sticker_msg_id = None
                         _err = await get_emoji_async("ERROR")
-                        await _safe_reply_text(
-                            m,
-                            f"{_err} Unable to process this link.\n\nPlease try again.",
-                            parse_mode="HTML",
-                        )
+                        await _safe_reply_text(m, f"{_err} Unable to process this link.\n\nPlease try again.", parse_mode="HTML")
                         return
 
-                    # Delete sticker before sending
                     await delete_sticker(bot, m.chat.id, sticker_msg_id)
                     sticker_msg_id = None
 
                     total_sent = 0
-                    for video_idx, video_file in enumerate(video_files):
-                        if not video_file.exists():
-                            logger.warning(f"PIN: File {video_file} does not exist, skipping")
+                    for idx, file_path in enumerate(files):
+                        if not file_path.exists():
                             continue
 
-                        # Smart encode: stream copy if compatible, else adaptive
-                        encoded = tmp / f"pin_enc_{video_idx}.mp4"
-                        ok = await instagram_smart_encode(video_file, encoded)
-                        final = encoded if ok and encoded.exists() else video_file
+                        is_last = (idx == len(files) - 1)
+                        cap = delivered_caption if is_last else ""
 
-                        # File size check
-                        file_size_mb = final.stat().st_size / (1024 * 1024)
-                        logger.debug(f"PIN: File size {file_size_mb:.1f}MB")
-
-                        parts = await ensure_fits_telegram(final, tmp)
-
-                        for i, part in enumerate(parts):
-                            if not part.exists():
-                                logger.warning(f"PIN: Part {i} does not exist, skipping")
-                                continue
-                            info = await get_video_info(part)
-                            # Caption on last part of last video
-                            is_last = (video_idx == len(video_files) - 1) and (i == len(parts) - 1)
-                            cap = delivered_caption if is_last else f"Part {i+1}/{len(parts)}" if len(parts) > 1 else ""
-                            sent = await _safe_reply_video(
-                                m,
-                                video=FSInputFile(part),
-                                caption=cap,
-                                parse_mode="HTML",
-                                supports_streaming=True,
-                                width=info.get("width") or None,
-                                height=info.get("height") or None,
-                                duration=int(info.get("duration") or 0) or None,
-                            )
+                        if _is_image(file_path):
+                            # Send as photo
+                            sent = await _safe_reply_photo(m, photo=FSInputFile(file_path), caption=cap, parse_mode="HTML")
+                            if sent and sent.photo and len(files) == 1:
+                                await url_cache.set(url, "photo", sent.photo[-1].file_id)
                             total_sent += 1
-                            # Cache single-video, single-part result
-                            if sent and sent.video and len(video_files) == 1 and len(parts) == 1:
-                                await url_cache.set(url, "video", sent.video.file_id)
+
+                        elif _is_video(file_path):
+                            # Ensure video fits Telegram (no re-encode, just size check)
+                            parts = await ensure_fits_telegram(file_path, tmp)
+                            for i, part in enumerate(parts):
+                                if not part.exists():
+                                    continue
+                                info = await get_video_info(part)
+                                part_is_last = is_last and (i == len(parts) - 1)
+                                part_cap = delivered_caption if part_is_last else ""
+                                sent = await _safe_reply_video(
+                                    m, video=FSInputFile(part), caption=part_cap, parse_mode="HTML",
+                                    supports_streaming=True,
+                                    width=info.get("width") or None,
+                                    height=info.get("height") or None,
+                                    duration=int(info.get("duration") or 0) or None,
+                                )
+                                total_sent += 1
+                                if sent and sent.video and len(files) == 1 and len(parts) == 1:
+                                    await url_cache.set(url, "video", sent.video.file_id)
 
                     logger.info(f"PINTEREST: Sent {total_sent} file(s) to {user_id}")
-
-                    # Log to channel
-                    _elapsed = _time_mod.monotonic() - _t_start
-                    asyncio.create_task(log_download(
-                        user=m.from_user,
-                        link=url,
-                        chat=m.chat,
-                        media_type="Video (Pinterest)",
-                        time_taken=_elapsed,
-                    ))
+                    _elapsed = time.monotonic() - _t_start
+                    asyncio.create_task(log_download(user=m.from_user, link=url, chat=m.chat, media_type="Media (Pinterest)", time_taken=_elapsed))
 
             except asyncio.CancelledError:
                 raise
@@ -389,11 +317,7 @@ async def handle_pinterest(m: Message, url: str):
                 await delete_sticker(bot, m.chat.id, sticker_msg_id)
                 sticker_msg_id = None
                 _err = await get_emoji_async("ERROR")
-                await _safe_reply_text(
-                    m,
-                    f"{_err} Unable to process this link.\n\nPlease try again.",
-                    parse_mode="HTML",
-                )
+                await _safe_reply_text(m, f"{_err} Unable to process this link.\n\nPlease try again.", parse_mode="HTML")
             finally:
                 if sticker_msg_id:
                     await delete_sticker(bot, m.chat.id, sticker_msg_id)

@@ -40,37 +40,34 @@ from core.config import config
 # ─── Constants ────────────────────────────────────────────────────────────────
 TG_LIMIT_BYTES  = 49 * 1024 * 1024   # 49 MB safety margin
 SPLIT_CHUNK_MB  = 45                  # Each split part target
-AUDIO_KBPS      = 128                 # Audio bitrate (kbps)
-MIN_VIDEO_KBPS  = 500                 # Minimum video bitrate for constrained fallback
-FFMPEG_THREADS  = "6"
+AUDIO_KBPS      = 96                  # Audio bitrate — 96k is perfect for mobile
+MIN_VIDEO_KBPS  = 400                 # Minimum video bitrate for constrained fallback
+FFMPEG_THREADS  = "8"
 
 
 # ─── CRF quality strategy ────────────────────────────────────────────────────
 
 def _pick_crf(duration_s: float) -> int:
     """
-    CRF value — lower = higher quality, larger file.
-    Optimized for Telegram: sharpest possible within size limits.
+    CRF value — higher = smaller file, lower quality.
+    Tuned for Telegram mobile: sharp and small.
+    CRF 28 on 720p looks great on phone screens.
     """
     if duration_s <= 60:
-        return 22   # Short content: highest quality
+        return 28   # Short: sharp and small (~2-4MB for 30s)
     elif duration_s <= 180:
-        return 24   # Medium: great quality
+        return 30   # Medium: good quality, compact
     else:
-        return 26   # Long: good quality, controlled size
+        return 32   # Long: decent quality, very compact
 
 
 def _target_height(duration_s: float, original_height: int) -> int:
     """
-    Resolution rule:
-      <= 120s  →  keep original (max 1080)
-      >  120s  →  720p
-    Never upscale.
+    Resolution: always cap at 720p.
+    Telegram compresses 1080p anyway — 720p looks identical on mobile
+    and downloads/encodes 2-3x faster.
     """
-    if duration_s <= 120:
-        return min(original_height, 1080)
-    else:
-        return min(original_height, 720)
+    return min(original_height, 720)
 
 
 def _calc_constrained_kbps(target_mb: float, duration_s: float) -> int:
@@ -184,12 +181,12 @@ async def get_video_duration(path: Path) -> Optional[float]:
 # ─── Stream copy check ────────────────────────────────────────────────────────
 
 def _is_copy_compatible(info: dict) -> bool:
-    """True if video is already H.264/AAC — can stream copy"""
+    """True if video is already Telegram-compatible codec — can stream copy"""
     vcodec = (info.get("vcodec") or "").lower()
     acodec = (info.get("acodec") or "").lower()
     return (
-        vcodec in ("h264", "avc", "avc1") and
-        acodec in ("aac", "mp4a", "mp4a.40.2")
+        vcodec in ("h264", "avc", "avc1", "h265", "hevc") and
+        acodec in ("aac", "mp4a", "mp4a.40.2", "opus", "vorbis")
     )
 
 
@@ -241,7 +238,7 @@ async def adaptive_encode(
     args = [
         "-y", "-i", str(input_path),
         "-vcodec", "libx264",
-        "-preset", "veryfast",
+        "-preset", "ultrafast",
         "-crf", str(crf),
         "-vf", scale_filter,
         "-acodec", "aac",
@@ -286,7 +283,7 @@ async def _constrained_encode(
     args = [
         "-y", "-i", str(input_path),
         "-vcodec", "libx264",
-        "-preset", "veryfast",
+        "-preset", "ultrafast",
         "-b:v", f"{video_kbps}k",
         "-maxrate", f"{video_kbps}k",
         "-bufsize", f"{video_kbps * 2}k",
@@ -339,7 +336,7 @@ async def instagram_smart_encode(input_path: Path, output_path: Path) -> bool:
     args = [
         "-y", "-i", str(input_path),
         "-vcodec", "libx264",
-        "-preset", "veryfast",
+        "-preset", "ultrafast",
         "-crf", str(crf),
         "-vf", f"scale=-2:{target_h}:flags=lanczos,fps={fps:.3f}",
         "-acodec", "aac",
