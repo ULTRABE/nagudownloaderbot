@@ -40,12 +40,14 @@ def _base_opts(tmp: Path) -> dict:
     return {
         "quiet": True,
         "no_warnings": True,
+        "noprogress": True,
         "outtmpl": str(tmp / "%(title)s.%(ext)s"),
         "proxy": config.pick_proxy(),
         "http_headers": {"User-Agent": config.pick_user_agent()},
-        "socket_timeout": 30,
-        "retries": 2,
-        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "socket_timeout": 45,
+        "retries": 5,
+        "fragment_retries": 5,
+        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best",
     }
 
 def _layer1_opts(tmp: Path) -> dict:
@@ -54,8 +56,8 @@ def _layer1_opts(tmp: Path) -> dict:
 def _layer2_opts(tmp: Path) -> dict:
     opts = _base_opts(tmp)
     opts["http_headers"]["User-Agent"] = (
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
-        "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Instagram/303.0"
+        "Instagram 344.0.0.0.0 Android (33/13; 420dpi; 1080x2400; "
+        "samsung; SM-S918B; dm3q; qcom; en_US; 605596538)"
     )
     return opts
 
@@ -75,9 +77,12 @@ async def _try_download(url: str, opts: dict) -> Optional[Path]:
     try:
         with YoutubeDL(opts) as ydl:
             await asyncio.to_thread(lambda: ydl.download([url]))
+        # Video files first, then images (for photo posts)
         files = (
             list(tmp.glob("*.mp4")) + list(tmp.glob("*.webm")) +
-            list(tmp.glob("*.mov")) + list(tmp.glob("*.mkv"))
+            list(tmp.glob("*.mov")) + list(tmp.glob("*.mkv")) +
+            list(tmp.glob("*.jpg")) + list(tmp.glob("*.jpeg")) +
+            list(tmp.glob("*.png")) + list(tmp.glob("*.webp"))
         )
         return files[0] if files else None
     except Exception as e:
