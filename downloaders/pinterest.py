@@ -91,7 +91,8 @@ def _is_video(path: Path) -> bool:
 async def _download_pinterest(url: str, tmp: Path) -> List[Path]:
     """
     Download Pinterest media — videos AND photos.
-    Single-stream format for speed. No merge.
+    1. Try yt-dlp for video (HLS-compatible format)
+    2. If no video → scrape image from page (pinimg originals)
     """
     safe_title = _sanitize_filename("pin_%(id)s")
     base_opts = {
@@ -108,23 +109,87 @@ async def _download_pinterest(url: str, tmp: Path) -> List[Path]:
         "writethumbnail": False,
     }
 
-    # Try single-stream first (fastest)
-    opts = {**base_opts, "format": "best[ext=mp4]/best"}
+    # Try video download — use 'bestvideo+bestaudio/best' (handles HLS/m3u8)
+    opts = {**base_opts, "format": "bestvideo+bestaudio/best"}
     try:
         with YoutubeDL(opts) as ydl:
             await asyncio.to_thread(lambda: ydl.download([url]))
     except Exception as e:
-        logger.debug(f"Pinterest download failed: {type(e).__name__}: {str(e)[:100]}")
+        logger.debug(f"Pinterest video download failed: {str(e)[:100]}")
 
-    # Collect ALL downloaded files — videos and images
+    # Check for downloaded video files
     files = sorted(
         list(tmp.glob("*.mp4")) + list(tmp.glob("*.webm")) +
-        list(tmp.glob("*.mkv")) + list(tmp.glob("*.mov")) +
-        list(tmp.glob("*.jpg")) + list(tmp.glob("*.jpeg")) +
-        list(tmp.glob("*.png")) + list(tmp.glob("*.webp")) +
-        list(tmp.glob("*.gif"))
+        list(tmp.glob("*.mkv")) + list(tmp.glob("*.mov"))
     )
-    return files
+    if files:
+        return files
+
+    # No video found → try downloading image from page
+    logger.info(f"PINTEREST: No video, trying image scrape for {url[:60]}")
+    image_file = await _download_pinterest_image(url, tmp)
+    if image_file:
+        return [image_file]
+
+    return []
+
+
+async def _download_pinterest_image(url: str, tmp: Path) -> Optional[Path]:
+    """
+    Scrape Pinterest page for the original image URL and download it.
+    Looks for i.pinimg.com/originals/ URLs in the page HTML.
+    """
+    import re as _re
+    try:
+        proxy = proxy_manager.pick_proxy()
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            # Fetch the page
+            async with session.get(
+                url, allow_redirects=True,
+                headers={"User-Agent": config.pick_user_agent()},
+                proxy=proxy,
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                html_text = await resp.text()
+
+            # Find original quality image URLs
+            originals = _re.findall(r'"(https://i\.pinimg\.com/originals/[^"]+)"', html_text)
+            if not originals:
+                # Try any pinimg URL as fallback
+                all_imgs = _re.findall(r'"(https://i\.pinimg\.com/[^"]+)"', html_text)
+                # Sort by URL length (longer = higher quality usually)
+                all_imgs = sorted(set(all_imgs), key=len, reverse=True)
+                originals = all_imgs[:1] if all_imgs else []
+
+            if not originals:
+                logger.debug("Pinterest: no image URLs found in page")
+                return None
+
+            image_url = originals[0]
+            # Determine extension
+            ext = ".jpg"
+            if ".png" in image_url:
+                ext = ".png"
+            elif ".webp" in image_url:
+                ext = ".webp"
+            elif ".gif" in image_url:
+                ext = ".gif"
+
+            # Download the image
+            async with session.get(image_url, proxy=proxy) as img_resp:
+                if img_resp.status != 200:
+                    return None
+                data = await img_resp.read()
+                out_path = tmp / f"pin_image{ext}"
+                out_path.write_bytes(data)
+                logger.info(f"PINTEREST: Downloaded image ({len(data)/1024:.0f}KB)")
+                return out_path
+
+    except Exception as e:
+        logger.debug(f"Pinterest image scrape failed: {e}")
+        return None
 
 # ─── Safe send helpers ────────────────────────────────────────────────────────
 

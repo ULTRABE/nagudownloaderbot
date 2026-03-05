@@ -49,16 +49,15 @@ FFMPEG_THREADS  = "8"
 
 def _pick_crf(duration_s: float) -> int:
     """
-    CRF value — higher = smaller file, lower quality.
-    Tuned for Telegram mobile: sharp and small.
-    CRF 28 on 720p looks great on phone screens.
+    CRF value — lower = sharper, larger.
+    Tuned for 720p: CRF 23 is visually sharp, ~4-6MB for 30s Short.
     """
     if duration_s <= 60:
-        return 28   # Short: sharp and small (~2-4MB for 30s)
+        return 23   # Short: sharp and crisp
     elif duration_s <= 180:
-        return 30   # Medium: good quality, compact
+        return 26   # Medium: good quality
     else:
-        return 32   # Long: decent quality, very compact
+        return 28   # Long: balanced quality/size
 
 
 def _target_height(duration_s: float, original_height: int) -> int:

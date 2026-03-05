@@ -37,48 +37,31 @@ from utils.log_channel import log_download
 
 # ─── Layered extraction ───────────────────────────────────────────────────────
 
-def _base_opts(tmp: Path) -> dict:
-    return {
+def _base_opts(tmp: Path, use_proxy: bool = False) -> dict:
+    opts = {
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
         "outtmpl": str(tmp / "%(title)s.%(ext)s"),
-        "proxy": proxy_manager.pick_proxy(),
         "http_headers": {"User-Agent": config.pick_user_agent()},
-        "socket_timeout": 20,
+        "socket_timeout": 15,
         "retries": 3,
         "fragment_retries": 3,
+        "ignoreerrors": True,
         "format": "best[ext=mp4]/best",
     }
-
-def _layer1_opts(tmp: Path) -> dict:
-    return _base_opts(tmp)
-
-def _layer2_opts(tmp: Path) -> dict:
-    opts = _base_opts(tmp)
-    opts["http_headers"]["User-Agent"] = (
-        "Instagram 344.0.0.0.0 Android (33/13; 420dpi; 1080x2400; "
-        "samsung; SM-S918B; dm3q; qcom; en_US; 605596538)"
-    )
+    if use_proxy:
+        proxy = proxy_manager.pick_proxy()
+        if proxy:
+            opts["proxy"] = proxy
     return opts
 
-def _layer3_opts(tmp: Path) -> dict:
-    """Cookie-based fallback — skip silently if no cookies.
-    Uses absolute path from config so it works regardless of CWD (Railway).
-    """
-    opts = _base_opts(tmp)
-    # config.IG_COOKIES is an absolute path resolved from the project root
-    ig_cookie = config.IG_COOKIES
-    if ig_cookie and Path(ig_cookie).exists():
-        opts["cookiefile"] = ig_cookie
-    return opts
 
 async def _try_download(url: str, opts: dict) -> Optional[Path]:
     tmp = Path(opts["outtmpl"]).parent
     try:
         with YoutubeDL(opts) as ydl:
             await asyncio.to_thread(lambda: ydl.download([url]))
-        # Video files first, then images (for photo posts)
         files = (
             list(tmp.glob("*.mp4")) + list(tmp.glob("*.webm")) +
             list(tmp.glob("*.mov")) + list(tmp.glob("*.mkv")) +
@@ -90,13 +73,50 @@ async def _try_download(url: str, opts: dict) -> Optional[Path]:
         logger.debug(f"IG layer failed: {type(e).__name__}: {str(e)[:80]}")
         return None
 
+
 async def download_instagram(url: str, tmp: Path) -> Optional[Path]:
-    """3-layer Instagram download"""
-    for layer_fn in [_layer1_opts, _layer2_opts, _layer3_opts]:
-        opts = layer_fn(tmp)
+    """
+    Instagram download — parallel fast layers + cookie fallback.
+    Layer 1 (direct) + Layer 2 (proxy+IG UA) run in PARALLEL.
+    Layer 3 (cookies) as sequential fallback.
+    """
+    # Fast parallel: direct + proxy with Instagram UA
+    l1 = _base_opts(tmp, use_proxy=False)
+
+    l2 = _base_opts(tmp, use_proxy=True)
+    l2["http_headers"]["User-Agent"] = (
+        "Instagram 344.0.0.0.0 Android (33/13; 420dpi; 1080x2400; "
+        "samsung; SM-S918B; dm3q; qcom; en_US; 605596538)"
+    )
+
+    # Run in parallel
+    results: dict = {}
+
+    async def _attempt(idx: int, opts: dict):
+        sub = tmp / f"ig_layer_{idx}"
+        sub.mkdir(exist_ok=True)
+        opts["outtmpl"] = str(sub / "%(title)s.%(ext)s")
         result = await _try_download(url, opts)
         if result:
-            return result
+            results[idx] = result
+
+    await asyncio.gather(
+        asyncio.create_task(_attempt(0, l1)),
+        asyncio.create_task(_attempt(1, l2)),
+        return_exceptions=True,
+    )
+    for i in sorted(results.keys()):
+        return results[i]
+
+    # Sequential fallback: cookies
+    opts3 = _base_opts(tmp, use_proxy=True)
+    ig_cookie = config.IG_COOKIES
+    if ig_cookie and Path(ig_cookie).exists():
+        opts3["cookiefile"] = ig_cookie
+    result = await _try_download(url, opts3)
+    if result:
+        return result
+
     return None
 
 # ─── Safe reply helper ────────────────────────────────────────────────────────

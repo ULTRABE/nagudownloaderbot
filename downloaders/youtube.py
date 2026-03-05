@@ -74,74 +74,26 @@ def is_youtube_music(url: str) -> bool:
 
 # ─── yt-dlp option builders (4-layer fallback) ───────────────────────────────
 
-def _base_opts(tmp: Path) -> dict:
-    """Base yt-dlp options — optimized for speed"""
-    return {
+def _base_opts(tmp: Path, use_proxy: bool = False) -> dict:
+    """Base yt-dlp options — optimized for speed and reliability"""
+    opts = {
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
         "outtmpl": str(tmp / "%(title)s.%(ext)s"),
-        "proxy": proxy_manager.pick_proxy(),
         "http_headers": {"User-Agent": config.pick_user_agent()},
-        "socket_timeout": 20,
+        "socket_timeout": 15,
         "retries": 3,
         "fragment_retries": 3,
-        "extractor_retries": 2,
-        "ignoreerrors": False,
+        "extractor_retries": 3,
+        "ignoreerrors": True,  # Don't die on transient errors
     }
-
-def _layer1_opts(tmp: Path, fmt: str) -> dict:
-    """Layer 1: Default client — works for most content"""
-    opts = _base_opts(tmp)
-    opts["format"] = fmt
+    if use_proxy:
+        proxy = proxy_manager.pick_proxy()
+        if proxy:
+            opts["proxy"] = proxy
     return opts
 
-def _layer2_opts(tmp: Path, fmt: str) -> dict:
-    """Layer 2: mweb + ios clients — avoids 403 on desktop-blocked content"""
-    opts = _base_opts(tmp)
-    opts["format"] = fmt
-    opts["extractor_args"] = {"youtube": {"player_client": ["mweb", "ios"]}}
-    return opts
-
-def _layer3_opts(tmp: Path, fmt: str) -> dict:
-    """Layer 3: Cookies — authenticated access"""
-    opts = _base_opts(tmp)
-    opts["format"] = fmt
-    cookie_file = get_random_cookie(config.YT_COOKIES_FOLDER)
-    if cookie_file:
-        opts["cookiefile"] = cookie_file
-    return opts
-
-def _layer4_opts(tmp: Path, fmt: str) -> dict:
-    """Layer 4: Cookies + mweb — ultimate fallback"""
-    opts = _base_opts(tmp)
-    opts["format"] = fmt
-    opts["extractor_args"] = {"youtube": {"player_client": ["mweb"]}}
-    cookie_file = get_random_cookie(config.YT_COOKIES_FOLDER)
-    if cookie_file:
-        opts["cookiefile"] = cookie_file
-    return opts
-
-def _layer3_music_opts(tmp: Path, fmt: str) -> dict:
-    """Layer 3 (Music): YT Music cookies"""
-    opts = _base_opts(tmp)
-    opts["format"] = fmt
-    cookie_file = get_random_cookie(config.YT_MUSIC_COOKIES_FOLDER)
-    if cookie_file:
-        opts["cookiefile"] = cookie_file
-    return opts
-
-def _layer4_music_opts(tmp: Path, fmt: str) -> dict:
-    """Layer 4 (Music): YT Music cookies + mweb"""
-    opts = _base_opts(tmp)
-    opts["format"] = fmt
-    opts["extractor_args"] = {"youtube": {"player_client": ["mweb"]}}
-    cookie_file = get_random_cookie(config.YT_MUSIC_COOKIES_FOLDER)
-    if cookie_file:
-        opts["cookiefile"] = cookie_file
-    return opts
-
-# ─── Download helpers ─────────────────────────────────────────────────────────
 
 async def _try_download(url: str, opts: dict) -> Optional[Path]:
     """Attempt yt-dlp download. Returns file path or None."""
@@ -158,36 +110,123 @@ async def _try_download(url: str, opts: dict) -> Optional[Path]:
         logger.debug(f"yt-dlp layer failed: {type(e).__name__}: {str(e)[:100]}")
         return None
 
+
+async def _parallel_download(url: str, tmp: Path, fmt: str, opts_list: list) -> Optional[Path]:
+    """
+    Run multiple download attempts in PARALLEL. Return first success.
+    Each attempt uses its own subdirectory to avoid file conflicts.
+    """
+    results: dict = {}
+
+    async def _attempt(idx: int, opts: dict):
+        sub = tmp / f"layer_{idx}"
+        sub.mkdir(exist_ok=True)
+        opts["outtmpl"] = str(sub / "%(title)s.%(ext)s")
+        result = await _try_download(url, opts)
+        if result:
+            results[idx] = result
+
+    tasks = []
+    for i, opts in enumerate(opts_list):
+        tasks.append(asyncio.create_task(_attempt(i, opts)))
+
+    # Wait for all to complete (they're fast with 15s timeout)
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Return first successful result (prefer lower index = faster layer)
+    for i in sorted(results.keys()):
+        return results[i]
+    return None
+
+
 async def download_youtube_video(
     url: str,
     tmp: Path,
     fmt: str = "best[height<=720][ext=mp4]/best[height<=720]/bestvideo[height<=720]+bestaudio/best",
 ) -> Optional[Path]:
-    """Download YouTube video — 4-layer fallback for maximum reliability"""
-    for layer_fn in [_layer1_opts, _layer2_opts, _layer3_opts, _layer4_opts]:
-        opts = layer_fn(tmp, fmt)
+    """
+    Download YouTube video — parallel fast layers, then sequential fallback.
+    Layer 1 (direct, no proxy) + Layer 2 (mweb+ios) run in PARALLEL.
+    If both fail → Layer 3 (cookies) → Layer 4 (cookies+mweb) sequential.
+    """
+    # Fast parallel: Layer 1 (direct) + Layer 2 (mweb, with proxy)
+    l1 = _base_opts(tmp, use_proxy=False)
+    l1["format"] = fmt
+
+    l2 = _base_opts(tmp, use_proxy=True)
+    l2["format"] = fmt
+    l2["extractor_args"] = {"youtube": {"player_client": ["mweb", "ios"]}}
+
+    result = await _parallel_download(url, tmp, fmt, [l1, l2])
+    if result:
+        return result
+
+    # Sequential fallback: Layer 3 (cookies) → Layer 4 (cookies+mweb)
+    for use_mweb in [False, True]:
+        opts = _base_opts(tmp, use_proxy=True)
+        opts["format"] = fmt
+        cookie_file = get_random_cookie(config.YT_COOKIES_FOLDER)
+        if cookie_file:
+            opts["cookiefile"] = cookie_file
+        if use_mweb:
+            opts["extractor_args"] = {"youtube": {"player_client": ["mweb"]}}
         result = await _try_download(url, opts)
         if result:
             return result
+
     return None
 
-async def download_youtube_audio(url: str, tmp: Path, is_music: bool = False, quality: str = "192") -> Optional[Path]:
-    """Download YouTube/YT Music audio as MP3 — 4-layer fallback"""
-    fmt = "bestaudio[ext=m4a]/bestaudio/best"
-    layer_fns = [_layer1_opts, _layer2_opts]
-    if is_music:
-        layer_fns.extend([_layer3_music_opts, _layer4_music_opts])
-    else:
-        layer_fns.extend([_layer3_opts, _layer4_opts])
 
-    for layer_fn in layer_fns:
-        opts = layer_fn(tmp, fmt)
-        opts["postprocessors"] = [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": quality,
-        }]
+async def download_youtube_audio(url: str, tmp: Path, is_music: bool = False, quality: str = "192") -> Optional[Path]:
+    """Download YouTube/YT Music audio as MP3 — parallel + sequential fallback"""
+    fmt = "bestaudio[ext=m4a]/bestaudio/best"
+    pp = [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": quality}]
+
+    # Fast parallel: direct + mweb
+    l1 = _base_opts(tmp, use_proxy=False)
+    l1["format"] = fmt
+    l1["postprocessors"] = pp
+
+    l2 = _base_opts(tmp, use_proxy=True)
+    l2["format"] = fmt
+    l2["postprocessors"] = pp
+    l2["extractor_args"] = {"youtube": {"player_client": ["mweb", "ios"]}}
+
+    # Run parallel
+    results: dict = {}
+    async def _attempt(idx, opts):
+        sub = tmp / f"audio_layer_{idx}"
+        sub.mkdir(exist_ok=True)
+        opts["outtmpl"] = str(sub / "%(title)s.%(ext)s")
+        try:
+            with YoutubeDL(opts) as ydl:
+                await asyncio.to_thread(lambda: ydl.download([url]))
+            mp3_files = list(sub.glob("*.mp3"))
+            if mp3_files:
+                results[idx] = mp3_files[0]
+        except Exception as e:
+            logger.debug(f"Audio layer {idx} failed: {str(e)[:80]}")
+
+    await asyncio.gather(
+        asyncio.create_task(_attempt(0, l1)),
+        asyncio.create_task(_attempt(1, l2)),
+        return_exceptions=True,
+    )
+    for i in sorted(results.keys()):
+        return results[i]
+
+    # Sequential fallback with cookies
+    cookie_folder = config.YT_MUSIC_COOKIES_FOLDER if is_music else config.YT_COOKIES_FOLDER
+    for use_mweb in [False, True]:
+        opts = _base_opts(tmp, use_proxy=True)
+        opts["format"] = fmt
+        opts["postprocessors"] = pp
         opts["outtmpl"] = str(tmp / "%(title)s.%(ext)s")
+        cookie_file = get_random_cookie(cookie_folder)
+        if cookie_file:
+            opts["cookiefile"] = cookie_file
+        if use_mweb:
+            opts["extractor_args"] = {"youtube": {"player_client": ["mweb"]}}
         try:
             with YoutubeDL(opts) as ydl:
                 await asyncio.to_thread(lambda: ydl.download([url]))
@@ -195,7 +234,7 @@ async def download_youtube_audio(url: str, tmp: Path, is_music: bool = False, qu
             if mp3_files:
                 return mp3_files[0]
         except Exception as e:
-            logger.debug(f"Audio layer failed: {str(e)[:80]}")
+            logger.debug(f"Audio cookie layer failed: {str(e)[:80]}")
 
     return None
 
