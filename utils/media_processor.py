@@ -1,30 +1,29 @@
 """
-Media Processor — Adaptive re-encode with aggressive target-size rules.
+Media Processor — CRF-based encoding for sharpest quality at smallest size.
+
+Strategy:
+  1. Stream copy if already H.264/AAC and fits Telegram limit
+  2. CRF-based encode (sharpest quality, variable bitrate)
+  3. If CRF output > 49MB → constrained bitrate fallback
+  4. Split as last resort
+
+CRF values (lower = sharper, larger file):
+  <= 60s   → CRF 22  (short: max quality)
+  <= 180s  → CRF 24  (medium: great quality)
+  > 180s   → CRF 26  (long: good quality, controlled size)
 
 Resolution rule:
-  duration <= 120s  →  keep original (allow 1080p)
-  duration >  120s  →  downscale to 720p
+  <= 120s  → keep original (max 1080p)
+  > 120s   → 720p
 
-Target size rule:
-  <= 30s   →  5 MB
-  <= 120s  →  7 MB
-  <= 300s  →  10 MB
-  > 300s   →  14 MB
-
-Bitrate formula:
-  video_kbps = ((target_MB * 8192) / duration_s) - 128
-  clamp minimum to 600 kbps
-
-Encode command (FAST MODE):
-  ffmpeg -vcodec libx264 -preset veryfast -b:v {kbps}k
-         -maxrate {kbps}k -bufsize {kbps*2}k
-         -acodec aac -b:a 128k -movflags +faststart -threads 6
+Encoding:
+  libx264 -preset veryfast -crf {value}
+  aac 128k, MP4 + faststart, yuv420p
 
 Rules:
   - Never 2-pass
   - Never slow preset
-  - Never VP9 in speed mode
-  - Stream copy if already small + H.264/AAC
+  - Stream copy whenever possible (fastest path)
   - Always MP4 + faststart for Telegram preview
 """
 import asyncio
@@ -41,23 +40,24 @@ from core.config import config
 # ─── Constants ────────────────────────────────────────────────────────────────
 TG_LIMIT_BYTES  = 49 * 1024 * 1024   # 49 MB safety margin
 SPLIT_CHUNK_MB  = 45                  # Each split part target
-MIN_VIDEO_KBPS  = 600                 # Minimum video bitrate
 AUDIO_KBPS      = 128                 # Audio bitrate (kbps)
+MIN_VIDEO_KBPS  = 500                 # Minimum video bitrate for constrained fallback
 FFMPEG_THREADS  = "6"
 
 
-# ─── Target size lookup ───────────────────────────────────────────────────────
+# ─── CRF quality strategy ────────────────────────────────────────────────────
 
-def _target_size_mb(duration_s: float) -> float:
-    """Return target file size in MB based on duration"""
-    if duration_s <= 30:
-        return 5.0
-    elif duration_s <= 120:
-        return 7.0
-    elif duration_s <= 300:
-        return 10.0
+def _pick_crf(duration_s: float) -> int:
+    """
+    CRF value — lower = higher quality, larger file.
+    Optimized for Telegram: sharpest possible within size limits.
+    """
+    if duration_s <= 60:
+        return 22   # Short content: highest quality
+    elif duration_s <= 180:
+        return 24   # Medium: great quality
     else:
-        return 14.0
+        return 26   # Long: good quality, controlled size
 
 
 def _target_height(duration_s: float, original_height: int) -> int:
@@ -73,10 +73,10 @@ def _target_height(duration_s: float, original_height: int) -> int:
         return min(original_height, 720)
 
 
-def _calc_video_kbps(target_mb: float, duration_s: float) -> int:
+def _calc_constrained_kbps(target_mb: float, duration_s: float) -> int:
     """
+    Constrained bitrate fallback — used only when CRF output exceeds 49MB.
     video_kbps = ((target_MB * 8192) / duration_s) - AUDIO_KBPS
-    Clamp to MIN_VIDEO_KBPS.
     """
     if duration_s <= 0:
         return MIN_VIDEO_KBPS
@@ -193,35 +193,33 @@ def _is_copy_compatible(info: dict) -> bool:
     )
 
 
-# ─── Core encode function ─────────────────────────────────────────────────────
+# ─── Core encode function (CRF-based) ─────────────────────────────────────────
 
 async def adaptive_encode(
     input_path: Path,
     output_path: Path,
     force_height: Optional[int] = None,
-    force_kbps: Optional[int] = None,
+    force_crf: Optional[int] = None,
 ) -> bool:
     """
-    Adaptive encode using veryfast preset + calculated bitrate.
+    CRF-based adaptive encode — sharpest quality at smallest size.
 
     Steps:
       1. Get video info
-      2. Calculate target size, height, bitrate
-      3. If already small + H.264/AAC → stream copy
-      4. Else → encode with veryfast + calculated bitrate
+      2. If already H.264/AAC and under Telegram limit → stream copy
+      3. CRF encode with auto quality selection
+      4. If output > 49MB → constrained bitrate fallback
     """
     info = await get_video_info(input_path)
     duration = info.get("duration") or 60.0
     orig_height = info.get("height") or 1080
     size = get_file_size(input_path)
 
-    target_mb   = _target_size_mb(duration)
-    target_h    = force_height or _target_height(duration, orig_height)
-    video_kbps  = force_kbps or _calc_video_kbps(target_mb, duration)
-    target_bytes = int(target_mb * 1024 * 1024)
+    target_h = force_height or _target_height(duration, orig_height)
+    crf = force_crf or _pick_crf(duration)
 
-    # Stream copy if already compatible and small enough
-    if _is_copy_compatible(info) and size <= target_bytes:
+    # Stream copy if already compatible and under Telegram limit
+    if _is_copy_compatible(info) and size <= TG_LIMIT_BYTES:
         logger.debug(f"adaptive_encode: stream copy ({size/1024/1024:.1f}MB)")
         args = [
             "-y", "-i", str(input_path),
@@ -237,10 +235,53 @@ async def adaptive_encode(
     # Scale filter — never upscale
     scale_filter = f"scale=-2:{target_h}:flags=lanczos"
 
-    logger.debug(
-        f"adaptive_encode: {duration:.0f}s → {target_h}p "
-        f"@ {video_kbps}kbps (target {target_mb}MB)"
-    )
+    logger.debug(f"adaptive_encode: {duration:.0f}s → {target_h}p CRF {crf}")
+
+    # CRF-based encode — sharpest quality
+    args = [
+        "-y", "-i", str(input_path),
+        "-vcodec", "libx264",
+        "-preset", "veryfast",
+        "-crf", str(crf),
+        "-vf", scale_filter,
+        "-acodec", "aac",
+        "-b:a", f"{AUDIO_KBPS}k",
+        "-movflags", "+faststart",
+        "-pix_fmt", "yuv420p",
+        "-threads", FFMPEG_THREADS,
+        str(output_path),
+    ]
+    rc, err = await _run_ffmpeg(args)
+
+    if rc == 0 and output_path.exists():
+        out_size = get_file_size(output_path)
+        if out_size <= TG_LIMIT_BYTES:
+            logger.debug(f"CRF encode: {out_size/1024/1024:.1f}MB (CRF {crf})")
+            return True
+        # CRF output too large — constrained bitrate fallback
+        logger.info(f"CRF output {out_size/1024/1024:.1f}MB > 49MB, using constrained bitrate")
+        return await _constrained_encode(input_path, output_path, duration, target_h)
+
+    if rc != 0:
+        logger.warning(f"adaptive_encode CRF failed: {err[:200]}")
+    return rc == 0
+
+
+async def _constrained_encode(
+    input_path: Path,
+    output_path: Path,
+    duration: float,
+    target_h: int,
+) -> bool:
+    """
+    Constrained bitrate fallback — guarantees output fits Telegram limit.
+    Used only when CRF output exceeds 49MB.
+    """
+    target_mb = 45.0  # Target 45MB to fit under 49MB limit
+    video_kbps = _calc_constrained_kbps(target_mb, duration)
+    scale_filter = f"scale=-2:{target_h}:flags=lanczos"
+
+    logger.debug(f"constrained_encode: {duration:.0f}s → {target_h}p @ {video_kbps}kbps")
 
     args = [
         "-y", "-i", str(input_path),
@@ -259,7 +300,7 @@ async def adaptive_encode(
     ]
     rc, err = await _run_ffmpeg(args)
     if rc != 0:
-        logger.warning(f"adaptive_encode failed: {err[:200]}")
+        logger.warning(f"constrained_encode failed: {err[:200]}")
     return rc == 0
 
 
@@ -267,15 +308,15 @@ async def adaptive_encode(
 
 async def instagram_smart_encode(input_path: Path, output_path: Path) -> bool:
     """
-    Instagram: stream copy if H.264/AAC, else adaptive encode.
-    Preserve native FPS. Target 4–6MB for short content.
+    Instagram: stream copy if H.264/AAC and small, else CRF encode.
+    Preserve native FPS. Max quality for short Instagram content.
     """
     info = await get_video_info(input_path)
     duration = info.get("duration") or 30.0
     size = get_file_size(input_path)
-    target_bytes = int(_target_size_mb(duration) * 1024 * 1024)
 
-    if _is_copy_compatible(info) and size <= target_bytes:
+    # Stream copy if already compatible and fits
+    if _is_copy_compatible(info) and size <= TG_LIMIT_BYTES:
         logger.debug("Instagram: stream copy")
         args = [
             "-y", "-i", str(input_path),
@@ -287,21 +328,19 @@ async def instagram_smart_encode(input_path: Path, output_path: Path) -> bool:
         if rc == 0:
             return True
 
-    # Re-encode preserving FPS
+    # CRF encode preserving FPS
     fps = info.get("fps") or 30.0
     fps = min(fps, 60.0)
     orig_height = info.get("height") or 1080
     target_h = _target_height(duration, orig_height)
-    video_kbps = _calc_video_kbps(_target_size_mb(duration), duration)
+    crf = _pick_crf(duration)
 
-    logger.debug(f"Instagram: re-encode {target_h}p @ {video_kbps}kbps fps={fps:.1f}")
+    logger.debug(f"Instagram: CRF {crf} {target_h}p fps={fps:.1f}")
     args = [
         "-y", "-i", str(input_path),
         "-vcodec", "libx264",
         "-preset", "veryfast",
-        "-b:v", f"{video_kbps}k",
-        "-maxrate", f"{video_kbps}k",
-        "-bufsize", f"{video_kbps * 2}k",
+        "-crf", str(crf),
         "-vf", f"scale=-2:{target_h}:flags=lanczos,fps={fps:.3f}",
         "-acodec", "aac",
         "-b:a", f"{AUDIO_KBPS}k",
@@ -320,15 +359,13 @@ async def instagram_smart_encode(input_path: Path, output_path: Path) -> bool:
 
 async def reencode_shorts(input_path: Path, output_path: Path) -> bool:
     """
-    YouTube Shorts: stream copy if compatible, else veryfast encode.
-    Short content → keep 1080p.
+    YouTube Shorts: stream copy if compatible, else CRF encode.
+    Short content → keep 1080p, CRF 22 (max quality).
     """
     info = await get_video_info(input_path)
-    duration = info.get("duration") or 30.0
     size = get_file_size(input_path)
-    target_bytes = int(_target_size_mb(duration) * 1024 * 1024)
 
-    if _is_copy_compatible(info) and size <= target_bytes:
+    if _is_copy_compatible(info) and size <= TG_LIMIT_BYTES:
         args = [
             "-y", "-i", str(input_path),
             "-c", "copy",
@@ -339,7 +376,8 @@ async def reencode_shorts(input_path: Path, output_path: Path) -> bool:
         if rc == 0:
             return True
 
-    return await adaptive_encode(input_path, output_path)
+    # Shorts are short → use best quality CRF 22
+    return await adaptive_encode(input_path, output_path, force_crf=22)
 
 
 # ─── Ensure fits Telegram ─────────────────────────────────────────────────────
@@ -352,7 +390,7 @@ async def ensure_fits_telegram(
     """
     Ensure video fits Telegram limits.
     1. If fits → ensure MP4 faststart
-    2. Adaptive encode
+    2. CRF adaptive encode
     3. Split if still too large
     Returns list of paths to send.
     """
@@ -373,7 +411,7 @@ async def ensure_fits_telegram(
                 return [remuxed]
         return [video_path]
 
-    logger.info(f"File {size/1024/1024:.1f}MB exceeds limit, adaptive encode")
+    logger.info(f"File {size/1024/1024:.1f}MB exceeds limit, CRF adaptive encode")
 
     encoded = tmp_dir / f"enc_{video_path.stem}.mp4"
     ok = await adaptive_encode(video_path, encoded)
@@ -465,7 +503,7 @@ async def reencode_video(
     crf: int = 23,
 ) -> bool:
     """Legacy compat — delegates to adaptive_encode"""
-    return await adaptive_encode(input_path, output_path, force_height=target_height)
+    return await adaptive_encode(input_path, output_path, force_height=target_height, force_crf=crf)
 
 
 async def smart_encode_for_telegram(
