@@ -320,6 +320,13 @@ async def build_start_keyboard(bot_username: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def build_back_keyboard() -> InlineKeyboardMarkup:
+    """Single '← Back' button to return to main menu."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="← Back", callback_data="cb_back"),
+    ]])
+
+
 # ─── /help ────────────────────────────────────────────────────────────────────
 
 async def format_help() -> str:

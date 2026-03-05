@@ -40,6 +40,7 @@ from downloaders.spotify import handle_spotify_playlist
 from ui.formatting import (
     format_welcome,
     build_start_keyboard,
+    build_back_keyboard,
     format_help,
     format_admin_panel,
     format_id,
@@ -189,54 +190,93 @@ async def start_command(m: Message):
 
 # ─── Inline button callbacks (start keyboard) ─────────────────────────────────
 
-@dp.callback_query(lambda c: c.data == "cb_download")
-async def cb_download(callback):
-    """Download button — show instruction"""
-    await callback.answer()
-    _dl = await get_emoji_async("DOWNLOAD")
+async def _edit_inline(callback, text: str, keyboard=None):
+    """Edit the message in-place — works for both photo captions and text messages."""
+    kb = keyboard or build_back_keyboard()
     try:
-        await callback.message.reply(
-            f"{_dl} <b>How to Download</b>\n\n"
-            "Paste any supported link directly in the chat.\n\n"
-            "Supported:\n"
-            "• YouTube — Videos, Shorts, Music\n"
-            "• Spotify — Tracks &amp; Playlists\n"
-            "• Instagram — Reels &amp; Posts\n"
-            "• Pinterest — Video Pins",
+        # Try edit caption first (for photo messages from /start)
+        await callback.message.edit_caption(
+            caption=text,
             parse_mode="HTML",
+            reply_markup=kb,
         )
     except Exception:
-        pass
+        try:
+            # Fallback: edit text (for plain text messages)
+            await callback.message.edit_text(
+                text=text,
+                parse_mode="HTML",
+                reply_markup=kb,
+            )
+        except Exception:
+            pass
+
+
+@dp.callback_query(lambda c: c.data == "cb_download")
+async def cb_download(callback):
+    """Download — edit in-place, no new message"""
+    await callback.answer()
+    _dl = await get_emoji_async("DOWNLOAD")
+    yt = await get_emoji_async("YT")
+    sp = await get_emoji_async("SPOTIFY")
+    ig = await get_emoji_async("INSTA")
+    pin = await get_emoji_async("PINTEREST")
+    text = (
+        f"{_dl} <b>How to Download</b>\n\n"
+        "Paste any supported link in the chat.\n\n"
+        f"  {yt}  YouTube\n"
+        f"  {ig}  Instagram\n"
+        f"  {sp}  Spotify\n"
+        f"  {pin}  Pinterest"
+    )
+    await _edit_inline(callback, text)
 
 
 @dp.callback_query(lambda c: c.data == "cb_help")
 async def cb_help(callback):
-    """Help button — show help message"""
+    """Help — edit in-place"""
     await callback.answer()
-    try:
-        await callback.message.reply(
-            await format_help(),
-            parse_mode="HTML",
-        )
-    except Exception:
-        pass
+    info = await get_emoji_async("INFO")
+    text = (
+        f"{info} <b>Commands</b>\n\n"
+        "/start  ·  Start the bot\n"
+        "/help  ·  Show help\n"
+        "/id  ·  Get user ID\n"
+        "/chatid  ·  Get chat ID\n"
+        "/myinfo  ·  Account details\n"
+        "/mp3  ·  Extract audio\n"
+        "/ping  ·  Check latency\n"
+        "/status  ·  Bot status"
+    )
+    await _edit_inline(callback, text)
 
 
 @dp.callback_query(lambda c: c.data == "cb_settings")
 async def cb_settings(callback):
-    """Settings button — show available settings info"""
+    """Settings — edit in-place"""
     await callback.answer()
     _info = await get_emoji_async("INFO")
+    text = (
+        f"{_info} <b>Settings</b>\n\n"
+        "/assign  ·  Configure emojis\n"
+        "/status  ·  Bot status\n"
+        "/myinfo  ·  Your account info"
+    )
+    await _edit_inline(callback, text)
+
+
+@dp.callback_query(lambda c: c.data == "cb_back")
+async def cb_back(callback):
+    """Back button — restore main menu"""
+    await callback.answer()
     try:
-        await callback.message.reply(
-            f"{_info} <b>Settings</b>\n\n"
-            "Use /assign to configure custom emojis (admin only).\n"
-            "Use /status to check bot status.\n"
-            "Use /myinfo to view your account info.",
-            parse_mode="HTML",
-        )
+        bot_me = await bot.get_me()
+        bot_username = bot_me.username or ""
     except Exception:
-        pass
+        bot_username = ""
+    welcome_text = await format_welcome(callback.from_user, callback.from_user.id)
+    keyboard = await build_start_keyboard(bot_username)
+    await _edit_inline(callback, welcome_text, keyboard)
 
 
 # ─── /help ────────────────────────────────────────────────────────────────────
@@ -470,25 +510,14 @@ async def cmd_status(m: Message):
 
 @dp.callback_query(lambda c: c.data == "status")
 async def cb_status(callback):
+    """Status — edit in-place"""
     uptime_secs = int(time.time() - _BOT_START_TIME)
     days = uptime_secs // 86400
     hours = (uptime_secs % 86400) // 3600
     uptime_str = f"{days}d {hours}h"
     await callback.answer()
-    try:
-        await callback.message.reply(
-            await format_status(active_jobs=0, queue=0, uptime=uptime_str),
-            parse_mode="HTML",
-        )
-    except Exception:
-        try:
-            await bot.send_message(
-                callback.message.chat.id,
-                await format_status(active_jobs=0, queue=0, uptime=uptime_str),
-                parse_mode="HTML",
-            )
-        except Exception:
-            pass
+    text = await format_status(active_jobs=0, queue=0, uptime=uptime_str)
+    await _edit_inline(callback, text)
 
 
 # ─── Admin commands ───────────────────────────────────────────────────────────
