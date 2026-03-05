@@ -164,8 +164,8 @@ def bold(text: str) -> str:
 
 
 def quoted_block(content: str) -> str:
-    """Telegram expandable quote block — legacy compat"""
-    return f"<blockquote>{content}</blockquote>"
+    """Legacy compat stub — returns content without ugly blockquote wrapper"""
+    return content
 
 
 def styled_text(text: str) -> str:
@@ -174,30 +174,13 @@ def styled_text(text: str) -> str:
 
 
 def premium_panel(title: str, lines: list) -> str:
-    """Legacy compat — builds a quoted panel"""
-    content = f"{title}\n{'─' * 28}\n" + "\n".join(lines)
-    return quoted_block(content)
+    """Legacy compat stub — returns clean emoji-driven text, no borders"""
+    return f"{title}\n\n" + "\n".join(lines)
 
 
 def code_panel(lines: List[str], width: int = 32) -> str:
-    """Monospace panel wrapped in <code> block"""
-    top    = f"╔{'═' * width}╗"
-    mid    = f"╠{'═' * width}╣"
-    bottom = f"╚{'═' * width}╝"
-
-    def row(text: str) -> str:
-        text = text[:width]
-        pad = width - len(text)
-        return f"║ {text}{' ' * (pad - 1)}║"
-
-    result = [top]
-    for line in lines:
-        if line == "---":
-            result.append(mid)
-        else:
-            result.append(row(line))
-    result.append(bottom)
-    return f"<code>{chr(10).join(result)}</code>"
+    """Legacy compat stub — returns clean text, no ugly box-drawing borders"""
+    return "\n".join(lines)
 
 
 # ─── Processing indicators ────────────────────────────────────────────────────
@@ -273,14 +256,13 @@ async def format_welcome(user: User, user_id: int) -> str:
     zap  = await get_emoji_async("ZAP")
 
     return (
-        "◇—◇ <b>𝐍𝐀𝐆𝐔 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑 𝐁𝐎𝐓</b> ◇—◇\n\n"
+        "◇—◇ <b>𝐍𝐀𝐆𝐔 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑</b> ◇—◇\n\n"
         f"{zap} <b>Fast &amp; Powerful Media Downloader</b>\n\n"
-        "Download videos &amp; audio from:\n\n"
-        f"{yt} YouTube\n"
-        f"{ig} Instagram\n"
-        f"{sp} Spotify\n"
-        f"{pin} Pinterest\n\n"
-        "Paste a link and I'll handle the rest."
+        f"{yt}  YouTube — Videos, Shorts, Music\n"
+        f"{ig}  Instagram — Reels &amp; Posts\n"
+        f"{sp}  Spotify — Tracks &amp; Playlists\n"
+        f"{pin}  Pinterest — Video Pins\n\n"
+        "Just paste a link ✨"
     )
 
 
@@ -307,10 +289,10 @@ async def build_start_keyboard(bot_username: str) -> InlineKeyboardMarkup:
 
     rows = []
 
-    # Row 1: Download | Status
+    # Row 1: Download | Status (colored)
     rows.append([
-        InlineKeyboardButton(text="📥 Download", callback_data="cb_download"),
-        InlineKeyboardButton(text="📊 Status",   callback_data="status"),
+        InlineKeyboardButton(text="📥 Download", callback_data="cb_download", style="primary"),
+        InlineKeyboardButton(text="📊 Status",   callback_data="status", style="success"),
     ])
 
     # Row 2: Help | Settings
@@ -525,55 +507,27 @@ async def format_spotify_complete(user: User, total: int, sent: int) -> str:
     return await format_playlist_final(user, "", total, sent, total - sent)
 
 
-# ─── YouTube playlist ─────────────────────────────────────────────────────────
+# ─── YouTube playlist (REMOVED — stubs for import compat) ─────────────────────
 
 def format_yt_playlist_mode(playlist_name: str) -> str:
-    """Mode selection for YouTube playlist"""
-    name_short = _escape((playlist_name or "Playlist")[:40])
-    return f"{HEADER}\n\n🎬 𝐏ʟᴀʏʟɪꜱᴛ: {name_short}\n\n𝐂ʜᴏᴏꜱᴇ 𝐃ᴏᴡɴʟᴏᴀᴅ 𝐌ᴏᴅᴇ:"
-
+    """DEPRECATED: YT playlist feature removed"""
+    return ""
 
 def format_yt_audio_quality() -> str:
-    """Audio quality selection"""
-    return f"{HEADER}\n\n🎵 𝐀ᴜᴅɪᴏ 𝐐ᴜᴀʟɪᴛʏ\n\n𝐂ʜᴏᴏꜱᴇ ʏᴏᴜʀ ᴘʀᴇꜰᴇʀʀᴇᴅ ᴀᴜᴅɪᴏ ǫᴜᴀʟɪᴛʏ:"
-
+    """DEPRECATED: YT playlist feature removed"""
+    return ""
 
 def format_yt_video_quality() -> str:
-    """Video quality selection"""
-    return f"{HEADER}\n\n🎥 𝐕ɪᴅᴇᴏ 𝐐ᴜᴀʟɪᴛʏ\n\n𝐂ʜᴏᴏꜱᴇ ʏᴏᴜʀ ᴘʀᴇꜰᴇʀʀᴇᴅ ᴠɪᴅᴇᴏ ǫᴜᴀʟɪᴛʏ:"
-
+    """DEPRECATED: YT playlist feature removed"""
+    return ""
 
 def format_yt_playlist_progress(name: str, done: int, total: int) -> str:
-    """YouTube playlist progress bar"""
-    if total > 0:
-        pct = min(100, int(done * 100 / total))
-    else:
-        pct = 0
-    width = 10
-    filled = int(width * pct / 100)
-    bar = "█" * filled + "░" * (width - filled)
-    name_short = _escape((name or "Playlist")[:30])
-    return (
-        f"{HEADER}\n\n"
-        f"🎬 𝐏ʟᴀʏʟɪꜱᴛ: {name_short}\n\n"
-        f"[{bar}] {pct}%\n"
-        f"{done} / {total}"
-    )
-
+    """DEPRECATED: YT playlist feature removed"""
+    return ""
 
 async def format_yt_playlist_final(name: str, total: int, sent: int, failed: int) -> str:
-    """YouTube playlist completion message"""
-    crown   = await get_emoji_async("CROWN")
-    success = await get_emoji_async("SUCCESS")
-    name_short = _escape((name or "Playlist")[:30])
-    return _h(
-        f"{crown} 𝐏ʟᴀʏʟɪꜱᴛ 𝐅ɪɴɪꜱʜᴇᴅ\n\n"
-        f"𝐍ᴀᴍᴇ: {name_short}\n"
-        f"𝐓ᴏᴛᴀʟ: {total}\n"
-        f"𝐒ᴇɴᴛ: {sent}\n"
-        f"𝐅ᴀɪʟᴇᴅ: {failed}\n\n"
-        f"{success} 𝐀ʟʟ 𝐅ɪʟᴇꜱ 𝐒ᴇɴᴛ"
-    )
+    """DEPRECATED: YT playlist feature removed"""
+    return ""
 
 
 # ─── Broadcast ────────────────────────────────────────────────────────────────
