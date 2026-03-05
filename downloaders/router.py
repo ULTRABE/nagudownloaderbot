@@ -123,19 +123,21 @@ async def global_error_handler(event: ErrorEvent) -> bool:
 
 # ─── Safe reply helper ────────────────────────────────────────────────────────
 
-async def _safe_reply(m: Message, text: str, **kwargs) -> None:
-    """Reply with fallback to plain send if original message was deleted."""
+async def _safe_reply(m: Message, text: str, **kwargs):
+    """Reply with fallback to plain send if original message was deleted.
+    Returns the sent Message object, or None on total failure."""
     try:
-        await m.reply(text, **kwargs)
+        return await m.reply(text, **kwargs)
     except Exception as e:
         err_str = str(e).lower()
         if "message to be replied not found" in err_str or "replied message not found" in err_str:
             try:
-                await bot.send_message(m.chat.id, text, **kwargs)
+                return await bot.send_message(m.chat.id, text, **kwargs)
             except Exception:
-                pass
+                return None
         else:
             logger.error(f"Reply failed: {e}")
+            return None
 
 # ─── /start ───────────────────────────────────────────────────────────────────
 
@@ -713,6 +715,13 @@ async def handle_assign_emoji(m: Message):
 
     # Only process if this user has a pending assignment
     if m.from_user.id not in _assign_pending:
+        return
+
+    # Skip messages that look like URLs — let link handlers process them
+    _text = (m.text or "").strip()
+    if _text.startswith("http://") or _text.startswith("https://"):
+        # Cancel pending assignment so admin can restart via /assign later
+        _assign_pending.pop(m.from_user.id, None)
         return
 
     key = _assign_pending.pop(m.from_user.id, None)
