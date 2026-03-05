@@ -50,7 +50,6 @@ from utils.logger import logger
 from utils.proxy_manager import proxy_manager
 from utils.cache import url_cache
 from utils.media_processor import (
-    reencode_shorts,
     get_video_info, get_file_size, _run_ffmpeg,
 )
 from utils.watchdog import acquire_user_slot, release_user_slot
@@ -76,7 +75,7 @@ def is_youtube_music(url: str) -> bool:
 # ─── yt-dlp option builders (4-layer fallback) ───────────────────────────────
 
 def _base_opts(tmp: Path) -> dict:
-    """Base yt-dlp options — hardened for reliability"""
+    """Base yt-dlp options — optimized for speed"""
     return {
         "quiet": True,
         "no_warnings": True,
@@ -84,10 +83,10 @@ def _base_opts(tmp: Path) -> dict:
         "outtmpl": str(tmp / "%(title)s.%(ext)s"),
         "proxy": proxy_manager.pick_proxy(),
         "http_headers": {"User-Agent": config.pick_user_agent()},
-        "socket_timeout": 45,
-        "retries": 5,
-        "fragment_retries": 5,
-        "extractor_retries": 3,
+        "socket_timeout": 20,
+        "retries": 3,
+        "fragment_retries": 3,
+        "extractor_retries": 2,
         "ignoreerrors": False,
     }
 
@@ -162,7 +161,7 @@ async def _try_download(url: str, opts: dict) -> Optional[Path]:
 async def download_youtube_video(
     url: str,
     tmp: Path,
-    fmt: str = "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+    fmt: str = "best[height<=720][ext=mp4]/best[height<=720]/bestvideo[height<=720]+bestaudio/best",
 ) -> Optional[Path]:
     """Download YouTube video — 4-layer fallback for maximum reliability"""
     for layer_fn in [_layer1_opts, _layer2_opts, _layer3_opts, _layer4_opts]:
@@ -172,7 +171,7 @@ async def download_youtube_video(
             return result
     return None
 
-async def download_youtube_audio(url: str, tmp: Path, is_music: bool = False, quality: str = "320") -> Optional[Path]:
+async def download_youtube_audio(url: str, tmp: Path, is_music: bool = False, quality: str = "192") -> Optional[Path]:
     """Download YouTube/YT Music audio as MP3 — 4-layer fallback"""
     fmt = "bestaudio[ext=m4a]/bestaudio/best"
     layer_fns = [_layer1_opts, _layer2_opts]
@@ -407,8 +406,8 @@ async def handle_youtube_short(m: Message, url: str):
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp = Path(tmp_dir)
 
-            # Broader format: no ext restriction → catches more formats
-            video_file = await download_youtube_video(url, tmp, fmt="bestvideo[height<=1080]+bestaudio/best[height<=1080]/best")
+            # Single-stream format — no merge needed = instant download
+            video_file = await download_youtube_video(url, tmp, fmt="best[height<=720][ext=mp4]/best[height<=720]/best")
 
             if not video_file or not video_file.exists():
                 await delete_sticker(bot, m.chat.id, sticker_msg_id)
@@ -416,11 +415,8 @@ async def handle_youtube_short(m: Message, url: str):
                 await _safe_reply_text(m, f"{_err} Unable to process this link.\n\nPlease try again.", parse_mode="HTML")
                 return
 
-            encoded = tmp / "short_enc.mp4"
-            ok = await reencode_shorts(video_file, encoded)
-            final = encoded if ok and encoded.exists() else video_file
-
-            final = await ensure_video_fits_telegram(final, tmp) or final
+            # Skip re-encoding — just ensure fits Telegram (stream copy if needed)
+            final = await ensure_video_fits_telegram(video_file, tmp) or video_file
             info = await get_video_info(final)
 
             await delete_sticker(bot, m.chat.id, sticker_msg_id)

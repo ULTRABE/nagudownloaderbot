@@ -83,16 +83,13 @@ def build_safe_media_caption(user_id: int, first_name: str, delivered_emoji: str
     Build a sanitized media caption with requester attribution.
 
     Format:
-        ✓ Delivered — <Name>
+        ✓ Delivered  ·  "<Name>"
 
-    - Escapes all user-provided text (first_name)
-    - Uses HTML parse_mode only
-    - Passes through safe_caption() for final length/tag check
-    - Never raises — returns plain fallback on any error
+    Name is in quotes, clickable.
     """
     try:
         safe_name = _escape((first_name or "User")[:32])
-        raw = f'{delivered_emoji} Delivered — <a href="tg://user?id={user_id}">{safe_name}</a>'
+        raw = f'{delivered_emoji} Delivered  ·  "<a href="tg://user?id={user_id}">{safe_name}</a>"'
         return safe_caption(raw)
     except Exception:
         return "✓ Delivered"
@@ -125,26 +122,18 @@ def mention(user: User) -> str:
 
 
 async def format_delivered_with_mention(user_id: int, first_name: str) -> str:
-    """
-    Returns a clean delivered caption with clickable user mention.
-    Output: ✓ Delivered — <Name>
-
-    Uses html.escape() on the display name so that characters like & " ' < >
-    in the user's first name cannot break Telegram's HTML parser and cause
-    ENTITY_TEXT_INVALID errors.
-    """
+    """Delivered caption:  ✓ Delivered  ·  "Name" (clickable, quoted)"""
     emoji = await get_emoji_async("DELIVERED")
-    # html.escape handles &, <, >, " — all characters that break HTML parsing
     safe_name = _escape((first_name or "User")[:32])
-    raw = f'{emoji} Delivered — <a href="tg://user?id={user_id}">{safe_name}</a>'
+    raw = f'{emoji} Delivered  ·  "<a href="tg://user?id={user_id}">{safe_name}</a>"'
     return safe_caption(raw)
 
 
 def format_delivered_with_mention_sync(user_id: int, first_name: str) -> str:
-    """Sync fallback for format_delivered_with_mention."""
+    """Sync fallback — Delivered  ·  "Name" (clickable, quoted)"""
     emoji = get_emoji("DELIVERED")
     safe_name = _escape((first_name or "User")[:32])
-    raw = f'{emoji} Delivered — <a href="tg://user?id={user_id}">{safe_name}</a>'
+    raw = f'{emoji} Delivered  ·  "<a href="tg://user?id={user_id}">{safe_name}</a>"'
     return safe_caption(raw)
 
 
@@ -255,14 +244,15 @@ async def format_welcome(user: User, user_id: int) -> str:
     pin  = await get_emoji_async("PINTEREST")
     zap  = await get_emoji_async("ZAP")
 
+    wave = await get_emoji_async("WAVE")
     return (
-        "◇—◇ <b>𝐍𝐀𝐆𝐔 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑</b> ◇—◇\n\n"
-        f"{zap} <b>Fast &amp; Powerful Media Downloader</b>\n\n"
-        f"{yt}  YouTube — Videos, Shorts, Music\n"
-        f"{ig}  Instagram — Reels &amp; Posts\n"
-        f"{sp}  Spotify — Tracks &amp; Playlists\n"
-        f"{pin}  Pinterest — Video Pins\n\n"
-        "Just paste a link ✨"
+        f"{wave} <b>Welcome to Nagu Downloader</b>\n\n"
+        f"{zap} Fast &amp; powerful media downloader\n\n"
+        f"  {yt}  YouTube\n"
+        f"  {ig}  Instagram\n"
+        f"  {sp}  Spotify\n"
+        f"  {pin}  Pinterest\n\n"
+        "Just paste a link and I'll handle the rest ✨"
     )
 
 
@@ -333,7 +323,7 @@ async def build_start_keyboard(bot_username: str) -> InlineKeyboardMarkup:
 # ─── /help ────────────────────────────────────────────────────────────────────
 
 async def format_help() -> str:
-    """Single unified help message"""
+    """Help message — clean, organized"""
     info   = await get_emoji_async("INFO")
     rocket = await get_emoji_async("ROCKET")
     yt     = await get_emoji_async("YT")
@@ -341,19 +331,20 @@ async def format_help() -> str:
     ig     = await get_emoji_async("INSTA")
     pin    = await get_emoji_async("PINTEREST")
     return _h(
-        f"{info} 𝐂ᴏᴍᴍᴀɴᴅꜱ\n\n"
-        "/start — 𝐒ᴛᴀʀᴛ\n"
-        "/help — 𝐋ɪꜱᴛ\n"
-        "/id — 𝐘ᴏᴜʀ 𝐈ᴅ\n"
-        "/chatid — 𝐂ʜᴀᴛ 𝐈ᴅ\n"
-        "/myinfo — 𝐀ᴄᴄᴏᴜɴᴛ\n"
-        "/mp3 — 𝐄xᴛʀᴀᴄᴛ 𝐀ᴜᴅɪᴏ\n"
-        "/broadcast — 𝐀ᴅᴍɪɴ 𝐎ɴʟʏ\n\n"
-        f"{rocket} 𝐒ᴜᴘᴘᴏʀᴛ\n\n"
-        f"{yt} 𝐘ᴏᴜ𝐓ᴜʙᴇ\n"
-        f"{sp} 𝐒ᴘᴏᴛɪꜰʏ\n"
-        f"{ig} 𝐈ɴꜱᴛᴀɢʀᴀᴍ\n"
-        f"{pin} 𝐏ɪɴᴛᴇʀᴇꜱᴛ"
+        f"{info} <b>Commands</b>\n\n"
+        "/start  ·  Start the bot\n"
+        "/help  ·  Show this help\n"
+        "/id  ·  Get user ID\n"
+        "/chatid  ·  Get chat ID\n"
+        "/myinfo  ·  Account details\n"
+        "/mp3  ·  Extract audio from video\n"
+        "/ping  ·  Check bot latency\n"
+        "/status  ·  Bot status\n\n"
+        f"{rocket} <b>Supported Platforms</b>\n\n"
+        f"  {yt}  YouTube  ·  Videos, Shorts, Music\n"
+        f"  {sp}  Spotify  ·  Tracks &amp; Playlists\n"
+        f"  {ig}  Instagram  ·  Reels &amp; Posts\n"
+        f"  {pin}  Pinterest  ·  Videos &amp; Photos"
     )
 
 
@@ -373,70 +364,73 @@ def format_help_info() -> str:
 # ─── /myinfo ──────────────────────────────────────────────────────────────────
 
 async def format_myinfo(user: User, chat_title: str = None) -> str:
-    """Account info"""
+    """Account info — clean layout"""
     user_emoji = await get_emoji_async("USER")
-    username = f"@{_escape(user.username)}" if user.username else "—"
-    chat_type = "private" if not chat_title else "group"
-    safe_name = _escape((user.first_name or "—")[:32])
+    username = f"@{_escape(user.username)}" if user.username else "not set"
+    safe_name = _escape((user.first_name or "User")[:32])
     user_link = f'<a href="tg://user?id={user.id}">{safe_name}</a>'
+    last = _escape((user.last_name or "")[:32])
+    lang = _escape(user.language_code or "en")
     return _h(
-        f"{user_emoji} 𝐀ᴄᴄᴏᴜɴᴛ 𝐈ɴꜰᴏ\n\n"
-        f"𝐍ᴀᴍᴇ: {user_link}\n"
-        f"𝐋ᴀꜱᴛ 𝐍ᴀᴍᴇ: {_escape((user.last_name or '—')[:32])}\n"
-        f"𝐔ꜱᴇʀɴᴀᴍᴇ: {username}\n"
-        f"𝐈ᴅ: <code>{user.id}</code>\n"
-        f"𝐋ᴀɴɢᴜᴀɢᴇ: {_escape(user.language_code or '—')}\n"
-        f"𝐂ʜᴀᴛ 𝐓ʏᴘᴇ: {chat_type}"
+        f"{user_emoji} <b>Account Info</b>\n\n"
+        f"Name  ·  {user_link}\n"
+        f"Last  ·  {last or 'not set'}\n"
+        f"Username  ·  {username}\n"
+        f"ID  ·  <code>{user.id}</code>\n"
+        f"Language  ·  {lang}"
     )
 
 
 # ─── /id ──────────────────────────────────────────────────────────────────────
 
 async def format_id(user: User, label: str = "YOUR  ID") -> str:
-    """User ID info"""
+    """User ID info — clean"""
     id_emoji = await get_emoji_async("ID")
-    username = f"@{_escape(user.username)}" if user.username else "—"
+    username = f"@{_escape(user.username)}" if user.username else "not set"
     is_other = "USER" in label.upper()
-    title = "𝐔ꜱᴇʀ 𝐈ᴅ" if is_other else "𝐘ᴏᴜʀ 𝐈ᴅ"
-    safe_name = _escape((user.first_name or "—")[:32])
+    title = "User ID" if is_other else "Your ID"
+    safe_name = _escape((user.first_name or "User")[:32])
     user_link = f'<a href="tg://user?id={user.id}">{safe_name}</a>'
     return _h(
-        f"{id_emoji} {title}\n\n"
-        f"𝐍ᴀᴍᴇ: {user_link}\n"
-        f"𝐔ꜱᴇʀɴᴀᴍᴇ: {username}\n"
-        f"𝐈ᴅ: <code>{user.id}</code>"
+        f"{id_emoji} <b>{title}</b>\n\n"
+        f"Name  ·  {user_link}\n"
+        f"Username  ·  {username}\n"
+        f"ID  ·  <code>{user.id}</code>"
     )
 
 
 # ─── /chatid ──────────────────────────────────────────────────────────────────
 
 async def format_chatid(chat_id: int, chat_title: str, chat_type: str) -> str:
-    """Chat ID info"""
+    """Chat ID info — clean"""
     info = await get_emoji_async("INFO")
     safe_title = _escape(chat_title[:32])
     return _h(
-        f"{info} 𝐂ʜᴀᴛ 𝐈ᴅ\n\n"
-        f"𝐂ʜᴀᴛ: {safe_title}\n"
-        f"𝐓ʏᴘᴇ: {chat_type}\n"
-        f"𝐈ᴅ: <code>{chat_id}</code>"
+        f"{info} <b>Chat ID</b>\n\n"
+        f"Chat  ·  {safe_title}\n"
+        f"Type  ·  {chat_type}\n"
+        f"ID  ·  <code>{chat_id}</code>"
     )
 
 
 # ─── Admin panel ──────────────────────────────────────────────────────────────
 
 async def format_admin_panel(stats: dict = None) -> str:
-    """Admin panel"""
-    broadcast = await get_emoji_async("BROADCAST")
+    """Admin panel — clean"""
+    crown = await get_emoji_async("CROWN")
     text = (
-        f"{broadcast} 𝐀ᴅᴍɪɴ 𝐏ᴀɴᴇʟ\n\n"
-        "/broadcast — 𝐒ᴇɴᴅ ᴛᴏ ᴀʟʟ\n"
-        "/assign — 𝐂ᴏɴꜰɪɢᴜʀᴇ ᴇᴍᴏᴊɪ\n"
-        "/stats — 𝐔ꜱᴇʀ ꜱᴛᴀᴛꜱ\n"
+        f"{crown} <b>Admin Panel</b>\n\n"
+        "/broadcast  ·  Send to all users\n"
+        "/assign  ·  Configure emojis\n"
+        "/stats  ·  User statistics\n"
+        "/addpxy  ·  Add proxies\n"
+        "/rm  ·  Remove proxy\n"
+        "/clean  ·  Scan proxies\n"
     )
     if stats:
         text += (
-            f"\n𝐔ꜱᴇʀꜱ: {stats.get('users', 0)}\n"
-            f"𝐆ʀᴏᴜᴘꜱ: {stats.get('groups', 0)}"
+            f"\nUsers  ·  {stats.get('users', 0)}\n"
+            f"Groups  ·  {stats.get('groups', 0)}"
         )
     return _h(text)
 
@@ -445,11 +439,12 @@ async def format_admin_panel(stats: dict = None) -> str:
 
 async def format_status(active_jobs: int = 0, queue: int = 0, uptime: str = "—") -> str:
     diamond = await get_emoji_async("DIAMOND")
+    rocket = await get_emoji_async("ROCKET")
     return _h(
-        f"{diamond} 𝐒ᴛᴀᴛᴜꜱ\n\n"
-        f"𝐀ᴄᴛɪᴠᴇ: {active_jobs}\n"
-        f"𝐐ᴜᴇᴜᴇ: {queue}\n"
-        f"𝐔ᴘᴛɪᴍᴇ: {uptime}"
+        f"{diamond} <b>Bot Status</b>\n\n"
+        f"{rocket} Active  ·  {active_jobs}\n"
+        f"Queue  ·  {queue}\n"
+        f"Uptime  ·  {uptime}"
     )
 
 
@@ -458,7 +453,7 @@ async def format_status(active_jobs: int = 0, queue: int = 0, uptime: str = "—
 async def format_playlist_detected() -> str:
     sp    = await get_emoji_async("SPOTIFY")
     music = await get_emoji_async("MUSIC")
-    return _h(f"{sp} 𝐏ʟᴀʏʟɪꜱᴛ 𝐃ᴇᴛᴇᴄᴛᴇᴅ\n\n{music} 𝐒ᴛᴀʀᴛɪɴɢ ᴅᴏᴡɴʟᴏᴀᴅ...")
+    return _h(f"{sp} <b>Playlist Detected</b>\n\n{music} Starting download...")
 
 
 def format_playlist_progress(name: str, done: int, total: int) -> str:
@@ -480,26 +475,25 @@ def format_playlist_progress(name: str, done: int, total: int) -> str:
 
 
 async def format_playlist_final(user: User, name: str, total: int, sent: int, failed: int) -> str:
-    """Spotify playlist completion"""
-    crown   = await get_emoji_async("CROWN")
-    success = await get_emoji_async("SUCCESS")
+    """Spotify playlist completion — clean"""
+    complete = await get_emoji_async("COMPLETE")
+    success  = await get_emoji_async("SUCCESS")
     safe_name = _escape((user.first_name or "User")[:32])
-    user_link = f'<a href="tg://user?id={user.id}">{safe_name}</a>'
+    user_link = f'"<a href="tg://user?id={user.id}">{safe_name}</a>"'
     name_short = _escape((name or "Playlist")[:30])
     return _h(
-        f"{crown} 𝐏ʟᴀʏʟɪꜱᴛ 𝐅ɪɴɪꜱʜᴇᴅ\n\n"
-        f"𝐍ᴀᴍᴇ: {name_short}\n"
-        f"𝐓ᴏᴛᴀʟ: {total}\n"
-        f"𝐒ᴇɴᴛ: {sent}\n"
-        f"𝐅ᴀɪʟᴇᴅ: {failed}\n\n"
-        f"{success} 𝐀ʟʟ 𝐅ɪʟᴇꜱ 𝐒ᴇɴᴛ\n\n"
-        f"{user_link}"
+        f"{complete} <b>Playlist Complete</b>\n\n"
+        f"Name  ·  {name_short}\n"
+        f"Total  ·  {total}\n"
+        f"Sent  ·  {sent}\n"
+        f"Failed  ·  {failed}\n\n"
+        f"{success} All files sent to {user_link}"
     )
 
 
 def format_playlist_dm_complete(name: str) -> str:
     """Final DM message after playlist delivery"""
-    return f"{HEADER}\n\n🎧 𝐏ʟᴀʏʟɪꜱᴛ 𝐃𝐞𝐥𝐢𝐯𝐞𝐫𝐞𝐝."
+    return f"{HEADER}\n\n🎧 <b>Playlist Delivered</b>  ·  Enjoy your music!"
 
 
 async def format_spotify_complete(user: User, total: int, sent: int) -> str:
@@ -534,25 +528,27 @@ async def format_yt_playlist_final(name: str, total: int, sent: int, failed: int
 
 async def format_broadcast_started() -> str:
     bc = await get_emoji_async("BROADCAST")
-    return _h(f"{bc} 𝐁ʀᴏᴀᴅᴄᴀꜱᴛ 𝐒ᴛᴀʀᴛᴇᴅ")
+    return _h(f"{bc} <b>Broadcast Started</b>\n\nSending to all users and groups...")
 
 
 async def format_broadcast_report(total_users: int, total_groups: int, success: int, failed: int) -> str:
     bc = await get_emoji_async("BROADCAST")
+    check = await get_emoji_async("CHECK")
     return _h(
-        f"{bc} 𝐁ʀᴏᴀᴅᴄᴀꜱᴛ 𝐑ᴇᴘᴏʀᴛ\n\n"
-        f"𝐔ꜱᴇʀꜱ: {total_users:,}\n"
-        f"𝐆ʀᴏᴜᴘꜱ: {total_groups:,}\n"
-        f"𝐒ᴜᴄᴄᴇꜱꜱ: {success:,}\n"
-        f"𝐅ᴀɪʟᴇᴅ: {failed:,}"
+        f"{bc} <b>Broadcast Report</b>\n\n"
+        f"Users  ·  {total_users:,}\n"
+        f"Groups  ·  {total_groups:,}\n"
+        f"{check} Sent  ·  {success:,}\n"
+        f"Failed  ·  {failed:,}"
     )
 
 
 # ─── Emoji assign system ──────────────────────────────────────────────────────
 
+# Keys MUST match what get_emoji_async() uses and what Redis stores as "emoji:{KEY}"
 EMOJI_POSITIONS = {
-    "YOUTUBE":    "🎬 YouTube",
-    "INSTAGRAM":  "📸 Instagram",
+    "YT":         "🎬 YouTube",
+    "INSTA":      "📸 Instagram",
     "PINTEREST":  "📌 Pinterest",
     "MUSIC":      "🎵 Music",
     "VIDEO":      "🎥 Video",
@@ -584,35 +580,43 @@ EMOJI_POSITIONS = {
 
 
 def format_assign_menu(configured_keys: set) -> str:
-    lines = [f"{HEADER}\n\n𝐄ᴍᴏᴊɪ 𝐒ᴇᴛᴜᴘ\n"]
+    total = len(EMOJI_POSITIONS)
+    done = len(configured_keys)
+    lines = [
+        f"{HEADER}\n",
+        f"🎨 <b>Emoji Setup</b>  ·  {done}/{total} configured\n",
+        "Tap a button below to assign a premium emoji.\n",
+    ]
     for key, label in EMOJI_POSITIONS.items():
-        status = "[Configured]" if key in configured_keys else "[Not set]"
-        lines.append(f"{label}  →  {status}")
+        if key in configured_keys:
+            lines.append(f"  ✅  {label}")
+        else:
+            lines.append(f"  ○  {label}")
     return "\n".join(lines)
 
 
 def format_assign_prompt(label: str) -> str:
     return (
         f"{HEADER}\n\n"
-        f"𝐒ᴇᴛ 𝐄ᴍᴏᴊɪ\n\n"
-        f"Send a premium emoji or standard emoji for:\n"
-        f"<b>{label}</b>\n\n"
-        f"<i>Tip: Send a Telegram premium custom emoji, or type a regular emoji like 🎵</i>"
+        f"🎨 <b>Assign Emoji</b>\n\n"
+        f"Send a premium or standard emoji for:\n\n"
+        f"  →  <b>{label}</b>\n\n"
+        f"<i>Send a Telegram premium custom emoji or a regular emoji</i>"
     )
 
 
 def format_assign_updated() -> str:
-    return f"{HEADER}\n\n𝐄ᴍᴏᴊɪ 𝐔ᴘᴅᴀᴛᴇᴅ ✓"
+    return f"{HEADER}\n\n✅ <b>Emoji Updated</b>"
 
 
 # ─── Stats ────────────────────────────────────────────────────────────────────
 
 async def format_stats(users: int, groups: int) -> str:
-    info = await get_emoji_async("INFO")
+    star = await get_emoji_async("STAR")
     return _h(
-        f"{info} 𝐁ᴏᴛ 𝐒ᴛᴀᴛꜱ\n\n"
-        f"𝐔ꜱᴇʀꜱ: {users}\n"
-        f"𝐆ʀᴏᴜᴘꜱ: {groups}"
+        f"{star} <b>Bot Stats</b>\n\n"
+        f"Users  ·  {users:,}\n"
+        f"Groups  ·  {groups:,}"
     )
 
 
@@ -624,10 +628,10 @@ async def format_user_info(user: User) -> str:
 
 
 async def format_download_complete(user: User) -> str:
-    """Legacy compat — returns delivered confirmation with mention"""
+    """Legacy compat — delivered confirmation with quoted mention"""
     emoji = await get_emoji_async("SUCCESS")
     safe_name = _escape((user.first_name or "User")[:32])
-    raw = f'{emoji} Delivered — <a href="tg://user?id={user.id}">{safe_name}</a>'
+    raw = f'{emoji} Delivered  ·  "<a href="tg://user?id={user.id}">{safe_name}</a>"'
     return safe_caption(raw)
 
 
