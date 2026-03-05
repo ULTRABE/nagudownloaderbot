@@ -552,6 +552,7 @@ async def handle_spotify_playlist(m: Message, url: str):
                 InlineKeyboardButton(
                     text=f"{sp} Start Bot",
                     url=f"https://t.me/{bot_me.username}?start=spotify",
+                    style="success",
                 )
             ]])
             _info = await get_emoji_async("INFO")
