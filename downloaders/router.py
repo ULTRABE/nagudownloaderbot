@@ -242,11 +242,12 @@ async def cb_help(callback):
         "/start  ·  Start the bot\n"
         "/help  ·  Show help\n"
         "/id  ·  Get user ID\n"
-        "/chatid  ·  Get chat ID\n"
-        "/myinfo  ·  Account details\n"
+        "/myinfo  ·  Account info\n"
         "/mp3  ·  Extract audio\n"
-        "/ping  ·  Check latency\n"
-        "/status  ·  Bot status"
+        "/ping  ·  Latency check\n\n"
+        "👮 <b>Group Admin</b>\n\n"
+        "/ban · /kick · /mute · /unmute\n"
+        "/pin · /unpin · /purge"
     )
     await _edit_inline(callback, text)
 
@@ -937,6 +938,186 @@ async def handle_assign_emoji(m: Message):
         )
     except Exception:
         pass
+
+
+# ─── Group management commands ─────────────────────────────────────────────────
+
+async def _is_group_admin(m: Message) -> bool:
+    """Check if the user is an admin in the current group chat."""
+    if m.chat.type not in ("group", "supergroup"):
+        return False
+    try:
+        member = await bot.get_chat_member(m.chat.id, m.from_user.id)
+        return member.status in ("creator", "administrator")
+    except Exception:
+        return False
+
+
+@dp.message(Command("ban"))
+async def cmd_ban(m: Message):
+    """Ban a user — reply to their message. Group admin only."""
+    if not await _is_group_admin(m):
+        return
+    if not m.reply_to_message or not m.reply_to_message.from_user:
+        await _safe_reply(m, "⚠ Reply to a user's message to ban them.", parse_mode="HTML")
+        return
+    target = m.reply_to_message.from_user
+    try:
+        await bot.ban_chat_member(m.chat.id, target.id)
+        safe_name = _html_escape((target.first_name or "User")[:32])
+        await _safe_reply(m, f"🚫 \"<a href=\"tg://user?id={target.id}\">{safe_name}</a>\" has been banned.", parse_mode="HTML")
+    except Exception as e:
+        await _safe_reply(m, f"⚠ Failed to ban: {_html_escape(str(e)[:60])}", parse_mode="HTML")
+
+
+@dp.message(Command("unban"))
+async def cmd_unban(m: Message):
+    """Unban a user — reply or provide user ID. Group admin only."""
+    if not await _is_group_admin(m):
+        return
+    # Try reply first
+    if m.reply_to_message and m.reply_to_message.from_user:
+        target_id = m.reply_to_message.from_user.id
+    else:
+        parts = (m.text or "").split()
+        if len(parts) < 2 or not parts[1].strip().isdigit():
+            await _safe_reply(m, "⚠ Reply to a user or use: /unban &lt;user_id&gt;", parse_mode="HTML")
+            return
+        target_id = int(parts[1].strip())
+    try:
+        await bot.unban_chat_member(m.chat.id, target_id, only_if_banned=True)
+        await _safe_reply(m, f"✅ User <code>{target_id}</code> has been unbanned.", parse_mode="HTML")
+    except Exception as e:
+        await _safe_reply(m, f"⚠ Failed to unban: {_html_escape(str(e)[:60])}", parse_mode="HTML")
+
+
+@dp.message(Command("mute"))
+async def cmd_mute(m: Message):
+    """Mute a user — reply to their message. Group admin only."""
+    if not await _is_group_admin(m):
+        return
+    if not m.reply_to_message or not m.reply_to_message.from_user:
+        await _safe_reply(m, "⚠ Reply to a user's message to mute them.", parse_mode="HTML")
+        return
+    target = m.reply_to_message.from_user
+    try:
+        from aiogram.types import ChatPermissions
+        await bot.restrict_chat_member(m.chat.id, target.id, permissions=ChatPermissions(
+            can_send_messages=False,
+            can_send_media_messages=False,
+            can_send_other_messages=False,
+        ))
+        safe_name = _html_escape((target.first_name or "User")[:32])
+        await _safe_reply(m, f"🔇 \"<a href=\"tg://user?id={target.id}\">{safe_name}</a>\" has been muted.", parse_mode="HTML")
+    except Exception as e:
+        await _safe_reply(m, f"⚠ Failed to mute: {_html_escape(str(e)[:60])}", parse_mode="HTML")
+
+
+@dp.message(Command("unmute"))
+async def cmd_unmute(m: Message):
+    """Unmute a user — reply to their message. Group admin only."""
+    if not await _is_group_admin(m):
+        return
+    if not m.reply_to_message or not m.reply_to_message.from_user:
+        await _safe_reply(m, "⚠ Reply to a user's message to unmute them.", parse_mode="HTML")
+        return
+    target = m.reply_to_message.from_user
+    try:
+        from aiogram.types import ChatPermissions
+        await bot.restrict_chat_member(m.chat.id, target.id, permissions=ChatPermissions(
+            can_send_messages=True,
+            can_send_media_messages=True,
+            can_send_other_messages=True,
+            can_add_web_page_previews=True,
+        ))
+        safe_name = _html_escape((target.first_name or "User")[:32])
+        await _safe_reply(m, f"🔊 \"<a href=\"tg://user?id={target.id}\">{safe_name}</a>\" has been unmuted.", parse_mode="HTML")
+    except Exception as e:
+        await _safe_reply(m, f"⚠ Failed to unmute: {_html_escape(str(e)[:60])}", parse_mode="HTML")
+
+
+@dp.message(Command("kick"))
+async def cmd_kick(m: Message):
+    """Kick (remove) a user — reply to their message. Group admin only."""
+    if not await _is_group_admin(m):
+        return
+    if not m.reply_to_message or not m.reply_to_message.from_user:
+        await _safe_reply(m, "⚠ Reply to a user's message to kick them.", parse_mode="HTML")
+        return
+    target = m.reply_to_message.from_user
+    try:
+        # Ban then unban = kick (remove without permanent ban)
+        await bot.ban_chat_member(m.chat.id, target.id)
+        await bot.unban_chat_member(m.chat.id, target.id, only_if_banned=True)
+        safe_name = _html_escape((target.first_name or "User")[:32])
+        await _safe_reply(m, f"👢 \"<a href=\"tg://user?id={target.id}\">{safe_name}</a>\" has been kicked.", parse_mode="HTML")
+    except Exception as e:
+        await _safe_reply(m, f"⚠ Failed to kick: {_html_escape(str(e)[:60])}", parse_mode="HTML")
+
+
+@dp.message(Command("pin"))
+async def cmd_pin(m: Message):
+    """Pin a message — reply to the message to pin. Group admin only."""
+    if not await _is_group_admin(m):
+        return
+    if not m.reply_to_message:
+        await _safe_reply(m, "⚠ Reply to a message to pin it.", parse_mode="HTML")
+        return
+    try:
+        await bot.pin_chat_message(m.chat.id, m.reply_to_message.message_id, disable_notification=False)
+        await _safe_reply(m, "📌 Message pinned.", parse_mode="HTML")
+    except Exception as e:
+        await _safe_reply(m, f"⚠ Failed to pin: {_html_escape(str(e)[:60])}", parse_mode="HTML")
+
+
+@dp.message(Command("unpin"))
+async def cmd_unpin(m: Message):
+    """Unpin the replied message or latest pin. Group admin only."""
+    if not await _is_group_admin(m):
+        return
+    try:
+        if m.reply_to_message:
+            await bot.unpin_chat_message(m.chat.id, m.reply_to_message.message_id)
+        else:
+            await bot.unpin_chat_message(m.chat.id)
+        await _safe_reply(m, "📌 Message unpinned.", parse_mode="HTML")
+    except Exception as e:
+        await _safe_reply(m, f"⚠ Failed to unpin: {_html_escape(str(e)[:60])}", parse_mode="HTML")
+
+
+@dp.message(Command("purge"))
+async def cmd_purge(m: Message):
+    """Delete last N messages. Usage: /purge 10. Group admin only. Max 100."""
+    if not await _is_group_admin(m):
+        return
+    parts = (m.text or "").split()
+    if len(parts) < 2 or not parts[1].strip().isdigit():
+        await _safe_reply(m, "⚠ Usage: /purge &lt;number&gt; (max 100)", parse_mode="HTML")
+        return
+    count = min(int(parts[1].strip()), 100)
+    if count < 1:
+        return
+    try:
+        # Get message IDs to delete (current message + N before it)
+        msg_ids = [m.message_id]
+        # We can only delete messages by ID — collect from reply chain or estimate
+        for i in range(1, count + 1):
+            msg_ids.append(m.message_id - i)
+        # Delete in batches (Telegram allows deleting multiple at once)
+        for i in range(0, len(msg_ids), 100):
+            batch = msg_ids[i:i+100]
+            try:
+                await bot.delete_messages(m.chat.id, batch)
+            except Exception:
+                # Fallback: delete one by one
+                for mid in batch:
+                    try:
+                        await bot.delete_message(m.chat.id, mid)
+                    except Exception:
+                        pass
+        logger.info(f"PURGE: {m.from_user.id} purged {count} messages in {m.chat.id}")
+    except Exception as e:
+        await _safe_reply(m, f"⚠ Purge failed: {_html_escape(str(e)[:60])}", parse_mode="HTML")
 
 
 # ─── Group registration ───────────────────────────────────────────────────────

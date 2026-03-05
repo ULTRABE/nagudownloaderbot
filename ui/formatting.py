@@ -344,14 +344,17 @@ async def format_help() -> str:
         "/id  ·  Get user ID\n"
         "/chatid  ·  Get chat ID\n"
         "/myinfo  ·  Account details\n"
-        "/mp3  ·  Extract audio from video\n"
-        "/ping  ·  Check bot latency\n"
+        "/mp3  ·  Extract audio\n"
+        "/ping  ·  Check latency\n"
         "/status  ·  Bot status\n\n"
         f"{rocket} <b>Supported Platforms</b>\n\n"
         f"  {yt}  YouTube  ·  Videos, Shorts, Music\n"
         f"  {sp}  Spotify  ·  Tracks &amp; Playlists\n"
         f"  {ig}  Instagram  ·  Reels &amp; Posts\n"
-        f"  {pin}  Pinterest  ·  Videos &amp; Photos"
+        f"  {pin}  Pinterest  ·  Videos &amp; Photos\n\n"
+        "👮 <b>Group Admin</b>\n\n"
+        "/ban · /kick · /mute · /unmute\n"
+        "/pin · /unpin · /purge"
     )
 
 
