@@ -33,6 +33,7 @@ from core.bot import bot
 from core.config import config
 from workers.task_queue import download_semaphore
 from utils.logger import logger
+from utils.proxy_manager import proxy_manager
 from utils.cache import url_cache
 from utils.media_processor import (
     ensure_fits_telegram, instagram_smart_encode,
@@ -112,12 +113,13 @@ async def _download_pinterest(url: str, tmp: Path) -> List[Path]:
     base_opts = {
         "quiet": True,
         "no_warnings": True,
+        "noprogress": True,
         "outtmpl": str(tmp / f"{safe_title}.%(ext)s"),
-        "proxy": config.pick_proxy(),
+        "proxy": proxy_manager.pick_proxy(),
         "http_headers": {"User-Agent": config.pick_user_agent()},
-        "socket_timeout": 30,
-        "retries": 3,
-        "fragment_retries": 3,
+        "socket_timeout": 45,
+        "retries": 5,
+        "fragment_retries": 5,
         "ignoreerrors": True,  # Don't crash on private/unavailable items in carousel
     }
 

@@ -60,12 +60,12 @@ class Config:
         self.PIN_STICKER = os.getenv("PIN_STICKER", "CAACAgIAAxkBAAEaegZpe0KJMDIkiCbudZrXhJDwBXYHqgACExIAAq3mUUhZ4G5Cm78l2DgE")
         self.MUSIC_STICKER = os.getenv("MUSIC_STICKER", "CAACAgIAAxkBAAEaegZpe0KJMDIkiCbudZrXhJDwBXYHqgACExIAAq3mUUhZ4G5Cm78l2DgE")
         
-        # User agents
+        # User agents — 2025/2026 Chrome builds (avoids bot detection on outdated UAs)
         self.USER_AGENTS = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/537.36 Chrome/121.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
         ]
         
         # Performance settings
@@ -75,7 +75,7 @@ class Config:
         self.MAX_CONCURRENT_PER_USER = 6   # Max simultaneous jobs per user
         
         # Timeout settings (seconds)
-        self.DOWNLOAD_TIMEOUT = 600        # 10 minutes max per download (large playlists)
+        self.DOWNLOAD_TIMEOUT = 300        # 5 minutes max per download
         self.FFMPEG_TIMEOUT = 180          # 3 minutes max for FFmpeg
         self.SEND_TIMEOUT = 60             # 1 minute max for Telegram send
         
@@ -84,7 +84,7 @@ class Config:
         self.BOT_HAS_PREMIUM = os.getenv("BOT_HAS_PREMIUM", "true").lower() in ("true", "1", "yes")
         
         # Retry settings
-        self.MAX_RETRIES = 2               # Max retry attempts
+        self.MAX_RETRIES = 3               # Max retry attempts
         
         # Telegram file size limits (MB)
         self.TG_VIDEO_LIMIT_MB = 50
