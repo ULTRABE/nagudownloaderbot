@@ -1,74 +1,66 @@
 """
-Global Log Channel — sends download activity to the dedicated log channel.
+Global Log Channel — logs every download to the dedicated log channel.
 
-Usage:
-    from utils.log_channel import log_download
+Format:
+    📥 Download Log
 
-    await log_download(
-        user=message.from_user,
-        link="https://...",
-        chat=message.chat,          # pass the full chat object
-        media_type="Video",
-        time_taken=3.2,
-    )
+    User  ·  "Name" · ID: 123456
+    @username (or no username)
+
+    Link  ·  https://...
+
+    Chat  ·  Group Name
+    Type  ·  Video (Instagram)
+    Time  ·  3.2s
 
 Rules:
-- Never blocks main flow
-- Never crashes if log fails
-- Wrapped in try/except — silently ignored on failure
+- Never blocks main flow — fire-and-forget via asyncio.create_task
+- Never crashes — silently ignored on failure
 - Bot must be admin in LOG_CHANNEL_ID
-
-Log format:
-    📥 𝐃ᴏᴡɴʟᴏᴀᴅᴇʀ 𝐁ᴏᴛ 𝐋ᴏɢ 𝐂ʜᴀɴɴᴇʟ
-
-    User:
-    <a href="tg://user?id=USER_ID">Full Name</a>
-
-    Link:
-    https://...
-
-    Chat:
-    <a href="https://t.me/username">Group Name</a>  (or "Private" / group title)
-
-    Media Type:
-    Video / Audio / Playlist
-
-    Time Taken:
-    3.2s
+- User is always clickable via tg://user?id=ID
+- User ID is always shown explicitly
+- Full link is always shown
 """
 from __future__ import annotations
 
 import html
 from typing import Optional, Any
 
-from core.config import LOG_CHANNEL_ID, LOG_CHANNEL_LINK
+from core.config import LOG_CHANNEL_ID
 from utils.logger import logger
 
 
-def _build_user_mention(user: Any) -> str:
-    """Build a clickable HTML user mention — properly HTML-escaped."""
+def _build_user_section(user: Any) -> str:
+    """
+    Build user display with clickable mention + explicit ID.
+    Works even if user has no username.
+    """
     user_id = getattr(user, "id", 0)
     first_name = (getattr(user, "first_name", None) or "User")[:32]
     last_name = (getattr(user, "last_name", None) or "").strip()
     full_name = f"{first_name} {last_name}".strip()[:48]
-    # html.escape handles &, <, >, " — all characters that break HTML parsing
     safe_name = html.escape(full_name, quote=True)
-    return f'<a href="tg://user?id={user_id}">{safe_name}</a>'
+    username = getattr(user, "username", None)
+
+    # Clickable mention + explicit ID (always visible)
+    mention = f'"<a href="tg://user?id={user_id}">{safe_name}</a>"'
+    line1 = f"User  ·  {mention}  ·  <code>{user_id}</code>"
+
+    # Username line
+    if username:
+        line2 = f"@{html.escape(username)}"
+    else:
+        line2 = "<i>no username</i>"
+
+    return f"{line1}\n{line2}"
 
 
 def _build_chat_display(chat: Any) -> str:
-    """
-    Build a chat display string.
-
-    - Private chat → "Private"
-    - Public group/channel (has username) → clickable link
-    - Private group (no username) → plain title
-    """
+    """Build chat display — clickable if public, plain if private."""
     if chat is None:
         return "Unknown"
 
     chat_type = getattr(chat, "type", "private")
-
     if chat_type == "private":
         return "Private"
 
@@ -78,7 +70,6 @@ def _build_chat_display(chat: Any) -> str:
 
     if username:
         return f'<a href="https://t.me/{username}">{safe_title}</a>'
-
     return safe_title
 
 
@@ -88,28 +79,18 @@ async def log_download(
     media_type: str,
     time_taken: float,
     chat: Any = None,
-    # Legacy compat: accept chat_type string if chat object not available
     chat_type: Optional[str] = None,
 ) -> None:
     """
     Send a download log entry to the log channel.
-
-    Parameters
-    ----------
-    user        : aiogram User object (or any object with .id, .first_name)
-    link        : The URL that was downloaded
-    media_type  : "Video" / "Audio" / "Playlist" / etc.
-    time_taken  : Seconds elapsed for the download
-    chat        : aiogram Chat object (preferred — enables clickable group links)
-    chat_type   : Legacy fallback string "Group" or "Private" (used if chat=None)
+    Always shows: user mention, user ID, full link, chat, media type, time.
     """
     try:
-        # Import bot lazily to avoid circular imports
         from core.bot import bot
 
-        user_mention = _build_user_mention(user)
+        user_section = _build_user_section(user)
 
-        # Determine chat display
+        # Chat display
         if chat is not None:
             chat_display = _build_chat_display(chat)
         elif chat_type:
@@ -117,17 +98,16 @@ async def log_download(
         else:
             chat_display = "Unknown"
 
-        # Truncate link for display (keep full URL, just cap at 300 chars)
-        # html.escape prevents malformed URLs from breaking the HTML parser
-        display_link = html.escape(link[:300] if len(link) > 300 else link, quote=False)
+        # Full link — escape HTML entities
+        display_link = html.escape(link, quote=False)
 
         text = (
-            "📥 𝐃ᴏᴡɴʟᴏᴀᴅᴇʀ 𝐁ᴏᴛ 𝐋ᴏɢ 𝐂ʜᴀɴɴᴇʟ\n\n"
-            f"User:\n{user_mention}\n\n"
-            f"Link:\n{display_link}\n\n"
-            f"Chat:\n{chat_display}\n\n"
-            f"Media Type:\n{media_type}\n\n"
-            f"Time Taken:\n{time_taken:.1f}s"
+            f"📥 <b>Download Log</b>\n\n"
+            f"{user_section}\n\n"
+            f"Link  ·  {display_link}\n\n"
+            f"Chat  ·  {chat_display}\n"
+            f"Type  ·  {media_type}\n"
+            f"Time  ·  {time_taken:.1f}s"
         )
 
         await bot.send_message(
