@@ -41,6 +41,8 @@ from ui.formatting import (
     format_welcome,
     build_start_keyboard,
     build_back_keyboard,
+    build_manage_keyboard,
+    build_manage_back_keyboard,
     format_help,
     format_admin_panel,
     format_id,
@@ -278,6 +280,98 @@ async def cb_back(callback):
     welcome_text = await format_welcome(callback.from_user, callback.from_user.id)
     keyboard = await build_start_keyboard(bot_username)
     await _edit_inline(callback, welcome_text, keyboard)
+
+
+# ─── Manage Group inline menus ────────────────────────────────────────────────
+
+@dp.callback_query(lambda c: c.data == "cb_manage")
+async def cb_manage(callback):
+    """Manage Group — main submenu"""
+    await callback.answer()
+    text = (
+        "👮 <b>Group Management</b>\n\n"
+        "Select a category to see available commands.\n"
+        "All commands require admin permissions."
+    )
+    await _edit_inline(callback, text, build_manage_keyboard())
+
+
+@dp.callback_query(lambda c: c.data == "mg_mod")
+async def cb_mg_mod(callback):
+    """Moderation submenu"""
+    await callback.answer()
+    text = (
+        "🛡 <b>Moderation</b>\n\n"
+        "/ban  ·  Ban user (reply)\n"
+        "/unban  ·  Unban user\n"
+        "/mute  ·  Mute user (reply)\n"
+        "/unmute  ·  Unmute user (reply)\n"
+        "/kick  ·  Kick user (reply)"
+    )
+    await _edit_inline(callback, text, build_manage_back_keyboard())
+
+
+@dp.callback_query(lambda c: c.data == "mg_pins")
+async def cb_mg_pins(callback):
+    """Pins submenu"""
+    await callback.answer()
+    text = (
+        "📌 <b>Pinned Messages</b>\n\n"
+        "/pin  ·  Pin message (reply)\n"
+        "/unpin  ·  Unpin message\n"
+        "/pinned  ·  Show current pin"
+    )
+    await _edit_inline(callback, text, build_manage_back_keyboard())
+
+
+@dp.callback_query(lambda c: c.data == "mg_warn")
+async def cb_mg_warn(callback):
+    """Warnings submenu"""
+    await callback.answer()
+    text = (
+        "⚠ <b>Warning System</b>\n\n"
+        "/warn  ·  Warn a user (reply)\n"
+        "/unwarn  ·  Remove a warn (reply)\n"
+        "/warns  ·  Check user warns (reply)\n\n"
+        "⚡ 3 warnings = auto-mute"
+    )
+    await _edit_inline(callback, text, build_manage_back_keyboard())
+
+
+@dp.callback_query(lambda c: c.data == "mg_clean")
+async def cb_mg_clean(callback):
+    """Cleanup submenu"""
+    await callback.answer()
+    text = (
+        "🧹 <b>Cleanup</b>\n\n"
+        "/purge N  ·  Delete last N messages\n"
+        "/del  ·  Delete replied message"
+    )
+    await _edit_inline(callback, text, build_manage_back_keyboard())
+
+
+@dp.callback_query(lambda c: c.data == "mg_info")
+async def cb_mg_info(callback):
+    """Group Info submenu"""
+    await callback.answer()
+    text = (
+        "📊 <b>Group Info</b>\n\n"
+        "/chatid  ·  Get chat ID\n"
+        "/staff  ·  List all admins"
+    )
+    await _edit_inline(callback, text, build_manage_back_keyboard())
+
+
+@dp.callback_query(lambda c: c.data == "mg_members")
+async def cb_mg_members(callback):
+    """Members submenu"""
+    await callback.answer()
+    text = (
+        "👥 <b>Members</b>\n\n"
+        "/info  ·  User info (reply)\n"
+        "/id  ·  Get user ID (reply)"
+    )
+    await _edit_inline(callback, text, build_manage_back_keyboard())
 
 
 # ─── /help ────────────────────────────────────────────────────────────────────
@@ -1118,6 +1212,196 @@ async def cmd_purge(m: Message):
         logger.info(f"PURGE: {m.from_user.id} purged {count} messages in {m.chat.id}")
     except Exception as e:
         await _safe_reply(m, f"⚠ Purge failed: {_html_escape(str(e)[:60])}", parse_mode="HTML")
+
+
+@dp.message(Command("del"))
+async def cmd_del(m: Message):
+    """Delete the replied message. Group admin only."""
+    if not await _is_group_admin(m):
+        return
+    if not m.reply_to_message:
+        await _safe_reply(m, "⚠ Reply to a message to delete it.", parse_mode="HTML")
+        return
+    try:
+        await bot.delete_message(m.chat.id, m.reply_to_message.message_id)
+        # Also delete the /del command message
+        try:
+            await m.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        await _safe_reply(m, f"⚠ Failed to delete: {_html_escape(str(e)[:60])}", parse_mode="HTML")
+
+
+@dp.message(Command("staff"))
+async def cmd_staff(m: Message):
+    """List all admins in the group."""
+    if m.chat.type not in ("group", "supergroup"):
+        await _safe_reply(m, "⚠ This command works in groups only.", parse_mode="HTML")
+        return
+    try:
+        admins = await bot.get_chat_administrators(m.chat.id)
+        lines = ["👮 <b>Group Staff</b>\n"]
+        for admin in admins:
+            user = admin.user
+            safe_name = _html_escape((user.first_name or "User")[:32])
+            role = "👑 Owner" if admin.status == "creator" else "🛡 Admin"
+            mention = f'<a href="tg://user?id={user.id}">{safe_name}</a>'
+            lines.append(f"  {role}  ·  {mention}")
+        await _safe_reply(m, "\n".join(lines), parse_mode="HTML")
+    except Exception as e:
+        await _safe_reply(m, f"⚠ Failed to get staff: {_html_escape(str(e)[:60])}", parse_mode="HTML")
+
+
+@dp.message(Command("info"))
+async def cmd_info(m: Message):
+    """Show info about a user. Reply to their message."""
+    if not m.reply_to_message or not m.reply_to_message.from_user:
+        await _safe_reply(m, "⚠ Reply to a user's message.", parse_mode="HTML")
+        return
+    user = m.reply_to_message.from_user
+    safe_name = _html_escape((user.first_name or "User")[:32])
+    last = _html_escape((user.last_name or "")[:32])
+    username = f"@{_html_escape(user.username)}" if user.username else "not set"
+    mention = f'<a href="tg://user?id={user.id}">{safe_name}</a>'
+    text = (
+        f"👤 <b>User Info</b>\n\n"
+        f"Name  ·  {mention}\n"
+        f"Last  ·  {last or 'not set'}\n"
+        f"Username  ·  {username}\n"
+        f"ID  ·  <code>{user.id}</code>\n"
+        f"Bot  ·  {'Yes' if user.is_bot else 'No'}\n"
+        f"Premium  ·  {'Yes' if getattr(user, 'is_premium', False) else 'No'}"
+    )
+    await _safe_reply(m, text, parse_mode="HTML")
+
+
+@dp.message(Command("pinned"))
+async def cmd_pinned(m: Message):
+    """Show the current pinned message."""
+    if m.chat.type not in ("group", "supergroup"):
+        await _safe_reply(m, "⚠ This command works in groups only.", parse_mode="HTML")
+        return
+    try:
+        chat = await bot.get_chat(m.chat.id)
+        pinned = chat.pinned_message
+        if not pinned:
+            await _safe_reply(m, "📌 No pinned message in this chat.", parse_mode="HTML")
+            return
+        # Link to the pinned message
+        if chat.username:
+            link = f"https://t.me/{chat.username}/{pinned.message_id}"
+            await _safe_reply(m, f'📌 <a href="{link}">Pinned Message</a>', parse_mode="HTML")
+        else:
+            text_preview = (pinned.text or pinned.caption or "Media")[:100]
+            safe_preview = _html_escape(text_preview)
+            await _safe_reply(m, f"📌 <b>Pinned:</b> {safe_preview}", parse_mode="HTML")
+    except Exception as e:
+        await _safe_reply(m, f"⚠ Failed: {_html_escape(str(e)[:60])}", parse_mode="HTML")
+
+
+# ─── Warning system (Redis-backed) ────────────────────────────────────────────
+
+_WARN_MAX = 3  # 3 warnings = auto-mute
+
+
+def _warn_key(chat_id: int, user_id: int) -> str:
+    return f"warn:{chat_id}:{user_id}"
+
+
+@dp.message(Command("warn"))
+async def cmd_warn(m: Message):
+    """Warn a user. 3 warnings = auto-mute. Group admin only."""
+    if not await _is_group_admin(m):
+        return
+    if not m.reply_to_message or not m.reply_to_message.from_user:
+        await _safe_reply(m, "⚠ Reply to a user's message to warn them.", parse_mode="HTML")
+        return
+    target = m.reply_to_message.from_user
+    key = _warn_key(m.chat.id, target.id)
+
+    # Increment warn count in Redis
+    count = await redis_client.incr(key)
+    # Set expiry (30 days)
+    await redis_client.expire(key, 86400 * 30)
+
+    safe_name = _html_escape((target.first_name or "User")[:32])
+    mention = f'"<a href="tg://user?id={target.id}">{safe_name}</a>"'
+
+    if count >= _WARN_MAX:
+        # Auto-mute on 3 warnings
+        try:
+            from aiogram.types import ChatPermissions
+            await bot.restrict_chat_member(m.chat.id, target.id, permissions=ChatPermissions(
+                can_send_messages=False,
+                can_send_media_messages=False,
+                can_send_other_messages=False,
+            ))
+            await redis_client.delete(key)  # Reset warns after mute
+            await _safe_reply(
+                m,
+                f"⚠ {mention} warned ({count}/{_WARN_MAX})\n\n"
+                f"🔇 <b>Auto-muted</b> — reached {_WARN_MAX} warnings.",
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            await _safe_reply(m, f"⚠ Warned but failed to mute: {_html_escape(str(e)[:60])}", parse_mode="HTML")
+    else:
+        await _safe_reply(
+            m,
+            f"⚠ {mention} warned ({count}/{_WARN_MAX})",
+            parse_mode="HTML",
+        )
+
+
+@dp.message(Command("unwarn"))
+async def cmd_unwarn(m: Message):
+    """Remove a warning from a user. Group admin only."""
+    if not await _is_group_admin(m):
+        return
+    if not m.reply_to_message or not m.reply_to_message.from_user:
+        await _safe_reply(m, "⚠ Reply to a user's message.", parse_mode="HTML")
+        return
+    target = m.reply_to_message.from_user
+    key = _warn_key(m.chat.id, target.id)
+
+    current = await redis_client.get(key)
+    count = int(current) if current else 0
+
+    if count <= 0:
+        safe_name = _html_escape((target.first_name or "User")[:32])
+        await _safe_reply(m, f"✅ {safe_name} has no warnings.", parse_mode="HTML")
+        return
+
+    new_count = count - 1
+    if new_count <= 0:
+        await redis_client.delete(key)
+    else:
+        await redis_client.set(key, str(new_count))
+        await redis_client.expire(key, 86400 * 30)
+
+    safe_name = _html_escape((target.first_name or "User")[:32])
+    mention = f'"<a href="tg://user?id={target.id}">{safe_name}</a>"'
+    await _safe_reply(m, f"✅ {mention} warning removed ({new_count}/{_WARN_MAX})", parse_mode="HTML")
+
+
+@dp.message(Command("warns"))
+async def cmd_warns(m: Message):
+    """Check how many warnings a user has. Group admin only."""
+    if not await _is_group_admin(m):
+        return
+    if not m.reply_to_message or not m.reply_to_message.from_user:
+        await _safe_reply(m, "⚠ Reply to a user's message.", parse_mode="HTML")
+        return
+    target = m.reply_to_message.from_user
+    key = _warn_key(m.chat.id, target.id)
+
+    current = await redis_client.get(key)
+    count = int(current) if current else 0
+
+    safe_name = _html_escape((target.first_name or "User")[:32])
+    mention = f'"<a href="tg://user?id={target.id}">{safe_name}</a>"'
+    await _safe_reply(m, f"⚠ {mention} has {count}/{_WARN_MAX} warnings", parse_mode="HTML")
 
 
 # ─── Group registration ───────────────────────────────────────────────────────

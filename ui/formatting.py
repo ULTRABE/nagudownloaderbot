@@ -291,7 +291,12 @@ async def build_start_keyboard(bot_username: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="⚙ Settings",  callback_data="cb_settings"),
     ])
 
-    # Row 3: Updates | Support (only if configured)
+    # Row 3: Manage Group
+    rows.append([
+        InlineKeyboardButton(text="👮 Manage Group", callback_data="cb_manage"),
+    ])
+
+    # Row 4: Updates | Support (only if configured)
     row3 = []
     if config.UPDATE_CHANNEL:
         row3.append(InlineKeyboardButton(text="📢 Updates", url=config.UPDATE_CHANNEL))
@@ -324,6 +329,32 @@ def build_back_keyboard() -> InlineKeyboardMarkup:
     """Single '← Back' button to return to main menu."""
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="← Back", callback_data="cb_back"),
+    ]])
+
+
+def build_manage_keyboard() -> InlineKeyboardMarkup:
+    """Group management submenu — 6 categories."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🛡 Moderation", callback_data="mg_mod"),
+            InlineKeyboardButton(text="📌 Pins", callback_data="mg_pins"),
+        ],
+        [
+            InlineKeyboardButton(text="⚠ Warnings", callback_data="mg_warn"),
+            InlineKeyboardButton(text="🧹 Cleanup", callback_data="mg_clean"),
+        ],
+        [
+            InlineKeyboardButton(text="📊 Group Info", callback_data="mg_info"),
+            InlineKeyboardButton(text="👥 Members", callback_data="mg_members"),
+        ],
+        [InlineKeyboardButton(text="← Back", callback_data="cb_back")],
+    ])
+
+
+def build_manage_back_keyboard() -> InlineKeyboardMarkup:
+    """Back to Manage Group menu."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="← Back to Manage", callback_data="cb_manage"),
     ]])
 
 
