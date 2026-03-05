@@ -965,31 +965,28 @@ async def _route_url(m: Message, url: str) -> None:
     if m.chat.type in ("group", "supergroup"):
         await register_group(m.chat.id)
 
-    # Delete user's link message after 5 seconds (except Spotify playlists)
-    is_spotify_playlist_link = (
-        "spotify.com" in url_lower and
-        ("/playlist/" in url_lower or "/album/" in url_lower)
-    )
-    if not is_spotify_playlist_link:
-        async def _delete_link():
-            await asyncio.sleep(5)
-            try:
-                await m.delete()
-            except Exception:
-                pass
-        asyncio.create_task(_delete_link())
+    # Detect supported platform
+    is_instagram = "instagram.com" in url_lower
+    is_youtube = "youtube.com" in url_lower or "youtu.be" in url_lower
+    is_pinterest = "pinterest.com" in url_lower or "pin.it" in url_lower
+    is_spotify = "spotify.com" in url_lower or url_lower.startswith("spotify:")
+    is_supported = is_instagram or is_youtube or is_pinterest or is_spotify
+
+    # Delete link message IMMEDIATELY for supported platforms only
+    if is_supported:
+        try:
+            await m.delete()
+        except Exception:
+            pass
 
     try:
-        if "instagram.com" in url_lower:
+        if is_instagram:
             await handle_instagram(m, url)
-        elif (
-            "youtube.com" in url_lower or
-            "youtu.be" in url_lower
-        ):
+        elif is_youtube:
             await handle_youtube(m, url)
-        elif "pinterest.com" in url_lower or "pin.it" in url_lower:
+        elif is_pinterest:
             await handle_pinterest(m, url)
-        elif "spotify.com" in url_lower or url_lower.startswith("spotify:"):
+        elif is_spotify:
             await handle_spotify_playlist(m, url)
         else:
             _err = await get_emoji_async("ERROR")
