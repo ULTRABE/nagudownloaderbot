@@ -149,6 +149,7 @@ async def _fetch_playlist_tracks_api(playlist_id: str, is_album: bool = False) -
 
     try:
         async with aiohttp.ClientSession() as session:
+            _retried_401 = False  # Track 401 retry to prevent infinite loop
             while url:
                 async with session.get(
                     url,
@@ -156,8 +157,13 @@ async def _fetch_playlist_tracks_api(playlist_id: str, is_album: bool = False) -
                     timeout=aiohttp.ClientTimeout(total=15),
                 ) as resp:
                     if resp.status == 401:
+                        if _retried_401:
+                            # Already retried once — give up to avoid infinite loop
+                            logger.error("Spotify: 401 after token refresh, giving up")
+                            break
                         # Token expired — refresh and retry once
                         logger.warning("Spotify: 401 on playlist fetch, refreshing token")
+                        _retried_401 = True
                         global _spotify_token, _spotify_token_expires
                         _spotify_token = None
                         _spotify_token_expires = 0.0
@@ -165,6 +171,9 @@ async def _fetch_playlist_tracks_api(playlist_id: str, is_album: bool = False) -
                         if not token:
                             break
                         continue
+
+                    # Successful request — reset 401 retry flag
+                    _retried_401 = False
 
                     if resp.status != 200:
                         text = await resp.text()
@@ -231,6 +240,34 @@ async def _fetch_playlist_tracks_spotdl(playlist_url: str) -> List[str]:
     except Exception as e:
         logger.error(f"spotdl url error: {e}", exc_info=True)
         return []
+
+
+async def _fetch_playlist_name(playlist_id: str, is_album: bool = False) -> str:
+    """
+    Fetch playlist or album name from Spotify API.
+    Returns the name string, or "Playlist" / "Album" as fallback.
+    Never crashes — returns fallback on any error.
+    """
+    token = await _get_spotify_token()
+    if not token:
+        return "Album" if is_album else "Playlist"
+    endpoint = "albums" if is_album else "playlists"
+    api_url = f"https://api.spotify.com/v1/{endpoint}/{playlist_id}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                api_url,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    name = data.get("name", "")
+                    if name:
+                        return name[:40]
+    except Exception as e:
+        logger.debug(f"Spotify playlist name fetch error: {e}")
+    return "Album" if is_album else "Playlist"
 
 
 async def _fetch_playlist_tracks(playlist_id: str, is_album: bool = False, playlist_url: str = "") -> List[str]:
@@ -629,8 +666,8 @@ async def _run_playlist_download(m: Message, url: str):
                 return
 
             total = len(track_urls)
-            playlist_name = "Playlist"
-            logger.info(f"SPOTIFY PLAYLIST: {total} tracks to download")
+            playlist_name = await _fetch_playlist_name(playlist_id, is_album=is_album)
+            logger.info(f"SPOTIFY PLAYLIST: '{playlist_name}' — {total} tracks to download")
 
             # Update progress with total count
             _sp = await get_emoji_async("SPOTIFY")
