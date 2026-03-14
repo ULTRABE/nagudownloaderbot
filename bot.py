@@ -174,19 +174,30 @@ async def main():
     logger.info(f"✓ Download timeout: {config.DOWNLOAD_TIMEOUT}s")
     
     # Check cookie folders (paths are absolute, resolved from project root)
+    # Instagram cookies
+    ig_cookies_folder = Path(config.IG_COOKIES_FOLDER)
+    ig_single_cookie = Path(config.IG_COOKIES)
+    if ig_cookies_folder.exists():
+        ig_cookie_count = len(list(ig_cookies_folder.glob("*.txt")))
+        logger.info(f"✓ IG cookies folder: {ig_cookie_count} file(s) in {ig_cookies_folder}")
+    elif ig_single_cookie.exists():
+        logger.info(f"✓ IG cookies: single file {ig_single_cookie}")
+    else:
+        logger.warning(f"⚠ No IG cookies found — age-restricted content may fail")
+        logger.warning(f"  Add cookies to: {ig_cookies_folder}/ (up to 50 files)")
+
+    # YouTube cookies
     yt_cookie_path = Path(config.YT_COOKIES_FOLDER)
-    logger.info(f"✓ YT cookies path: {yt_cookie_path}")
     if yt_cookie_path.exists():
         yt_cookies = len(list(yt_cookie_path.glob("*.txt")))
-        logger.info(f"✓ YT cookies: {yt_cookies} files found")
+        logger.info(f"✓ YT cookies: {yt_cookies} file(s) in {yt_cookie_path}")
     else:
         logger.warning(f"⚠ YT cookies folder not found: {yt_cookie_path}")
 
     yt_music_cookie_path = Path(config.YT_MUSIC_COOKIES_FOLDER)
-    logger.info(f"✓ YT Music cookies path: {yt_music_cookie_path}")
     if yt_music_cookie_path.exists():
         music_cookies = len(list(yt_music_cookie_path.glob("*.txt")))
-        logger.info(f"✓ YT Music cookies: {music_cookies} files found")
+        logger.info(f"✓ YT Music cookies: {music_cookies} file(s) in {yt_music_cookie_path}")
     else:
         logger.warning(f"⚠ YT Music cookies folder not found: {yt_music_cookie_path}")
     

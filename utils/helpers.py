@@ -34,23 +34,16 @@ def get_random_cookie(folder: str) -> Optional[str]:
 
 def resolve_pinterest_url(url: str) -> str:
     """
-    Resolve shortened Pinterest URLs (pin.it)
+    Resolve shortened Pinterest URLs (pin.it).
+    Note: Async resolution is handled in downloaders/pinterest.py via _resolve_pin_url().
+    This sync version is kept for compatibility only.
     
     Args:
         url: Pinterest URL (may be shortened)
     
     Returns:
-        Full Pinterest URL
+        URL as-is (async resolution preferred)
     """
-    if "pin.it/" in url:
-        import subprocess
-        try:
-            resolved = subprocess.getoutput(
-                f"curl -Ls -o /dev/null -w '%{{url_effective}}' {url}"
-            )
-            return resolved if resolved else url
-        except:
-            return url
     return url
 
 def format_duration(seconds: float) -> str:

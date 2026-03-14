@@ -4,16 +4,29 @@ Instagram Downloader — Silent delivery with cache + smart encode.
 Flow:
   1. Send sticker (if enabled)
   2. Download silently (no progress messages)
+     - Layer 1: direct (no proxy)
+     - Layer 2: proxy + Instagram mobile UA (parallel with Layer 1)
+     - Layer 3: cookies from ig_cookies folder (sequential, up to 50 accounts)
+     - Layer 4: cookies + proxy (last resort)
   3. Delete sticker after delivery
   4. Send video — reply to original (with fallback to plain send)
   5. Caption: ✓ Delivered — <mention>
 
-No progress messages for Instagram.
+Cookie support:
+  - Place up to 50 Netscape cookie files in "ig cookies/" folder
+  - Falls back to single cookies_instagram.txt if folder not present
+  - Works WITHOUT cookies too — cookies only used as fallback
+
+Age-restricted / N18+ content:
+  - Bypassed automatically when cookies are available
+  - age_limit set to 100 on all layers
 """
 import asyncio
+import random
 import tempfile
+import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 from yt_dlp import YoutubeDL
 from aiogram.types import Message, FSInputFile
@@ -21,7 +34,6 @@ from aiogram.types import Message, FSInputFile
 from core.bot import bot
 from core.config import config
 from workers.task_queue import download_semaphore
-from utils.helpers import get_random_cookie
 from utils.logger import logger
 from utils.proxy_manager import proxy_manager
 from utils.cache import url_cache
@@ -30,10 +42,52 @@ from utils.media_processor import (
     get_video_info,
 )
 from utils.watchdog import acquire_user_slot, release_user_slot
-from ui.formatting import format_delivered_with_mention, safe_caption, build_safe_media_caption
+from ui.formatting import safe_caption, build_safe_media_caption
 from ui.stickers import send_sticker, delete_sticker
 from ui.emoji_config import get_emoji_async
 from utils.log_channel import log_download
+
+# ─── Cookie helpers ────────────────────────────────────────────────────────────
+
+def _get_ig_cookie() -> Optional[str]:
+    """
+    Get a random Instagram cookie file.
+    Priority: ig cookies/ folder (up to 50 files) → cookies_instagram.txt fallback.
+    Returns path string or None.
+    """
+    # Try multi-cookie folder first
+    ig_folder = config.IG_COOKIES_FOLDER
+    folder_path = Path(ig_folder)
+    if folder_path.exists() and folder_path.is_dir():
+        cookies = list(folder_path.glob("*.txt"))
+        if cookies:
+            return str(random.choice(cookies))
+
+    # Fallback to single cookie file
+    single = config.IG_COOKIES
+    if single and Path(single).exists():
+        return single
+
+    return None
+
+def _get_all_ig_cookies() -> List[str]:
+    """
+    Get all available Instagram cookie file paths.
+    Used for rotating through all accounts on repeated failures.
+    """
+    cookies = []
+    # Multi-cookie folder
+    ig_folder = config.IG_COOKIES_FOLDER
+    folder_path = Path(ig_folder)
+    if folder_path.exists() and folder_path.is_dir():
+        cookies.extend([str(p) for p in sorted(folder_path.glob("*.txt"))])
+
+    # Single file (deduplicate)
+    single = config.IG_COOKIES
+    if single and Path(single).exists() and single not in cookies:
+        cookies.append(single)
+
+    return cookies
 
 # ─── Layered extraction ───────────────────────────────────────────────────────
 
@@ -44,11 +98,13 @@ def _base_opts(tmp: Path, use_proxy: bool = False) -> dict:
         "noprogress": True,
         "outtmpl": str(tmp / "%(title)s.%(ext)s"),
         "http_headers": {"User-Agent": config.pick_user_agent()},
-        "socket_timeout": 15,
+        "socket_timeout": 20,
         "retries": 3,
         "fragment_retries": 3,
-        "ignoreerrors": True,
+        "ignoreerrors": False,
         "format": "best[ext=mp4]/best",
+        # Age-restricted content bypass
+        "age_limit": 100,
     }
     if use_proxy:
         proxy = proxy_manager.pick_proxy()
@@ -78,18 +134,21 @@ async def download_instagram(url: str, tmp: Path) -> Optional[Path]:
     """
     Instagram download — parallel fast layers + cookie fallback.
     Layer 1 (direct) + Layer 2 (proxy+IG UA) run in PARALLEL.
-    Layer 3 (cookies) as sequential fallback.
+    Layer 3+ (cookies, up to 50 accounts) as sequential fallback.
+    Age-restricted/N18+ content bypassed via cookies automatically.
     """
-    # Fast parallel: direct + proxy with Instagram UA
+    # Fast parallel: direct + proxy with Instagram mobile UA
     l1 = _base_opts(tmp, use_proxy=False)
 
     l2 = _base_opts(tmp, use_proxy=True)
-    l2["http_headers"]["User-Agent"] = (
-        "Instagram 344.0.0.0.0 Android (33/13; 420dpi; 1080x2400; "
-        "samsung; SM-S918B; dm3q; qcom; en_US; 605596538)"
-    )
+    l2["http_headers"] = {
+        "User-Agent": (
+            "Instagram 344.0.0.0.0 Android (33/13; 420dpi; 1080x2400; "
+            "samsung; SM-S918B; dm3q; qcom; en_US; 605596538)"
+        )
+    }
 
-    # Run in parallel
+    # Run Layer 1 and Layer 2 in parallel
     results: dict = {}
 
     async def _attempt(idx: int, opts: dict):
@@ -108,14 +167,40 @@ async def download_instagram(url: str, tmp: Path) -> Optional[Path]:
     for i in sorted(results.keys()):
         return results[i]
 
-    # Sequential fallback: cookies
-    opts3 = _base_opts(tmp, use_proxy=True)
-    ig_cookie = config.IG_COOKIES
-    if ig_cookie and Path(ig_cookie).exists():
-        opts3["cookiefile"] = ig_cookie
-    result = await _try_download(url, opts3)
-    if result:
-        return result
+    # Sequential cookie fallback: try each available IG account
+    # This is the key path for age-restricted / private content
+    all_cookies = _get_all_ig_cookies()
+
+    if all_cookies:
+        # Try a random cookie first for speed
+        random.shuffle(all_cookies)
+        for cookie_idx, cookie_file in enumerate(all_cookies[:10]):  # Max 10 attempts
+            for use_proxy in [False, True]:
+                sub_key = f"ig_cookie_{cookie_idx}_{int(use_proxy)}"
+                sub = tmp / sub_key
+                sub.mkdir(exist_ok=True)
+                opts = _base_opts(tmp, use_proxy=use_proxy)
+                opts["outtmpl"] = str(sub / "%(title)s.%(ext)s")
+                opts["cookiefile"] = cookie_file
+                # Extra Instagram-specific options for age-restricted content
+                opts["extractor_args"] = {
+                    "instagram": {
+                        "app_id": "936619743392459",  # Instagram app ID
+                    }
+                }
+                result = await _try_download(url, opts)
+                if result:
+                    logger.info(f"IG: Success with cookie #{cookie_idx + 1} proxy={use_proxy}")
+                    return result
+    else:
+        # No cookies at all — try one more time with proxy only
+        opts = _base_opts(tmp, use_proxy=True)
+        sub = tmp / "ig_proxy_final"
+        sub.mkdir(exist_ok=True)
+        opts["outtmpl"] = str(sub / "%(title)s.%(ext)s")
+        result = await _try_download(url, opts)
+        if result:
+            return result
 
     return None
 
@@ -149,7 +234,7 @@ async def _safe_reply_video(m: Message, **kwargs) -> Optional[Message]:
             except Exception as e2:
                 err_str2 = str(e2).lower()
                 if "entity_text_invalid" in err_str2 or "bad request" in err_str2:
-                    logger.warning(f"IG send_video: caption invalid, retrying without caption")
+                    logger.warning("IG send_video: caption invalid, retrying without caption")
                     kwargs.pop("caption", None)
                     kwargs.pop("parse_mode", None)
                     try:
@@ -202,24 +287,22 @@ async def _safe_reply_text(m: Message, text: str, **kwargs) -> Optional[Message]
 
 async def handle_instagram(m: Message, url: str):
     """
-    Download Instagram posts, reels, stories.
+    Download Instagram posts, reels, stories — including age-restricted content.
     Cache-first → stream copy → adaptive encode.
     Silent processing — no progress messages.
     Reply to original message with ✓ Delivered — <mention>.
+    Supports multiple cookie accounts (up to 50) for maximum coverage.
     """
     if not await acquire_user_slot(m.from_user.id, config.MAX_CONCURRENT_PER_USER):
         _proc = await get_emoji_async("PROCESS")
         await _safe_reply_text(m, f"{_proc} You have downloads in progress. Please wait.", parse_mode="HTML")
         return
 
-    import time as _time_mod
     user_id = m.from_user.id
     first_name = m.from_user.first_name or "User"
-    # Build sanitized caption via centralized builder — prevents ENTITY_TEXT_INVALID
-    from ui.emoji_config import get_emoji_async as _get_emoji
-    delivered_emoji = await _get_emoji("DELIVERED")
+    delivered_emoji = await get_emoji_async("DELIVERED")
     delivered_caption = build_safe_media_caption(user_id, first_name, delivered_emoji)
-    _t_start = _time_mod.monotonic()
+    _t_start = time.monotonic()
 
     sticker_msg_id = None
 
@@ -263,13 +346,14 @@ async def handle_instagram(m: Message, url: str):
                         )
                         return
 
-                    # Skip re-encoding — just ensure fits Telegram
+                    # Ensure video fits Telegram (stream copy or CRF encode if needed)
                     parts = await ensure_fits_telegram(video_file, tmp)
 
                     # Delete sticker before sending
                     await delete_sticker(bot, m.chat.id, sticker_msg_id)
                     sticker_msg_id = None
 
+                    sent_count = 0
                     for i, part in enumerate(parts):
                         if not part.exists():
                             logger.warning(f"IG: Part {i} does not exist, skipping")
@@ -286,14 +370,24 @@ async def handle_instagram(m: Message, url: str):
                             height=info.get("height") or None,
                             duration=int(info.get("duration") or 0) or None,
                         )
+                        sent_count += 1
                         # Cache single-part result
                         if sent and sent.video and len(parts) == 1:
                             await url_cache.set(url, "video", sent.video.file_id)
 
+                    if sent_count == 0:
+                        _err = await get_emoji_async("ERROR")
+                        await _safe_reply_text(
+                            m,
+                            f"{_err} Unable to send this media.\n\nPlease try again.",
+                            parse_mode="HTML",
+                        )
+                        return
+
                     logger.info(f"INSTAGRAM: Sent {len(parts)} file(s) to {user_id}")
 
                     # Log to channel
-                    _elapsed = _time_mod.monotonic() - _t_start
+                    _elapsed = time.monotonic() - _t_start
                     asyncio.create_task(log_download(
                         user=m.from_user,
                         link=url,
@@ -306,8 +400,9 @@ async def handle_instagram(m: Message, url: str):
                 raise
             except Exception as e:
                 logger.error(f"INSTAGRAM ERROR: {e}", exc_info=True)
-                await delete_sticker(bot, m.chat.id, sticker_msg_id)
-                sticker_msg_id = None
+                if sticker_msg_id:
+                    await delete_sticker(bot, m.chat.id, sticker_msg_id)
+                    sticker_msg_id = None
                 _err = await get_emoji_async("ERROR")
                 await _safe_reply_text(
                     m,
@@ -316,6 +411,6 @@ async def handle_instagram(m: Message, url: str):
                 )
 
     finally:
-        await release_user_slot(m.from_user.id)
         if sticker_msg_id:
             await delete_sticker(bot, m.chat.id, sticker_msg_id)
+        await release_user_slot(m.from_user.id)

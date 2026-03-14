@@ -43,6 +43,8 @@ COPY assets/ ./assets/
 # Folder names contain spaces — quote them explicitly
 COPY ["yt cookies/", "./yt cookies/"]
 COPY ["yt music cookies/", "./yt music cookies/"]
+# Instagram multi-cookie folder (up to 50 accounts)
+COPY ["ig cookies/", "./ig cookies/"]
 
 # Create temp directory
 RUN mkdir -p /tmp/downloads

@@ -17,7 +17,7 @@ Supports:
 Speed optimized:
   - Single-stream format (no merge)
   - No re-encoding (stream copy only)
-  - 15s timeout, 2 retries
+  - 20s timeout, 3 retries
 """
 import asyncio
 import re
@@ -62,19 +62,25 @@ async def _resolve_pin_url(url: str) -> str:
         async with aiohttp.ClientSession() as session:
             async with session.head(
                 url, allow_redirects=True,
-                timeout=aiohttp.ClientTimeout(total=8),
+                timeout=aiohttp.ClientTimeout(total=10),
                 headers={"User-Agent": config.pick_user_agent()},
             ) as resp:
-                return str(resp.url)
+                resolved = str(resp.url)
+                if "pinterest." in resolved:
+                    return resolved
+                return url
     except Exception:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     url, allow_redirects=True,
-                    timeout=aiohttp.ClientTimeout(total=8),
+                    timeout=aiohttp.ClientTimeout(total=10),
                     headers={"User-Agent": config.pick_user_agent()},
                 ) as resp:
-                    return str(resp.url)
+                    resolved = str(resp.url)
+                    if "pinterest." in resolved:
+                        return resolved
+                    return url
         except Exception:
             return url
 
@@ -86,47 +92,79 @@ def _is_image(path: Path) -> bool:
 
 def _is_video(path: Path) -> bool:
     """Check if file is a video by extension."""
-    return path.suffix.lower() in (".mp4", ".webm", ".mkv", ".mov", ".m4v")
+    return path.suffix.lower() in (".mp4", ".webm", ".mkv", ".mov", ".m4v", ".mp4v")
+
+def _collect_media_files(directory: Path) -> List[Path]:
+    """Collect all media files from a directory."""
+    video_exts = ["*.mp4", "*.webm", "*.mkv", "*.mov", "*.m4v", "*.mp4v"]
+    image_exts = ["*.jpg", "*.jpeg", "*.png", "*.webp"]
+    files = []
+    for pat in video_exts:
+        files.extend(directory.glob(pat))
+    for pat in image_exts:
+        files.extend(directory.glob(pat))
+    return sorted(files)
 
 async def _download_pinterest(url: str, tmp: Path) -> List[Path]:
     """
     Download Pinterest media — videos AND photos.
-    1. Try yt-dlp for video (HLS-compatible format)
+    1. Try yt-dlp for video (single-stream — no merge required)
     2. If no video → scrape image from page (pinimg originals)
     """
     safe_title = _sanitize_filename("pin_%(id)s")
+    proxy = proxy_manager.pick_proxy()
+
     base_opts = {
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
         "outtmpl": str(tmp / f"{safe_title}.%(ext)s"),
-        "proxy": proxy_manager.pick_proxy(),
         "http_headers": {"User-Agent": config.pick_user_agent()},
-        "socket_timeout": 15,
-        "retries": 2,
-        "fragment_retries": 2,
-        "ignoreerrors": True,
+        "socket_timeout": 20,
+        "retries": 3,
+        "fragment_retries": 3,
+        "ignoreerrors": False,
         "writethumbnail": False,
+        "noplaylist": True,
     }
+    if proxy:
+        base_opts["proxy"] = proxy
 
-    # Try video download — use 'bestvideo+bestaudio/best' (handles HLS/m3u8)
-    opts = {**base_opts, "format": "bestvideo+bestaudio/best"}
-    try:
-        with YoutubeDL(opts) as ydl:
-            await asyncio.to_thread(lambda: ydl.download([url]))
-    except Exception as e:
-        logger.debug(f"Pinterest video download failed: {str(e)[:100]}")
+    # Layer 1: best single-stream mp4 (no merge needed = fast)
+    # Use 'best[ext=mp4]' first, then 'best' as fallback — avoids needing ffmpeg merge
+    for fmt in [
+        "best[ext=mp4]/best[height<=1080][ext=mp4]/best[ext=mp4]/best",
+        "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
+    ]:
+        opts = {**base_opts, "format": fmt}
+        sub = tmp / f"layer_{fmt[:8].replace('[','').replace(']','').replace('+','_')}"
+        sub.mkdir(exist_ok=True)
+        opts["outtmpl"] = str(sub / f"{safe_title}.%(ext)s")
+        try:
+            with YoutubeDL(opts) as ydl:
+                info = await asyncio.to_thread(lambda: ydl.extract_info(url, download=True))
+            files = _collect_media_files(sub)
+            # Prefer video files
+            videos = [f for f in files if _is_video(f)]
+            if videos:
+                return videos
+            images = [f for f in files if _is_image(f)]
+            if images:
+                return images
+        except Exception as e:
+            logger.debug(f"Pinterest yt-dlp layer failed ({fmt[:20]}): {str(e)[:100]}")
 
-    # Check for downloaded video files
-    files = sorted(
-        list(tmp.glob("*.mp4")) + list(tmp.glob("*.webm")) +
-        list(tmp.glob("*.mkv")) + list(tmp.glob("*.mov"))
-    )
-    if files:
-        return files
+    # Check if any files landed in tmp root
+    root_files = _collect_media_files(tmp)
+    videos = [f for f in root_files if _is_video(f)]
+    if videos:
+        return videos
+    images = [f for f in root_files if _is_image(f)]
+    if images:
+        return images
 
     # No video found → try downloading image from page
-    logger.info(f"PINTEREST: No video, trying image scrape for {url[:60]}")
+    logger.info(f"PINTEREST: No video found, trying image scrape for {url[:60]}")
     image_file = await _download_pinterest_image(url, tmp)
     if image_file:
         return [image_file]
@@ -138,58 +176,78 @@ async def _download_pinterest_image(url: str, tmp: Path) -> Optional[Path]:
     """
     Scrape Pinterest page for the original image URL and download it.
     Looks for i.pinimg.com/originals/ URLs in the page HTML.
+    Tries multiple user agents and proxies.
     """
-    import re as _re
-    try:
-        proxy = proxy_manager.pick_proxy()
-        timeout = aiohttp.ClientTimeout(total=10)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            # Fetch the page
-            async with session.get(
-                url, allow_redirects=True,
-                headers={"User-Agent": config.pick_user_agent()},
-                proxy=proxy,
-            ) as resp:
-                if resp.status != 200:
-                    return None
-                html_text = await resp.text()
+    proxy = proxy_manager.pick_proxy()
+    timeout = aiohttp.ClientTimeout(total=15)
 
-            # Find original quality image URLs
-            originals = _re.findall(r'"(https://i\.pinimg\.com/originals/[^"]+)"', html_text)
-            if not originals:
-                # Try any pinimg URL as fallback
-                all_imgs = _re.findall(r'"(https://i\.pinimg\.com/[^"]+)"', html_text)
-                # Sort by URL length (longer = higher quality usually)
-                all_imgs = sorted(set(all_imgs), key=len, reverse=True)
-                originals = all_imgs[:1] if all_imgs else []
+    headers_list = [
+        {"User-Agent": config.pick_user_agent()},
+        {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+                          "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+        {"User-Agent": "Pinterest/iPhone"},
+    ]
 
-            if not originals:
-                logger.debug("Pinterest: no image URLs found in page")
-                return None
+    for headers in headers_list:
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                req_kwargs = {"allow_redirects": True, "headers": headers}
+                if proxy:
+                    req_kwargs["proxy"] = proxy
 
-            image_url = originals[0]
-            # Determine extension
-            ext = ".jpg"
-            if ".png" in image_url:
-                ext = ".png"
-            elif ".webp" in image_url:
-                ext = ".webp"
-            elif ".gif" in image_url:
-                ext = ".gif"
+                async with session.get(url, **req_kwargs) as resp:
+                    if resp.status != 200:
+                        continue
+                    html_text = await resp.text()
 
-            # Download the image
-            async with session.get(image_url, proxy=proxy) as img_resp:
-                if img_resp.status != 200:
-                    return None
-                data = await img_resp.read()
-                out_path = tmp / f"pin_image{ext}"
-                out_path.write_bytes(data)
-                logger.info(f"PINTEREST: Downloaded image ({len(data)/1024:.0f}KB)")
-                return out_path
+                # Find original quality image URLs
+                originals = re.findall(r'"(https://i\.pinimg\.com/originals/[^"]+)"', html_text)
+                if not originals:
+                    # Try 736x (high quality)
+                    originals = re.findall(r'"(https://i\.pinimg\.com/736x/[^"]+)"', html_text)
+                if not originals:
+                    # Try any pinimg URL as fallback
+                    all_imgs = re.findall(r'"(https://i\.pinimg\.com/[^"]+)"', html_text)
+                    all_imgs = sorted(set(all_imgs), key=len, reverse=True)
+                    originals = all_imgs[:1] if all_imgs else []
 
-    except Exception as e:
-        logger.debug(f"Pinterest image scrape failed: {e}")
-        return None
+                if not originals:
+                    logger.debug(f"Pinterest: no image URLs found (UA: {headers.get('User-Agent','')[:30]})")
+                    continue
+
+                image_url = originals[0]
+                # Determine extension
+                ext = ".jpg"
+                if ".png" in image_url:
+                    ext = ".png"
+                elif ".webp" in image_url:
+                    ext = ".webp"
+                elif ".gif" in image_url:
+                    ext = ".gif"
+
+                # Download the image
+                dl_kwargs = {}
+                if proxy:
+                    dl_kwargs["proxy"] = proxy
+                async with session.get(image_url, **dl_kwargs) as img_resp:
+                    if img_resp.status != 200:
+                        continue
+                    data = await img_resp.read()
+                    if len(data) < 1000:  # Skip tiny/broken images
+                        continue
+                    out_path = tmp / f"pin_image{ext}"
+                    out_path.write_bytes(data)
+                    logger.info(f"PINTEREST: Downloaded image ({len(data)/1024:.0f}KB)")
+                    return out_path
+
+        except Exception as e:
+            logger.debug(f"Pinterest image scrape attempt failed: {e}")
+            continue
+
+    return None
 
 # ─── Safe send helpers ────────────────────────────────────────────────────────
 
@@ -371,6 +429,11 @@ async def handle_pinterest(m: Message, url: str):
                                 if sent and sent.video and len(files) == 1 and len(parts) == 1:
                                     await url_cache.set(url, "video", sent.video.file_id)
 
+                    if total_sent == 0:
+                        _err = await get_emoji_async("ERROR")
+                        await _safe_reply_text(m, f"{_err} Unable to send this media.\n\nPlease try again.", parse_mode="HTML")
+                        return
+
                     logger.info(f"PINTEREST: Sent {total_sent} file(s) to {user_id}")
                     _elapsed = time.monotonic() - _t_start
                     asyncio.create_task(log_download(user=m.from_user, link=url, chat=m.chat, media_type="Media (Pinterest)", time_taken=_elapsed))
@@ -379,13 +442,13 @@ async def handle_pinterest(m: Message, url: str):
                 raise
             except Exception as e:
                 logger.error(f"PINTEREST ERROR: {e}", exc_info=True)
-                await delete_sticker(bot, m.chat.id, sticker_msg_id)
-                sticker_msg_id = None
-                _err = await get_emoji_async("ERROR")
-                await _safe_reply_text(m, f"{_err} Unable to process this link.\n\nPlease try again.", parse_mode="HTML")
-            finally:
                 if sticker_msg_id:
                     await delete_sticker(bot, m.chat.id, sticker_msg_id)
+                    sticker_msg_id = None
+                _err = await get_emoji_async("ERROR")
+                await _safe_reply_text(m, f"{_err} Unable to process this link.\n\nPlease try again.", parse_mode="HTML")
 
     finally:
+        if sticker_msg_id:
+            await delete_sticker(bot, m.chat.id, sticker_msg_id)
         await release_user_slot(m.from_user.id)
