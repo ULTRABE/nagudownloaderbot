@@ -18,14 +18,18 @@ YT Music:
 Extraction layers (4-layer fallback):
   1. Default client (no special config)
   2. mweb + ios clients (avoids 403 on desktop-blocked content)
-  3. Cookies (authenticated access)
+  3. Cookies (authenticated access — bypasses age restriction + sign-in walls)
   4. Cookies + mweb (ultimate fallback)
+
+Age-restricted content:
+  Layers 3 & 4 use cookies + age_limit bypass flags for N18+ content.
 
 Cache:
   SHA256(url+format) → Telegram file_id → instant re-delivery
 
 Cookie folder:
   Never crash if folder missing — skip silently
+  Supports up to 50 cookie files per folder
 
 >50MB fix:
   CRF-based adaptive encode → constrained bitrate fallback
@@ -82,16 +86,32 @@ def _base_opts(tmp: Path, use_proxy: bool = False) -> dict:
         "noprogress": True,
         "outtmpl": str(tmp / "%(title)s.%(ext)s"),
         "http_headers": {"User-Agent": config.pick_user_agent()},
-        "socket_timeout": 15,
+        "socket_timeout": 20,
         "retries": 3,
         "fragment_retries": 3,
         "extractor_retries": 3,
-        "ignoreerrors": True,  # Don't die on transient errors
+        "ignoreerrors": False,
+        # Age-restricted content: bypass age gate when possible without cookies
+        "age_limit": 100,
     }
     if use_proxy:
         proxy = proxy_manager.pick_proxy()
         if proxy:
             opts["proxy"] = proxy
+    return opts
+
+
+def _cookie_opts(tmp: Path, cookie_folder: str, use_proxy: bool = True) -> dict:
+    """
+    yt-dlp options with cookie authentication.
+    Cookies bypass age-restrictions and sign-in walls.
+    """
+    opts = _base_opts(tmp, use_proxy=use_proxy)
+    # Age-restricted bypass with cookies
+    opts["age_limit"] = 100
+    cookie_file = get_random_cookie(cookie_folder)
+    if cookie_file:
+        opts["cookiefile"] = cookie_file
     return opts
 
 
@@ -130,7 +150,7 @@ async def _parallel_download(url: str, tmp: Path, fmt: str, opts_list: list) -> 
     for i, opts in enumerate(opts_list):
         tasks.append(asyncio.create_task(_attempt(i, opts)))
 
-    # Wait for all to complete (they're fast with 15s timeout)
+    # Wait for all to complete (they're fast with 20s timeout)
     await asyncio.gather(*tasks, return_exceptions=True)
 
     # Return first successful result (prefer lower index = faster layer)
@@ -142,12 +162,13 @@ async def _parallel_download(url: str, tmp: Path, fmt: str, opts_list: list) -> 
 async def download_youtube_video(
     url: str,
     tmp: Path,
-    fmt: str = "best[height<=720][ext=mp4]/best[height<=720]/bestvideo[height<=720]+bestaudio/best",
+    fmt: str = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]/best",
 ) -> Optional[Path]:
     """
     Download YouTube video — parallel fast layers, then sequential fallback.
     Layer 1 (direct, no proxy) + Layer 2 (mweb+ios) run in PARALLEL.
     If both fail → Layer 3 (cookies) → Layer 4 (cookies+mweb) sequential.
+    Cookies bypass age-restrictions and sign-in walls for N18+ content.
     """
     # Fast parallel: Layer 1 (direct) + Layer 2 (mweb, with proxy)
     l1 = _base_opts(tmp, use_proxy=False)
@@ -163,11 +184,8 @@ async def download_youtube_video(
 
     # Sequential fallback: Layer 3 (cookies) → Layer 4 (cookies+mweb)
     for use_mweb in [False, True]:
-        opts = _base_opts(tmp, use_proxy=True)
+        opts = _cookie_opts(tmp, config.YT_COOKIES_FOLDER, use_proxy=True)
         opts["format"] = fmt
-        cookie_file = get_random_cookie(config.YT_COOKIES_FOLDER)
-        if cookie_file:
-            opts["cookiefile"] = cookie_file
         if use_mweb:
             opts["extractor_args"] = {"youtube": {"player_client": ["mweb"]}}
         result = await _try_download(url, opts)
@@ -178,7 +196,9 @@ async def download_youtube_video(
 
 
 async def download_youtube_audio(url: str, tmp: Path, is_music: bool = False, quality: str = "192") -> Optional[Path]:
-    """Download YouTube/YT Music audio as MP3 — parallel + sequential fallback"""
+    """Download YouTube/YT Music audio as MP3 — parallel + sequential fallback.
+    Cookies bypass age-restrictions for N18+ audio content.
+    """
     fmt = "bestaudio[ext=m4a]/bestaudio/best"
     pp = [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": quality}]
 
@@ -215,16 +235,13 @@ async def download_youtube_audio(url: str, tmp: Path, is_music: bool = False, qu
     for i in sorted(results.keys()):
         return results[i]
 
-    # Sequential fallback with cookies
+    # Sequential fallback with cookies (bypasses age-gate)
     cookie_folder = config.YT_MUSIC_COOKIES_FOLDER if is_music else config.YT_COOKIES_FOLDER
     for use_mweb in [False, True]:
-        opts = _base_opts(tmp, use_proxy=True)
+        opts = _cookie_opts(tmp, cookie_folder, use_proxy=True)
         opts["format"] = fmt
         opts["postprocessors"] = pp
         opts["outtmpl"] = str(tmp / "%(title)s.%(ext)s")
-        cookie_file = get_random_cookie(cookie_folder)
-        if cookie_file:
-            opts["cookiefile"] = cookie_file
         if use_mweb:
             opts["extractor_args"] = {"youtube": {"player_client": ["mweb"]}}
         try:
@@ -392,7 +409,7 @@ async def handle_youtube_music(m: Message, url: str):
     try:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp = Path(tmp_dir)
-            audio_file = await download_youtube_audio(url, tmp, is_music=True)
+            audio_file = await download_youtube_audio(url, tmp, is_music=True, quality="320")
 
             if not audio_file or not audio_file.exists():
                 await delete_sticker(bot, m.chat.id, sticker_msg_id)
@@ -415,7 +432,8 @@ async def handle_youtube_music(m: Message, url: str):
         raise
     except Exception as e:
         logger.error(f"YT MUSIC ERROR: {e}", exc_info=True)
-        await delete_sticker(bot, m.chat.id, sticker_msg_id)
+        if sticker_msg_id:
+            await delete_sticker(bot, m.chat.id, sticker_msg_id)
         _err = await get_emoji_async("ERROR")
         await _safe_reply_text(m, f"{_err} Unable to process this link.\n\nPlease try again.", parse_mode="HTML")
 
@@ -480,7 +498,8 @@ async def handle_youtube_short(m: Message, url: str):
         raise
     except Exception as e:
         logger.error(f"SHORTS ERROR: {e}", exc_info=True)
-        await delete_sticker(bot, m.chat.id, sticker_msg_id)
+        if sticker_msg_id:
+            await delete_sticker(bot, m.chat.id, sticker_msg_id)
         _err = await get_emoji_async("ERROR")
         await _safe_reply_text(m, f"{_err} Unable to process this link.\n\nPlease try again.", parse_mode="HTML")
 
@@ -488,7 +507,7 @@ async def handle_youtube_short(m: Message, url: str):
 
 async def handle_youtube_normal(m: Message, url: str):
     """
-    Normal YouTube video with user-locked colored format picker.
+    Normal YouTube video with user-locked format picker.
     Only the user who sent the link can tap the buttons.
     """
     user_id = m.from_user.id
@@ -498,9 +517,10 @@ async def handle_youtube_normal(m: Message, url: str):
     sticker_msg_id = await send_sticker(bot, m.chat.id, "youtube")
 
     # User-locked buttons: encode user_id in callback_data
+    # NOTE: InlineKeyboardButton does NOT support 'style' parameter in aiogram
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🎥 Video", callback_data=f"yt_video:{user_id}:{job_key}", style="primary"),
-        InlineKeyboardButton(text="🎧 Audio", callback_data=f"yt_audio:{user_id}:{job_key}", style="success"),
+        InlineKeyboardButton(text="🎥 Video", callback_data=f"yt_video:{user_id}:{job_key}"),
+        InlineKeyboardButton(text="🎧 Audio", callback_data=f"yt_audio:{user_id}:{job_key}"),
     ]])
 
     _yt = await get_emoji_async("YT")
@@ -661,9 +681,11 @@ async def cb_yt_video(callback: CallbackQuery):
             await url_cache.set(url, "video", sent.video.file_id)
 
         logger.info(f"YT VIDEO: Sent to {user_id}")
+        _elapsed = time.monotonic()
         asyncio.create_task(log_download(
-            user=type("U", (), {"id": user_id, "first_name": first_name})(),
-            link=url, chat_type="Private", media_type="Video", time_taken=0.0,
+            user=type("U", (), {"id": user_id, "first_name": first_name, "username": None})(),
+            link=url, chat=type("C", (), {"id": chat_id, "type": "private"})(),
+            media_type="Video (YouTube)", time_taken=0.0,
         ))
 
     except Exception as e:
@@ -734,8 +756,9 @@ async def cb_yt_audio(callback: CallbackQuery):
 
         logger.info(f"YT AUDIO: Sent to {user_id}")
         asyncio.create_task(log_download(
-            user=type("U", (), {"id": user_id, "first_name": first_name})(),
-            link=url, chat_type="Private", media_type="Audio", time_taken=0.0,
+            user=type("U", (), {"id": user_id, "first_name": first_name, "username": None})(),
+            link=url, chat=type("C", (), {"id": chat_id, "type": "private"})(),
+            media_type="Audio (YouTube)", time_taken=0.0,
         ))
 
     except Exception as e:
