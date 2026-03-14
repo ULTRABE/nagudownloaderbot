@@ -3,10 +3,17 @@ Proxy Manager — Centralized proxy pool with validation, persistence, and admin
 
 Features:
   - Loads proxies from ENV (PROXIES) + Redis (persistent) + built-in defaults
-  - Auto-validates proxies when added via /addpxy
+  - Validates all proxies at startup — removes dead ones from the live pool
+  - Dead proxies are NOT discarded entirely; they are retried on /clean
   - Admin commands: /addpxy, /rm, /clean
   - pick_proxy() returns random live proxy for any handler
   - Supports formats: IP:PORT, IP:PORT:USER:PASS, http://IP:PORT, socks5://IP:PORT
+
+Startup validation:
+  - All proxies are tested concurrently (50 at a time) during initialize()
+  - Dead proxies are removed from the live pool immediately
+  - This keeps pick_proxy() returning only working proxies
+  - /clean re-validates and removes dead ones from the all-pool too
 
 Usage:
     from utils.proxy_manager import proxy_manager
@@ -27,15 +34,17 @@ from utils.logger import logger
 
 # ─── Redis key for persistent proxy storage ───────────────────────────────────
 _REDIS_KEY = "proxies:all"
+_REDIS_LIVE_KEY = "proxies:live"
 
 # ─── Validation settings ──────────────────────────────────────────────────────
 _VALIDATION_URL = "http://httpbin.org/ip"
 _VALIDATION_TIMEOUT = 10      # seconds per proxy
 _VALIDATION_CONCURRENCY = 50  # max simultaneous checks
+_STARTUP_VALIDATION_TIMEOUT = 12  # slightly longer on startup
 
 # ─── Built-in default proxy pool (authenticated) ─────────────────────────────
 # Format: IP:PORT:USER:PASS → normalized to http://USER:PASS@IP:PORT
-# These are loaded on startup and merged with Redis proxies.
+# These are loaded on startup, validated, and only live ones are used.
 
 _DEFAULT_PROXIES = [
     "170.130.62.24:8800:203033:JmNd95Z3vcX",
@@ -133,15 +142,16 @@ def _normalize(proxy: str) -> str:
 
 class ProxyManager:
     """
-    Centralized proxy pool with validation, persistence, and admin controls.
+    Centralized proxy pool with startup validation, persistence, and admin controls.
 
     On startup:
       1. Load proxies from: built-in defaults + ENV PROXIES + Redis
-      2. Add all to live pool (skip slow validation on startup)
-      3. Proxies added via /addpxy are auto-validated before adding
+      2. Validate ALL proxies concurrently — remove dead ones from live pool
+      3. Only live proxies are used for downloads
+      4. Dead proxies are kept in _all for reference (re-tested on /clean)
 
     Runtime:
-      - pick_proxy() → random live proxy (or None)
+      - pick_proxy() → random live proxy (or None if all dead)
       - add_proxies() → validate + add to pool + Redis
       - remove_proxy() → remove from pool + Redis
       - clean() → re-validate all, remove dead
@@ -154,8 +164,9 @@ class ProxyManager:
 
     async def initialize(self):
         """
-        Load all proxy sources. Skip validation on startup for fast boot.
-        Proxies are validated when added via /addpxy or /clean.
+        Load all proxy sources and validate them at startup.
+        Dead proxies are excluded from the live pool immediately.
+        Bot can still work without proxies — pick_proxy() returns None.
         """
         if self._initialized:
             return
@@ -188,24 +199,44 @@ class ProxyManager:
             logger.warning(f"Proxy: Redis load failed: {e}")
 
         self._all = all_raw
-        self._live = list(all_raw)  # Trust all on startup — /clean validates later
         total = len(all_raw)
 
         if total == 0:
             logger.info("Proxy: No proxies configured — downloads will run without proxy")
-        else:
-            logger.info(f"Proxy: Loaded {total} proxies (use /clean to validate)")
+            self._live = []
+            self._initialized = True
+            return
 
-        # Persist to Redis
+        logger.info(f"Proxy: Validating {total} proxies at startup (this may take ~10-15s)...")
+
+        # Validate all proxies concurrently — only keep live ones
+        alive, dead = await self._validate_batch(list(all_raw), timeout=_STARTUP_VALIDATION_TIMEOUT)
+        self._live = alive
+
+        # Remove confirmed-dead proxies from _all to keep it clean
+        # (they may come back later via /addpxy or /clean)
+        for d in dead:
+            self._all.discard(d)
+
+        logger.info(
+            f"Proxy: {len(alive)}/{total} proxies are live "
+            f"({len(dead)} dead removed)"
+        )
+
+        if len(alive) == 0:
+            logger.warning("Proxy: All proxies are dead! Downloads will run without proxy.")
+            logger.warning("Proxy: Use /addpxy to add new proxies or /clean to re-test.")
+
+        # Persist live proxies to Redis
         await self._sync_to_redis()
 
         self._initialized = True
 
-    async def _validate_one(self, proxy: str) -> bool:
+    async def _validate_one(self, proxy: str, timeout: int = _VALIDATION_TIMEOUT) -> bool:
         """Test a single proxy by making an HTTP request through it."""
         try:
-            timeout = aiohttp.ClientTimeout(total=_VALIDATION_TIMEOUT)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            to = aiohttp.ClientTimeout(total=timeout)
+            async with aiohttp.ClientSession(timeout=to) as session:
                 async with session.get(
                     _VALIDATION_URL,
                     proxy=proxy,
@@ -215,7 +246,9 @@ class ProxyManager:
         except Exception:
             return False
 
-    async def _validate_batch(self, proxies: List[str]) -> Tuple[List[str], List[str]]:
+    async def _validate_batch(
+        self, proxies: List[str], timeout: int = _VALIDATION_TIMEOUT
+    ) -> Tuple[List[str], List[str]]:
         """Validate a batch of proxies concurrently. Returns (alive, dead)."""
         sem = asyncio.Semaphore(_VALIDATION_CONCURRENCY)
         alive: List[str] = []
@@ -223,7 +256,7 @@ class ProxyManager:
 
         async def _check(proxy: str):
             async with sem:
-                ok = await self._validate_one(proxy)
+                ok = await self._validate_one(proxy, timeout=timeout)
                 if ok:
                     alive.append(proxy)
                 else:
@@ -251,7 +284,7 @@ class ProxyManager:
 
     def get_stats(self) -> dict:
         """Get proxy pool statistics."""
-        return {"total": len(self._all), "live": len(self._live)}
+        return {"total": len(self._all) + len(self._live), "live": len(self._live)}
 
     def get_live_count(self) -> int:
         return len(self._live)
@@ -263,9 +296,10 @@ class ProxyManager:
         Auto-validates each proxy before adding.
         """
         to_check: List[str] = []
+        existing = set(self._live) | self._all
         for p in raw_proxies:
             n = _normalize(p)
-            if n and n not in self._all:
+            if n and n not in existing:
                 to_check.append(n)
 
         if not to_check:
@@ -300,18 +334,28 @@ class ProxyManager:
         return removed
 
     async def clean(self) -> Tuple[int, int]:
-        """Re-validate ALL proxies. Remove dead ones. Returns (alive, removed)."""
-        if not self._all:
+        """
+        Re-validate ALL proxies (live + previously dead defaults).
+        Remove dead ones. Returns (alive, removed).
+        """
+        # Re-add all defaults to give them another chance
+        all_to_test: Set[str] = set(self._live) | self._all
+        for p in _DEFAULT_PROXIES:
+            n = _normalize(p)
+            if n:
+                all_to_test.add(n)
+
+        if not all_to_test:
             return 0, 0
 
-        all_proxies = list(self._all)
-        alive, dead = await self._validate_batch(all_proxies)
+        logger.info(f"Proxy /clean: testing {len(all_to_test)} proxies...")
+        alive, dead = await self._validate_batch(list(all_to_test))
 
         self._live = alive
-        for d in dead:
-            self._all.discard(d)
+        self._all = set(alive)  # Only keep confirmed live proxies in _all
 
         await self._sync_to_redis()
+        logger.info(f"Proxy /clean: {len(alive)} alive, {len(dead)} removed")
         return len(alive), len(dead)
 
 
