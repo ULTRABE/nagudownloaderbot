@@ -50,7 +50,12 @@ class Config:
         # Cookie files and folders
         # Use absolute paths resolved from the project root so the bot finds
         # cookies regardless of the working directory at runtime (e.g. Railway).
+        #
+        # Instagram cookies:
+        #   - If "ig cookies/" folder exists, all *.txt files in it are used (up to 50)
+        #   - Otherwise falls back to single cookies_instagram.txt
         self.IG_COOKIES = str(_PROJECT_ROOT / "cookies_instagram.txt")
+        self.IG_COOKIES_FOLDER = str(_PROJECT_ROOT / "ig cookies")
         self.YT_COOKIES_FOLDER = str(_PROJECT_ROOT / "yt cookies")
         self.YT_MUSIC_COOKIES_FOLDER = str(_PROJECT_ROOT / "yt music cookies")
         
