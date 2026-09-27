@@ -74,10 +74,24 @@ class Config:
         ]
         
         # Performance settings
-        self.MAX_CONCURRENT_DOWNLOADS = 12
-        self.MAX_CONCURRENT_MUSIC = 7
-        self.MAX_CONCURRENT_SPOTIFY = 6    # Limit concurrent playlist downloads
-        self.MAX_CONCURRENT_PER_USER = 6   # Max simultaneous jobs per user
+        # All overridable via env so concurrency can be tuned live (Railway vars)
+        # as real load is observed, without a code redeploy.
+        self.MAX_CONCURRENT_DOWNLOADS = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "12"))
+        self.MAX_CONCURRENT_MUSIC = int(os.getenv("MAX_CONCURRENT_MUSIC", "7"))
+        self.MAX_CONCURRENT_SPOTIFY = int(os.getenv("MAX_CONCURRENT_SPOTIFY", "6"))    # Limit concurrent playlist downloads
+        self.MAX_CONCURRENT_PER_USER = int(os.getenv("MAX_CONCURRENT_PER_USER", "6"))  # Max simultaneous jobs per user
+
+        # FFmpeg thread count per encode process. Every concurrent download/encode
+        # slot can spawn an ffmpeg process requesting this many threads, so the
+        # TOTAL requested threads across all busy slots was previously
+        # (MAX_CONCURRENT_DOWNLOADS + MAX_CONCURRENT_MUSIC + MAX_CONCURRENT_SPOTIFY) * 8 —
+        # wildly oversubscribing the CPU on anything but a very large box.
+        # Default to a small, fixed per-job thread count (capped by real core
+        # count) so many concurrent encodes can coexist without thrashing;
+        # override via env once real load/CPU numbers are observed.
+        _cpu_count = os.cpu_count() or 2
+        _default_ffmpeg_threads = max(1, min(_cpu_count, 2))
+        self.FFMPEG_THREADS = os.getenv("FFMPEG_THREADS", str(_default_ffmpeg_threads))
         
         # Timeout settings (seconds)
         self.DOWNLOAD_TIMEOUT = 300        # 5 minutes max per download

@@ -42,7 +42,7 @@ from utils.media_processor import (
     ensure_fits_telegram,
     get_video_info,
 )
-from utils.watchdog import acquire_user_slot, release_user_slot
+from utils.watchdog import acquire_user_slot, release_user_slot, with_url_dedup
 from ui.formatting import safe_caption, build_safe_media_caption
 from ui.stickers import send_sticker, delete_sticker
 from ui.emoji_config import get_emoji_async
@@ -252,6 +252,7 @@ async def _safe_reply_text(m: Message, text: str, **kwargs) -> Optional[Message]
 
 # ─── Main handler ─────────────────────────────────────────────────────────────
 
+@with_url_dedup
 async def handle_instagram(m: Message, url: str):
     """
     Download Instagram posts, reels, stories — including age-restricted content.

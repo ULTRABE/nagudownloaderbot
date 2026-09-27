@@ -56,7 +56,7 @@ from utils.cache import url_cache
 from utils.media_processor import (
     get_video_info, get_file_size, _run_ffmpeg,
 )
-from utils.watchdog import acquire_user_slot, release_user_slot
+from utils.watchdog import acquire_user_slot, release_user_slot, with_url_dedup
 from ui.formatting import safe_caption, build_safe_media_caption
 from ui.stickers import send_sticker, delete_sticker
 from ui.emoji_config import get_emoji_async
@@ -542,16 +542,30 @@ async def handle_youtube_normal(m: Message, url: str):
 
     tmp_dir_obj = tempfile.TemporaryDirectory()
     tmp = Path(tmp_dir_obj.name)
+    # Video and audio each get their own subdirectory so that once the user
+    # picks a format, the *other* one's files can be deleted immediately
+    # instead of waiting for the shared tmp_dir to be cleaned up minutes later.
+    tmp_video = tmp / "video"
+    tmp_audio = tmp / "audio"
+    tmp_video.mkdir(exist_ok=True)
+    tmp_audio.mkdir(exist_ok=True)
 
     loop = asyncio.get_running_loop()
     video_future: asyncio.Future = loop.create_future()
     audio_future: asyncio.Future = loop.create_future()
 
+    video_task = asyncio.create_task(_bg_download_video(job_key, url, tmp_video, video_future))
+    audio_task = asyncio.create_task(_bg_download_audio(job_key, url, tmp_audio, audio_future))
+
     _pending[job_key] = {
         "video_future": video_future,
         "audio_future": audio_future,
+        "video_task": video_task,
+        "audio_task": audio_task,
         "tmp_dir": tmp_dir_obj,
         "tmp": tmp,
+        "tmp_video": tmp_video,
+        "tmp_audio": tmp_audio,
         "url": url,
         "chat_id": m.chat.id,
         "user_id": user_id,
@@ -562,9 +576,30 @@ async def handle_youtube_normal(m: Message, url: str):
         "created_at": time.time(),
     }
 
-    asyncio.create_task(_bg_download_video(job_key, url, tmp, video_future))
-    asyncio.create_task(_bg_download_audio(job_key, url, tmp, audio_future))
     asyncio.create_task(_cleanup_pending(job_key, delay=300))
+
+
+async def _cancel_other_format(job: dict, keep: str) -> None:
+    """
+    Once the user picks 'video' or 'audio', cancel the other format's
+    background download task and delete its temp subdirectory right away
+    instead of leaving it for the 300s sweep. Frees the concurrency slot
+    and the disk space immediately.
+    """
+    from utils.watchdog import cleanup_temp_dir
+
+    other = "audio" if keep == "video" else "video"
+    task = job.get(f"{other}_task")
+    if task and not task.done():
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    other_tmp = job.get(f"tmp_{other}")
+    if other_tmp:
+        await cleanup_temp_dir(str(other_tmp))
 
 async def _bg_download_video(job_key: str, url: str, tmp: Path, future: asyncio.Future):
     """Background video download"""
@@ -629,6 +664,10 @@ async def cb_yt_video(callback: CallbackQuery):
 
     await callback.answer("Preparing video...")
 
+    # User picked video — cancel the audio download and free its temp dir
+    # and concurrency slot immediately instead of waiting on it uselessly.
+    asyncio.create_task(_cancel_other_format(job, keep="video"))
+
     chat_id = job["chat_id"]
     url = job["url"]
     user_id = job["user_id"]
@@ -667,7 +706,7 @@ async def cb_yt_video(callback: CallbackQuery):
             await bot.send_message(chat_id, f"{_err} Unable to process this link.\n\nPlease try again.", parse_mode="HTML")
             return
 
-        final_video = await ensure_video_fits_telegram(video_file, job["tmp"]) or video_file
+        final_video = await ensure_video_fits_telegram(video_file, job["tmp_video"]) or video_file
         info = await get_video_info(final_video)
 
         sent = await _safe_send_video(
@@ -711,6 +750,10 @@ async def cb_yt_audio(callback: CallbackQuery):
         return
 
     await callback.answer("Preparing audio...")
+
+    # User picked audio — cancel the video download and free its temp dir
+    # and concurrency slot immediately instead of waiting on it uselessly.
+    asyncio.create_task(_cancel_other_format(job, keep="audio"))
 
     chat_id = job["chat_id"]
     url = job["url"]
@@ -771,6 +814,7 @@ async def cb_yt_audio(callback: CallbackQuery):
 
 # ─── Main entry point ─────────────────────────────────────────────────────────
 
+@with_url_dedup
 async def handle_youtube(m: Message, url: str):
     """Route YouTube URL to appropriate handler (no playlist support)"""
     if not await acquire_user_slot(m.from_user.id, config.MAX_CONCURRENT_PER_USER):

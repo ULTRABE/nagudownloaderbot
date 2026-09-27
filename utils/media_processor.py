@@ -42,7 +42,11 @@ TG_LIMIT_BYTES  = 49 * 1024 * 1024   # 49 MB safety margin
 SPLIT_CHUNK_MB  = 45                  # Each split part target
 AUDIO_KBPS      = 96                  # Audio bitrate — 96k is perfect for mobile
 MIN_VIDEO_KBPS  = 400                 # Minimum video bitrate for constrained fallback
-FFMPEG_THREADS  = "8"
+# Per-process ffmpeg thread count. Derived from real CPU count / env override
+# (see core/config.py) instead of a flat "8" — with up to ~25 concurrent
+# download/encode slots, a flat 8 threads per job wildly oversubscribes the
+# CPU on anything but a very large box.
+FFMPEG_THREADS  = config.FFMPEG_THREADS
 
 
 # ─── CRF quality strategy ────────────────────────────────────────────────────

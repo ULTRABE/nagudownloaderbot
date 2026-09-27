@@ -3,6 +3,7 @@ Watchdog system — timeout protection, job state tracking, anti-stuck.
 Prevents the bot from hanging on slow downloads or crashed FFmpeg processes.
 """
 import asyncio
+import functools
 import time
 import hashlib
 from typing import Optional, Dict, Any
@@ -79,6 +80,39 @@ async def clear_url_processing(user_id: int, url: str):
     """Clear URL processing lock"""
     key = _dedup_key(user_id, url)
     await redis_client.delete(key)
+
+
+def with_url_dedup(func):
+    """
+    Decorator for downloader entry points shaped like
+    `async def handler(m: Message, url: str)`.
+
+    Rejects a duplicate in-flight request for the same (user, url) pair
+    instead of kicking off a second redundant download, and always clears
+    the dedup lock when the handler finishes — success, error, or
+    cancellation alike. Without this, a user tapping/resending the same
+    link repeatedly (accidental or abusive) burns extra download/encode
+    capacity for no benefit.
+    """
+    @functools.wraps(func)
+    async def wrapper(m, url, *args, **kwargs):
+        user_id = m.from_user.id
+        if not await mark_url_processing(user_id, url):
+            try:
+                from ui.emoji_config import get_emoji_async
+                _proc = await get_emoji_async("PROCESS")
+                await m.reply(
+                    f"{_proc} Already processing this link. Please wait.",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+            return
+        try:
+            return await func(m, url, *args, **kwargs)
+        finally:
+            await clear_url_processing(user_id, url)
+    return wrapper
 
 # ─── Timeout wrapper ──────────────────────────────────────────────────────────
 

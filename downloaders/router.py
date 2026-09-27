@@ -73,6 +73,7 @@ from utils.broadcast import (
 from utils.redis_client import redis_client
 from utils.log_channel import log_download
 from utils.proxy_manager import proxy_manager
+from workers.task_queue import get_queue_stats
 
 # Link regex — improved to catch more URL formats
 LINK_RE = re.compile(r"https?://[^\s<>\"']+")
@@ -586,11 +587,19 @@ async def cmd_status(m: Message):
     hours = (uptime_secs % 86400) // 3600
     uptime_str = f"{days}d {hours}h"
 
+    stats = get_queue_stats()
+
     if _is_admin(m.from_user.id):
-        # Admin: full system stats
+        # Admin: full system stats — real semaphore usage, not hardcoded zeros
         await _safe_reply(
             m,
-            await format_status(active_jobs=0, queue=0, uptime=uptime_str),
+            await format_status(
+                active_jobs=stats["active_jobs"],
+                queue=f"{stats['downloads_used']}/{stats['downloads_total']} dl · "
+                      f"{stats['music_used']}/{stats['music_total']} music · "
+                      f"{stats['spotify_used']}/{stats['spotify_total']} spotify",
+                uptime=uptime_str,
+            ),
             parse_mode="HTML",
         )
     else:
@@ -598,7 +607,7 @@ async def cmd_status(m: Message):
         _info = await get_emoji_async("INFO")
         await _safe_reply(
             m,
-            f"{_info} <b>𝐁𝐨𝐭 𝐒𝐭𝐚𝐭𝐮𝐬</b>\n\nUptime: {uptime_str}\nActive Jobs: 0",
+            f"{_info} <b>𝐁𝐨𝐭 𝐒𝐭𝐚𝐭𝐮𝐬</b>\n\nUptime: {uptime_str}\nActive Jobs: {stats['active_jobs']}",
             parse_mode="HTML",
         )
 
@@ -611,7 +620,8 @@ async def cb_status(callback):
     hours = (uptime_secs % 86400) // 3600
     uptime_str = f"{days}d {hours}h"
     await callback.answer()
-    text = await format_status(active_jobs=0, queue=0, uptime=uptime_str)
+    stats = get_queue_stats()
+    text = await format_status(active_jobs=stats["active_jobs"], queue=stats["downloads_used"], uptime=uptime_str)
     await _edit_inline(callback, text)
 
 
@@ -644,9 +654,10 @@ async def cmd_stats(m: Message):
         uptime_secs = int(time.time() - _BOT_START_TIME)
         days = uptime_secs // 86400
         hours = (uptime_secs % 86400) // 3600
+        stats = get_queue_stats()
         await _safe_reply(
             m,
-            await format_status(active_jobs=0, queue=0, uptime=f"{days}d {hours}h"),
+            await format_status(active_jobs=stats["active_jobs"], queue=stats["downloads_used"], uptime=f"{days}d {hours}h"),
             parse_mode="HTML",
         )
         return

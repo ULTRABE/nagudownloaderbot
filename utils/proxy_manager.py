@@ -25,6 +25,7 @@ Usage:
     proxy = proxy_manager.pick_proxy()
 """
 import asyncio
+import os
 import random
 from typing import List, Optional, Set, Tuple
 
@@ -37,16 +38,33 @@ _REDIS_KEY = "proxies:all"
 _REDIS_LIVE_KEY = "proxies:live"
 
 # ─── Validation settings ──────────────────────────────────────────────────────
+# Two independent validation targets — if the primary is slow/rate-limited/down,
+# a proxy still gets a fair shot against the fallback instead of being marked
+# dead for a reason unrelated to the proxy itself.
 _VALIDATION_URL = "http://httpbin.org/ip"
-_VALIDATION_TIMEOUT = 10      # seconds per proxy
+_VALIDATION_URL_FALLBACK = "http://icanhazip.com"
+_VALIDATION_TIMEOUT = 10      # seconds per proxy, per URL attempt
 _VALIDATION_CONCURRENCY = 50  # max simultaneous checks
-_STARTUP_VALIDATION_TIMEOUT = 12  # slightly longer on startup
+_STARTUP_VALIDATION_TIMEOUT = 12  # slightly longer on startup, per proxy
+# Hard cap on the ENTIRE startup validation pass — bot readiness must never
+# hang because a third-party validation endpoint is slow or unreachable.
+_STARTUP_VALIDATION_TOTAL_TIMEOUT = 45
 
 # ─── Built-in default proxy pool (authenticated) ─────────────────────────────
 # Format: IP:PORT:USER:PASS → normalized to http://USER:PASS@IP:PORT
 # These are loaded on startup, validated, and only live ones are used.
+#
+# Preferred source going forward: the DEFAULT_PROXIES env var (same
+# comma-separated "ip:port:user:pass" format as PROXIES in core/config.py).
+# Set it in Railway and the hardcoded _DEFAULT_PROXIES_LEGACY list below can
+# be deleted entirely — new proxy credentials should never be committed to
+# source. The legacy list is kept only so existing deployments keep working
+# without a config change; it is not extended with new entries.
+_DEFAULT_PROXIES_ENV: List[str] = [
+    p.strip() for p in os.getenv("DEFAULT_PROXIES", "").split(",") if p.strip()
+]
 
-_DEFAULT_PROXIES = [
+_DEFAULT_PROXIES_LEGACY = [
     "170.130.62.24:8800:203033:JmNd95Z3vcX",
     "170.130.62.221:8800:203033:JmNd95Z3vcX",
     "77.83.170.91:8800:203033:JmNd95Z3vcX",
@@ -98,6 +116,10 @@ _DEFAULT_PROXIES = [
     "196.51.109.6:8800:203033:JmNd95Z3vcX",
     "196.51.82.120:8800:203033:JmNd95Z3vcX",
 ]
+
+# Use the env-sourced list if the operator has migrated; otherwise fall back
+# to the legacy hardcoded list for backward compatibility.
+_DEFAULT_PROXIES = _DEFAULT_PROXIES_ENV or _DEFAULT_PROXIES_LEGACY
 
 
 # ─── Proxy format normalization ───────────────────────────────────────────────
@@ -174,6 +196,14 @@ class ProxyManager:
         # Collect from all sources
         all_raw: Set[str] = set()
 
+        if _DEFAULT_PROXIES_ENV:
+            logger.info(f"Proxy: using {len(_DEFAULT_PROXIES_ENV)} proxies from DEFAULT_PROXIES env var")
+        else:
+            logger.info(
+                f"Proxy: DEFAULT_PROXIES env var not set — using {len(_DEFAULT_PROXIES_LEGACY)} "
+                "legacy hardcoded proxies. Set DEFAULT_PROXIES to migrate off source-committed credentials."
+            )
+
         # Source A: built-in defaults
         for p in _DEFAULT_PROXIES:
             n = _normalize(p)
@@ -209,8 +239,21 @@ class ProxyManager:
 
         logger.info(f"Proxy: Validating {total} proxies at startup (this may take ~10-15s)...")
 
-        # Validate all proxies concurrently — only keep live ones
-        alive, dead = await self._validate_batch(list(all_raw), timeout=_STARTUP_VALIDATION_TIMEOUT)
+        # Validate all proxies concurrently — only keep live ones.
+        # Bounded by an overall wall-clock cap so a slow/unreachable validation
+        # endpoint can never delay bot readiness; whatever validated in time is
+        # used, the rest are treated as not-yet-confirmed (not discarded).
+        try:
+            alive, dead = await asyncio.wait_for(
+                self._validate_batch(list(all_raw), timeout=_STARTUP_VALIDATION_TIMEOUT),
+                timeout=_STARTUP_VALIDATION_TOTAL_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Proxy: startup validation exceeded {_STARTUP_VALIDATION_TOTAL_TIMEOUT}s — "
+                "continuing startup without proxies for now; retry with /clean"
+            )
+            alive, dead = [], []
         self._live = alive
 
         # Remove confirmed-dead proxies from _all to keep it clean
@@ -233,18 +276,26 @@ class ProxyManager:
         self._initialized = True
 
     async def _validate_one(self, proxy: str, timeout: int = _VALIDATION_TIMEOUT) -> bool:
-        """Test a single proxy by making an HTTP request through it."""
-        try:
-            to = aiohttp.ClientTimeout(total=timeout)
-            async with aiohttp.ClientSession(timeout=to) as session:
-                async with session.get(
-                    _VALIDATION_URL,
-                    proxy=proxy,
-                    ssl=False,
-                ) as resp:
-                    return resp.status == 200
-        except Exception:
-            return False
+        """
+        Test a single proxy by making an HTTP request through it.
+        Tries the primary validation URL first, then a fallback — so a proxy
+        isn't marked dead just because one third-party endpoint is having a
+        bad day.
+        """
+        for url in (_VALIDATION_URL, _VALIDATION_URL_FALLBACK):
+            try:
+                to = aiohttp.ClientTimeout(total=timeout)
+                async with aiohttp.ClientSession(timeout=to) as session:
+                    async with session.get(
+                        url,
+                        proxy=proxy,
+                        ssl=False,
+                    ) as resp:
+                        if resp.status == 200:
+                            return True
+            except Exception:
+                continue
+        return False
 
     async def _validate_batch(
         self, proxies: List[str], timeout: int = _VALIDATION_TIMEOUT

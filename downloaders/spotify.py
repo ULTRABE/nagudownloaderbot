@@ -47,6 +47,7 @@ from utils.logger import logger
 from utils.user_state import user_state_manager
 from utils.log_channel import log_download
 from utils.proxy_manager import proxy_manager
+from utils.watchdog import with_url_dedup
 
 # ─── Separate semaphore for single tracks (don't wait behind playlists) ───────
 _single_semaphore = asyncio.Semaphore(4)
@@ -519,6 +520,7 @@ async def handle_spotify_single(m: Message, url: str):
 
 # ─── Playlist handler ─────────────────────────────────────────────────────────
 
+@with_url_dedup
 async def handle_spotify_playlist(m: Message, url: str):
     """
     Route Spotify URL:
