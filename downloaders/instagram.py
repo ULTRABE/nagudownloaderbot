@@ -3,11 +3,12 @@ Instagram Downloader — Silent delivery with cache + smart encode.
 
 Flow:
   1. Send sticker
-  2. Download silently — direct-only, no proxy, no cookies:
-     - Layer 1: direct, desktop UA
-     - Layer 2: direct, Instagram mobile UA (parallel with Layer 1)
-     - Layer 3: direct, generic mobile browser UA (parallel with 1 & 2)
-     First layer to succeed wins — the rest are cancelled immediately.
+  2. Download silently — direct-only, no proxy, no cookies. 4 layers race
+     in parallel, first success wins, the rest are cancelled immediately:
+     - Layer 1: yt-dlp, desktop UA
+     - Layer 2: yt-dlp, Instagram mobile UA
+     - Layer 3: yt-dlp, generic mobile browser UA
+     - Layer 4: Instagram's public embed page (see below)
   3. Delete sticker after delivery
   4. Send video — reply to original (with fallback to plain send)
   5. Caption: ✓ Delivered — <mention>
@@ -15,20 +16,31 @@ Flow:
 By design, this downloader never uses a proxy or a cookie file. Proxies cost
 money and go dead constantly; cookies are a standing account-security liability
 (they're live session credentials). Public posts/reels/photos — the vast
-majority of what gets requested — download fine without either, and skipping
-them removes a slow, unreliable dependency from the hot path.
+majority of what gets requested — download fine without either.
 
-Trade-off: private accounts, age-restricted, or sign-in-walled content
-genuinely requires an authenticated cookie and will fail cleanly here instead
-of falling back to one. `ig cookies/` and `cookies_instagram.txt` still exist
-on disk for now but are intentionally not read by this module.
+Layer 4 (embed page) is the same trick most public Instagram-downloader sites
+use to avoid "log in to continue" walls without a login: Instagram serves an
+`/embed/captioned/` page for every public post, meant for embedding it on
+other websites, and that page carries the direct video/image URL without
+requiring any authentication. A lot of "sign-in required" failures on the
+main site aren't really about privacy — they're anti-bot gating that this
+sidesteps for free, no credentials involved.
+
+Trade-off: truly private accounts still require a login — no page Instagram
+serves publicly can expose that content, with or without a proxy or cookie.
+That narrow slice fails cleanly instead of succeeding via a cookie retry.
+`ig cookies/` and `cookies_instagram.txt` still exist on disk for now but are
+intentionally not read by this module.
 """
 import asyncio
+import json
+import re
 import tempfile
 import time
 from pathlib import Path
 from typing import Optional, List
 
+import aiohttp
 from yt_dlp import YoutubeDL
 from aiogram.types import Message, FSInputFile
 
@@ -115,6 +127,83 @@ async def _run_one(sub_dir: Path, url: str, opts: dict) -> Optional[Path]:
         return None
 
 
+# ─── Layer 4: Instagram public embed page (no login, no proxy, no cookies) ────
+
+_SHORTCODE_RE = re.compile(r"instagram\.com/(?:p|reel|tv)/([A-Za-z0-9_-]+)")
+
+
+async def _download_bytes(media_url: str, out_path: Path) -> Optional[Path]:
+    """Fetch a direct media URL (no proxy, no cookies) and save it."""
+    try:
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(media_url) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.read()
+                if len(data) < 1000:  # too small to be real media
+                    return None
+                out_path.write_bytes(data)
+                return out_path
+    except Exception as e:
+        logger.debug(f"IG embed media fetch failed: {e}")
+        return None
+
+
+async def _fetch_via_embed(url: str, sub_dir: Path) -> Optional[Path]:
+    """
+    Layer 4 — Instagram's own public embed page. No login required for
+    public posts; this is the same technique most public Instagram
+    downloader tools use instead of a personal login cookie.
+    """
+    m = _SHORTCODE_RE.search(url)
+    if not m:
+        return None
+    shortcode = m.group(1)
+    embed_url = f"https://www.instagram.com/p/{shortcode}/embed/captioned/"
+
+    headers = {
+        "User-Agent": config.pick_user_agent(),
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    try:
+        timeout = aiohttp.ClientTimeout(total=12)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(embed_url, headers=headers) as resp:
+                if resp.status != 200:
+                    return None
+                html_text = await resp.text()
+    except Exception as e:
+        logger.debug(f"IG embed page fetch failed: {e}")
+        return None
+
+    sub_dir.mkdir(parents=True, exist_ok=True)
+
+    # Video posts/reels carry a direct CDN video URL in the embed HTML,
+    # JSON-escaped (e.g. "\/" for "/") — decode it as a JSON string, not a
+    # Python one, since "\/" isn't a valid Python escape and unicode_escape
+    # would mangle it into a broken URL.
+    video_match = re.search(r'"video_url":"([^"]+)"', html_text)
+    if video_match:
+        try:
+            video_url = json.loads(f'"{video_match.group(1)}"')
+        except Exception:
+            video_url = video_match.group(1)
+        result = await _download_bytes(video_url, sub_dir / "embed.mp4")
+        if result:
+            return result
+
+    # Photo posts (or video posts without an inline video_url) — og:image
+    img_match = re.search(r'<meta property="og:image" content="([^"]+)"', html_text)
+    if img_match:
+        img_url = img_match.group(1).replace("&amp;", "&")
+        result = await _download_bytes(img_url, sub_dir / "embed.jpg")
+        if result:
+            return result
+
+    return None
+
+
 async def _race_first_success(tasks: List[asyncio.Task]) -> Optional[Path]:
     """
     Wait for the first task to produce a real (non-None) result and return it
@@ -146,7 +235,7 @@ async def _race_first_success(tasks: List[asyncio.Task]) -> Optional[Path]:
 
 async def download_instagram(url: str, tmp: Path) -> Optional[Path]:
     """
-    Instagram download — 3 direct layers raced in parallel, no proxy, no
+    Instagram download — 4 direct layers raced in parallel, no proxy, no
     cookies. First one to succeed wins; the rest are cancelled immediately.
     """
     layers = [
@@ -164,10 +253,19 @@ async def download_instagram(url: str, tmp: Path) -> Optional[Path]:
         return r
 
     tasks = [asyncio.create_task(_attempt(label, ua)) for label, ua in layers]
+
+    async def _embed_attempt() -> Optional[Path]:
+        r = await _fetch_via_embed(url, tmp / "ig_embed")
+        if r:
+            logger.debug("IG: layer 'embed' succeeded (public embed page, no login)")
+        return r
+
+    tasks.append(asyncio.create_task(_embed_attempt()))
+
     result = await _race_first_success(tasks)
 
     if not result:
-        logger.info(f"IG: all direct layers failed for {url[:60]} — likely private/restricted content")
+        logger.info(f"IG: all direct layers (including embed page) failed for {url[:60]} — likely a private account")
 
     return result
 

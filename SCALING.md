@@ -65,19 +65,32 @@ no code changes are expected to be needed for this unless a specific hot path sh
 
 `downloaders/instagram.py` and `downloaders/youtube.py` (which also powers Shorts and YT Music) now
 download **direct-only** — no proxy, no cookie file, ever, in the hot path. Instead of one attempt with a
-slow sequential cookie fallback behind it, each platform races 3 direct layers (different User-Agents for
-Instagram; different yt-dlp `player_client` values for YouTube) in parallel and returns as soon as the
-first one succeeds, cancelling the rest. This is both faster (no more waiting out a proxy/cookie fallback
-chain) and removes two unreliable, credential-bearing dependencies from the request path entirely.
+slow sequential cookie fallback behind it, each platform races several direct layers in parallel and
+returns as soon as the first one succeeds, cancelling the rest:
+
+- **Instagram** (4 layers): 3 different User-Agents through yt-dlp, plus Instagram's own public
+  `/embed/captioned/` page — the same no-login trick most public Instagram-downloader sites use, since
+  that page is meant for embedding public posts elsewhere and doesn't gate behind sign-in the way the
+  main site does for non-browser traffic.
+- **YouTube** (4 layers): default client, `mweb`+`ios`, `android`, and `web_embedded` — the last one is
+  yt-dlp's own documented cookie-free age-gate bypass (embedded players enforce YouTube's age check
+  differently from the main site/app, so many age-restricted-but-not-hard-verified videos play without
+  any login at all).
+
+This is both faster (no more waiting out a proxy/cookie fallback chain) and removes two unreliable,
+credential-bearing dependencies from the request path entirely.
 
 Why: proxies cost money and die constantly (the audit found the pool depends on an external, sometimes
 rate-limited validation endpoint); cookie files are live session credentials, and the audit found real,
-committed sessions in this repo. Racing plain direct requests sidesteps both.
+committed sessions in this repo. Racing plain direct/public requests recovers most of what used to need
+a cookie, without one.
 
-**Trade-off, on purpose:** private accounts, age-restricted, and sign-in-walled content genuinely need an
-authenticated cookie — there's no way around that technically — and will now fail with a clean "unable to
-process this link" instead of succeeding via a cookie retry. Public posts, reels, and videos (the large
-majority of real requests) are unaffected.
+**Trade-off, on purpose:** truly private Instagram accounts and YouTube videos YouTube hard-gates behind
+sign-in (fully age-verified 18+, or "sign in to confirm your age" with no embed bypass available)
+genuinely can't be reached without an authenticated login — no public page either platform serves can
+expose that content, cookie or not. That narrow slice fails with a clean "unable to process this link"
+instead of succeeding via a cookie retry. Public posts, reels, and videos (the large majority of real
+requests) are unaffected — and now also cover a good chunk of what previously needed a cookie too.
 
 What's left as-is, not removed:
 - `cookies_instagram.txt`, `ig cookies/`, `yt cookies/`, `yt music cookies/` still exist on disk (per your

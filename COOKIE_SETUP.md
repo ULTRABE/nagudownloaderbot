@@ -2,11 +2,15 @@
 
 > **⚠️ No longer used by the downloader.** As of this change, `downloaders/instagram.py` and
 > `downloaders/youtube.py` download directly — no proxy, no cookies — for speed and to stop depending on
-> credentials that go stale or leak. Cookie files placed per this guide are simply not read anymore. This
-> is a deliberate trade-off: public content (the vast majority of requests) downloads fine without
-> cookies; private accounts, age-restricted, or sign-in-walled content will now fail instead of succeeding
-> via a cookie fallback. See `SCALING.md` for the reasoning. Don't "helpfully" re-wire cookies back in
-> without re-reading that trade-off first — the whole point was to remove this dependency.
+> credentials that go stale or leak. Cookie files placed per this guide are simply not read anymore.
+> Instead, both platforms race a few no-login techniques in parallel: for Instagram, its own public
+> `/embed/captioned/` page (no sign-in wall, same trick most public downloader sites use); for YouTube,
+> the `web_embedded` client, which bypasses the age gate for many restricted-but-not-hard-verified videos.
+> These recover most of what used to require a cookie. What's genuinely left needing a login — truly
+> private Instagram accounts, and YouTube videos gated behind full sign-in with no embed bypass — fails
+> cleanly instead of succeeding via a cookie fallback; there's no public page either platform serves that
+> can expose that content. See `SCALING.md` §5 for the full reasoning. Don't "helpfully" re-wire cookies
+> back in without re-reading that trade-off first — the whole point was to remove this dependency.
 
 ## 📁 Folder Structure (legacy — kept for reference only)
 

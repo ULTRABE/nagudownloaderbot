@@ -20,18 +20,24 @@ Extraction layers — direct-only, no proxy, no cookies:
   2. mweb + ios clients (yt-dlp's standard cookie-free dodge for
      desktop-blocked/throttled content)
   3. android client (further redundancy)
-  All three race in parallel; whichever answers first wins and the rest are
+  4. web_embedded client — YouTube's embedded-player endpoint enforces the
+     age gate differently from the main site/app, and often serves
+     age-restricted (not hard-verified 18+) videos without any login at
+     all. This is the standard cookie-free trick for age-gated content.
+  All four race in parallel; whichever answers first wins and the rest are
   cancelled immediately.
 
 By design, this downloader never uses a proxy or a cookie file. Proxies cost
 money and go dead constantly; cookies are a standing account-security
 liability (they're live session credentials). Public videos/Shorts — the vast
-majority of what gets requested — download fine without either.
+majority of what gets requested — download fine without either, and the
+web_embedded layer recovers a good chunk of what used to need a cookie too.
 
-Trade-off: age-restricted or sign-in-walled videos genuinely require an
-authenticated cookie and will fail cleanly here instead of falling back to
-one. `yt cookies/` and `yt music cookies/` still exist on disk for now but
-are intentionally not read by this module.
+Trade-off: videos YouTube hard-gates behind sign-in (fully age-verified 18+,
+or explicitly "sign in to confirm your age" with no embed bypass available)
+still require an authenticated cookie and will fail cleanly here instead of
+falling back to one. `yt cookies/` and `yt music cookies/` still exist on
+disk for now but are intentionally not read by this module.
 
 Cache:
   SHA256(url+format) → Telegram file_id → instant re-delivery
@@ -168,8 +174,10 @@ async def download_youtube_video(
     fmt: str = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]/best",
 ) -> Optional[Path]:
     """
-    Download YouTube video — three direct-only client layers raced in
-    parallel, no proxy, no cookies. First one to succeed wins.
+    Download YouTube video — four direct-only client layers raced in
+    parallel, no proxy, no cookies. First one to succeed wins. Layer 4
+    (web_embedded) is what recovers most age-restricted content without a
+    cookie — the embedded player checks age differently than the main site.
     """
     l1 = _base_opts(tmp)
     l1["format"] = fmt
@@ -182,13 +190,18 @@ async def download_youtube_video(
     l3["format"] = fmt
     l3["extractor_args"] = {"youtube": {"player_client": ["android"]}}
 
-    return await _parallel_download(url, tmp, [l1, l2, l3])
+    l4 = _base_opts(tmp)
+    l4["format"] = fmt
+    l4["extractor_args"] = {"youtube": {"player_client": ["web_embedded"]}}
+
+    return await _parallel_download(url, tmp, [l1, l2, l3, l4])
 
 
 async def download_youtube_audio(url: str, tmp: Path, is_music: bool = False, quality: str = "192") -> Optional[Path]:
     """
-    Download YouTube/YT Music audio as MP3 — three direct-only client layers
-    raced in parallel, no proxy, no cookies.
+    Download YouTube/YT Music audio as MP3 — four direct-only client layers
+    raced in parallel, no proxy, no cookies (see download_youtube_video for
+    why layer 4 matters for age-restricted content).
     """
     fmt = "bestaudio[ext=m4a]/bestaudio/best"
     pp = [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": quality}]
@@ -207,6 +220,11 @@ async def download_youtube_audio(url: str, tmp: Path, is_music: bool = False, qu
     l3["postprocessors"] = pp
     l3["extractor_args"] = {"youtube": {"player_client": ["android"]}}
 
+    l4 = _base_opts(tmp)
+    l4["format"] = fmt
+    l4["postprocessors"] = pp
+    l4["extractor_args"] = {"youtube": {"player_client": ["web_embedded"]}}
+
     async def _attempt(idx: int, opts: dict) -> Optional[Path]:
         sub = tmp / f"audio_layer_{idx}"
         sub.mkdir(exist_ok=True)
@@ -220,7 +238,7 @@ async def download_youtube_audio(url: str, tmp: Path, is_music: bool = False, qu
             logger.debug(f"Audio layer {idx} failed: {str(e)[:80]}")
             return None
 
-    tasks = [asyncio.create_task(_attempt(i, opts)) for i, opts in enumerate([l1, l2, l3])]
+    tasks = [asyncio.create_task(_attempt(i, opts)) for i, opts in enumerate([l1, l2, l3, l4])]
     return await _race_first_success(tasks)
 
 # ─── Ensure video fits Telegram (>50MB fix) ───────────────────────────────────
