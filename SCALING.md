@@ -97,9 +97,12 @@ What's left as-is, not removed:
   earlier decision) but are no longer read by the downloader. The cookies in them are still live/real —
   rotate them when convenient regardless, since anyone with read access to this repo (including its git
   history) can use them to act as those accounts.
-- `utils/proxy_manager.py` and the `/addpxy` / `/rm` / `/clean` admin commands are untouched and still
-  work, even though nothing in `downloaders/` calls `proxy_manager` anymore (Pinterest and Spotify's
-  proxy calls were removed too, since they were already optional and unused in practice). The pool stays
-  available in case a platform-specific fallback is ever wanted again — it's just fully disconnected from
-  downloads for now. Proxy credentials that were previously only hardcoded in `utils/proxy_manager.py` can
-  also be supplied via the `DEFAULT_PROXIES` env var instead.
+- `utils/proxy_manager.py` and the `/addpxy` / `/rm` / `/clean` admin commands still exist, even though
+  nothing in `downloaders/` calls `proxy_manager` anymore (Pinterest and Spotify's proxy calls were removed
+  too, since they were already optional and unused in practice). **Update:** the ~50-entry hardcoded
+  default proxy list that used to live in that file has since been removed outright — a live production
+  test confirmed it was 100% dead (0/50 reachable) and it was costing every deployment ~25s of startup time
+  validating proxies nothing was going to use. There is no default proxy pool anymore; startup now skips
+  validation entirely (near-instant) when no proxies are configured, which is the common case. If you ever
+  want a proxy pool again, set `DEFAULT_PROXIES` (comma-separated `ip:port:user:pass`) with fresh, working
+  proxies — nothing is preloaded.

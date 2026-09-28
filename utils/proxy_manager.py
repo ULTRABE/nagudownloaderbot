@@ -1,19 +1,23 @@
 """
 Proxy Manager — Centralized proxy pool with validation, persistence, and admin controls.
 
-Features:
-  - Loads proxies from ENV (PROXIES) + Redis (persistent) + built-in defaults
-  - Validates all proxies at startup — removes dead ones from the live pool
-  - Dead proxies are NOT discarded entirely; they are retried on /clean
-  - Admin commands: /addpxy, /rm, /clean
-  - pick_proxy() returns random live proxy for any handler
-  - Supports formats: IP:PORT, IP:PORT:USER:PASS, http://IP:PORT, socks5://IP:PORT
+As of the direct-only rewrite of the downloaders (Instagram/YouTube/Pinterest/
+Spotify all download without a proxy now — see SCALING.md §5), nothing in
+downloaders/ calls pick_proxy() anymore. This module is kept around only for
+the /addpxy, /rm, /clean admin commands, in case a proxy is ever wanted again
+for a specific platform. It stays fully optional and inert otherwise — there
+is no hardcoded default proxy pool anymore (the one that used to live here
+was verified 100% dead in production and just wasted ~25s of every startup
+validating proxies nothing was going to use).
 
-Startup validation:
-  - All proxies are tested concurrently (50 at a time) during initialize()
-  - Dead proxies are removed from the live pool immediately
-  - This keeps pick_proxy() returning only working proxies
-  - /clean re-validates and removes dead ones from the all-pool too
+Features:
+  - Loads proxies from ENV (PROXIES / DEFAULT_PROXIES) + Redis (persistent)
+  - Validates configured proxies at startup — skipped instantly if none are
+    configured, so a fresh deployment with no PROXIES/DEFAULT_PROXIES boots
+    with zero proxy-related delay
+  - Admin commands: /addpxy, /rm, /clean
+  - pick_proxy() returns random live proxy, for whatever might use it later
+  - Supports formats: IP:PORT, IP:PORT:USER:PASS, http://IP:PORT, socks5://IP:PORT
 
 Usage:
     from utils.proxy_manager import proxy_manager
@@ -21,7 +25,7 @@ Usage:
     # On startup (called from bot.py):
     await proxy_manager.initialize()
 
-    # In any downloader:
+    # Anywhere that wants one:
     proxy = proxy_manager.pick_proxy()
 """
 import asyncio
@@ -50,76 +54,19 @@ _STARTUP_VALIDATION_TIMEOUT = 12  # slightly longer on startup, per proxy
 # hang because a third-party validation endpoint is slow or unreachable.
 _STARTUP_VALIDATION_TOTAL_TIMEOUT = 45
 
-# ─── Built-in default proxy pool (authenticated) ─────────────────────────────
+# ─── Default proxy pool — env-sourced only, nothing hardcoded ────────────────
 # Format: IP:PORT:USER:PASS → normalized to http://USER:PASS@IP:PORT
-# These are loaded on startup, validated, and only live ones are used.
 #
-# Preferred source going forward: the DEFAULT_PROXIES env var (same
-# comma-separated "ip:port:user:pass" format as PROXIES in core/config.py).
-# Set it in Railway and the hardcoded _DEFAULT_PROXIES_LEGACY list below can
-# be deleted entirely — new proxy credentials should never be committed to
-# source. The legacy list is kept only so existing deployments keep working
-# without a config change; it is not extended with new entries.
-_DEFAULT_PROXIES_ENV: List[str] = [
+# There used to be a ~50-entry hardcoded fallback list committed to source
+# here. It was verified 100% dead in production (0/50 live on a real startup
+# validation pass) and removed outright — a dead hardcoded credential list
+# that also cost every deployment ~25s of pointless validation at boot serves
+# no one. Set DEFAULT_PROXIES (comma-separated, same format as PROXIES in
+# core/config.py) if you ever want a default pool again; new proxy
+# credentials should never be committed to source.
+_DEFAULT_PROXIES: List[str] = [
     p.strip() for p in os.getenv("DEFAULT_PROXIES", "").split(",") if p.strip()
 ]
-
-_DEFAULT_PROXIES_LEGACY = [
-    "170.130.62.24:8800:203033:JmNd95Z3vcX",
-    "170.130.62.221:8800:203033:JmNd95Z3vcX",
-    "77.83.170.91:8800:203033:JmNd95Z3vcX",
-    "196.51.221.125:8800:203033:JmNd95Z3vcX",
-    "196.51.82.59:8800:203033:JmNd95Z3vcX",
-    "196.51.221.174:8800:203033:JmNd95Z3vcX",
-    "196.51.106.30:8800:203033:JmNd95Z3vcX",
-    "196.51.85.156:8800:203033:JmNd95Z3vcX",
-    "196.51.106.100:8800:203033:JmNd95Z3vcX",
-    "170.130.62.151:8800:203033:JmNd95Z3vcX",
-    "196.51.106.117:8800:203033:JmNd95Z3vcX",
-    "196.51.221.38:8800:203033:JmNd95Z3vcX",
-    "196.51.85.213:8800:203033:JmNd95Z3vcX",
-    "196.51.82.106:8800:203033:JmNd95Z3vcX",
-    "196.51.109.138:8800:203033:JmNd95Z3vcX",
-    "170.130.62.211:8800:203033:JmNd95Z3vcX",
-    "196.51.82.198:8800:203033:JmNd95Z3vcX",
-    "77.83.170.79:8800:203033:JmNd95Z3vcX",
-    "196.51.85.7:8800:203033:JmNd95Z3vcX",
-    "196.51.85.207:8800:203033:JmNd95Z3vcX",
-    "196.51.82.238:8800:203033:JmNd95Z3vcX",
-    "196.51.106.69:8800:203033:JmNd95Z3vcX",
-    "196.51.218.250:8800:203033:JmNd95Z3vcX",
-    "196.51.109.151:8800:203033:JmNd95Z3vcX",
-    "170.130.62.42:8800:203033:JmNd95Z3vcX",
-    "196.51.109.8:8800:203033:JmNd95Z3vcX",
-    "170.130.62.251:8800:203033:JmNd95Z3vcX",
-    "196.51.221.46:8800:203033:JmNd95Z3vcX",
-    "196.51.106.149:8800:203033:JmNd95Z3vcX",
-    "196.51.218.227:8800:203033:JmNd95Z3vcX",
-    "196.51.218.236:8800:203033:JmNd95Z3vcX",
-    "196.51.106.16:8800:203033:JmNd95Z3vcX",
-    "77.83.170.168:8800:203033:JmNd95Z3vcX",
-    "196.51.109.31:8800:203033:JmNd95Z3vcX",
-    "196.51.218.60:8800:203033:JmNd95Z3vcX",
-    "170.130.62.27:8800:203033:JmNd95Z3vcX",
-    "77.83.170.124:8800:203033:JmNd95Z3vcX",
-    "77.83.170.222:8800:203033:JmNd95Z3vcX",
-    "196.51.82.112:8800:203033:JmNd95Z3vcX",
-    "196.51.221.102:8800:203033:JmNd95Z3vcX",
-    "77.83.170.30:8800:203033:JmNd95Z3vcX",
-    "196.51.218.179:8800:203033:JmNd95Z3vcX",
-    "196.51.85.59:8800:203033:JmNd95Z3vcX",
-    "196.51.218.169:8800:203033:JmNd95Z3vcX",
-    "196.51.109.52:8800:203033:JmNd95Z3vcX",
-    "170.130.62.223:8800:203033:JmNd95Z3vcX",
-    "196.51.85.127:8800:203033:JmNd95Z3vcX",
-    "196.51.221.158:8800:203033:JmNd95Z3vcX",
-    "196.51.109.6:8800:203033:JmNd95Z3vcX",
-    "196.51.82.120:8800:203033:JmNd95Z3vcX",
-]
-
-# Use the env-sourced list if the operator has migrated; otherwise fall back
-# to the legacy hardcoded list for backward compatibility.
-_DEFAULT_PROXIES = _DEFAULT_PROXIES_ENV or _DEFAULT_PROXIES_LEGACY
 
 
 # ─── Proxy format normalization ───────────────────────────────────────────────
@@ -196,15 +143,10 @@ class ProxyManager:
         # Collect from all sources
         all_raw: Set[str] = set()
 
-        if _DEFAULT_PROXIES_ENV:
-            logger.info(f"Proxy: using {len(_DEFAULT_PROXIES_ENV)} proxies from DEFAULT_PROXIES env var")
-        else:
-            logger.info(
-                f"Proxy: DEFAULT_PROXIES env var not set — using {len(_DEFAULT_PROXIES_LEGACY)} "
-                "legacy hardcoded proxies. Set DEFAULT_PROXIES to migrate off source-committed credentials."
-            )
+        if _DEFAULT_PROXIES:
+            logger.info(f"Proxy: using {len(_DEFAULT_PROXIES)} proxies from DEFAULT_PROXIES env var")
 
-        # Source A: built-in defaults
+        # Source A: DEFAULT_PROXIES env var
         for p in _DEFAULT_PROXIES:
             n = _normalize(p)
             if n:
