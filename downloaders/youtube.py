@@ -15,21 +15,26 @@ Shorts:
 YT Music:
   Send sticker → silent download → delete sticker → send → ✓ Delivered
 
-Extraction layers (4-layer fallback):
-  1. Default client (no special config)
-  2. mweb + ios clients (avoids 403 on desktop-blocked content)
-  3. Cookies (authenticated access — bypasses age restriction + sign-in walls)
-  4. Cookies + mweb (ultimate fallback)
+Extraction layers — direct-only, no proxy, no cookies:
+  1. Default client
+  2. mweb + ios clients (yt-dlp's standard cookie-free dodge for
+     desktop-blocked/throttled content)
+  3. android client (further redundancy)
+  All three race in parallel; whichever answers first wins and the rest are
+  cancelled immediately.
 
-Age-restricted content:
-  Layers 3 & 4 use cookies + age_limit bypass flags for N18+ content.
+By design, this downloader never uses a proxy or a cookie file. Proxies cost
+money and go dead constantly; cookies are a standing account-security
+liability (they're live session credentials). Public videos/Shorts — the vast
+majority of what gets requested — download fine without either.
+
+Trade-off: age-restricted or sign-in-walled videos genuinely require an
+authenticated cookie and will fail cleanly here instead of falling back to
+one. `yt cookies/` and `yt music cookies/` still exist on disk for now but
+are intentionally not read by this module.
 
 Cache:
   SHA256(url+format) → Telegram file_id → instant re-delivery
-
-Cookie folder:
-  Never crash if folder missing — skip silently
-  Supports up to 50 cookie files per folder
 
 >50MB fix:
   CRF-based adaptive encode → constrained bitrate fallback
@@ -38,7 +43,7 @@ import asyncio
 import time
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 from yt_dlp import YoutubeDL
 from aiogram.types import (
@@ -49,9 +54,7 @@ from aiogram.types import (
 from core.bot import bot, dp
 from core.config import config
 from workers.task_queue import download_semaphore
-from utils.helpers import get_random_cookie
 from utils.logger import logger
-from utils.proxy_manager import proxy_manager
 from utils.cache import url_cache
 from utils.media_processor import (
     get_video_info, get_file_size, _run_ffmpeg,
@@ -76,43 +79,55 @@ def is_youtube_music(url: str) -> bool:
         return False
     return True
 
-# ─── yt-dlp option builders (4-layer fallback) ───────────────────────────────
+# ─── yt-dlp option builders — direct-only, no proxy, no cookies ──────────────
 
-def _base_opts(tmp: Path, use_proxy: bool = False) -> dict:
+def _base_opts(tmp: Path) -> dict:
     """Base yt-dlp options — optimized for speed and reliability"""
-    opts = {
+    return {
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
         "outtmpl": str(tmp / "%(title)s.%(ext)s"),
         "http_headers": {"User-Agent": config.pick_user_agent()},
-        "socket_timeout": 20,
-        "retries": 3,
-        "fragment_retries": 3,
-        "extractor_retries": 3,
+        # Short timeout/retries — this is a hard, fast direct attempt raced
+        # against other client layers, not one we wait out before falling back.
+        "socket_timeout": 12,
+        "retries": 1,
+        "fragment_retries": 1,
+        "extractor_retries": 1,
         "ignoreerrors": False,
         # Age-restricted content: bypass age gate when possible without cookies
         "age_limit": 100,
     }
-    if use_proxy:
-        proxy = proxy_manager.pick_proxy()
-        if proxy:
-            opts["proxy"] = proxy
-    return opts
 
 
-def _cookie_opts(tmp: Path, cookie_folder: str, use_proxy: bool = True) -> dict:
+async def _race_first_success(tasks: List[asyncio.Task]) -> Optional[Path]:
     """
-    yt-dlp options with cookie authentication.
-    Cookies bypass age-restrictions and sign-in walls.
+    Wait for the first task to produce a real (non-None) result and return it
+    immediately, cancelling whatever's still running. If every task finishes
+    with None, return None once they've all settled.
+
+    This keeps total latency down to "whichever direct client layer answers
+    first" instead of waiting for every layer (including a since-removed
+    cookie fallback) to finish before deciding.
     """
-    opts = _base_opts(tmp, use_proxy=use_proxy)
-    # Age-restricted bypass with cookies
-    opts["age_limit"] = 100
-    cookie_file = get_random_cookie(cookie_folder)
-    if cookie_file:
-        opts["cookiefile"] = cookie_file
-    return opts
+    pending = set(tasks)
+    result: Optional[Path] = None
+    try:
+        while pending and result is None:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for d in done:
+                try:
+                    r = d.result()
+                except Exception:
+                    r = None
+                if r:
+                    result = r
+                    break
+    finally:
+        for p in pending:
+            p.cancel()
+    return result
 
 
 async def _try_download(url: str, opts: dict) -> Optional[Path]:
@@ -131,32 +146,20 @@ async def _try_download(url: str, opts: dict) -> Optional[Path]:
         return None
 
 
-async def _parallel_download(url: str, tmp: Path, fmt: str, opts_list: list) -> Optional[Path]:
+async def _parallel_download(url: str, tmp: Path, opts_list: list) -> Optional[Path]:
     """
-    Run multiple download attempts in PARALLEL. Return first success.
+    Run multiple direct-only download attempts in PARALLEL, no proxy, no
+    cookies. Returns as soon as the first one succeeds, cancelling the rest.
     Each attempt uses its own subdirectory to avoid file conflicts.
     """
-    results: dict = {}
-
-    async def _attempt(idx: int, opts: dict):
+    async def _attempt(idx: int, opts: dict) -> Optional[Path]:
         sub = tmp / f"layer_{idx}"
         sub.mkdir(exist_ok=True)
         opts["outtmpl"] = str(sub / "%(title)s.%(ext)s")
-        result = await _try_download(url, opts)
-        if result:
-            results[idx] = result
+        return await _try_download(url, opts)
 
-    tasks = []
-    for i, opts in enumerate(opts_list):
-        tasks.append(asyncio.create_task(_attempt(i, opts)))
-
-    # Wait for all to complete (they're fast with 20s timeout)
-    await asyncio.gather(*tasks, return_exceptions=True)
-
-    # Return first successful result (prefer lower index = faster layer)
-    for i in sorted(results.keys()):
-        return results[i]
-    return None
+    tasks = [asyncio.create_task(_attempt(i, opts)) for i, opts in enumerate(opts_list)]
+    return await _race_first_success(tasks)
 
 
 async def download_youtube_video(
@@ -165,56 +168,46 @@ async def download_youtube_video(
     fmt: str = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]/best",
 ) -> Optional[Path]:
     """
-    Download YouTube video — parallel fast layers, then sequential fallback.
-    Layer 1 (direct, no proxy) + Layer 2 (mweb+ios) run in PARALLEL.
-    If both fail → Layer 3 (cookies) → Layer 4 (cookies+mweb) sequential.
-    Cookies bypass age-restrictions and sign-in walls for N18+ content.
+    Download YouTube video — three direct-only client layers raced in
+    parallel, no proxy, no cookies. First one to succeed wins.
     """
-    # Fast parallel: Layer 1 (direct) + Layer 2 (mweb, with proxy)
-    l1 = _base_opts(tmp, use_proxy=False)
+    l1 = _base_opts(tmp)
     l1["format"] = fmt
 
-    l2 = _base_opts(tmp, use_proxy=True)
+    l2 = _base_opts(tmp)
     l2["format"] = fmt
     l2["extractor_args"] = {"youtube": {"player_client": ["mweb", "ios"]}}
 
-    result = await _parallel_download(url, tmp, fmt, [l1, l2])
-    if result:
-        return result
+    l3 = _base_opts(tmp)
+    l3["format"] = fmt
+    l3["extractor_args"] = {"youtube": {"player_client": ["android"]}}
 
-    # Sequential fallback: Layer 3 (cookies) → Layer 4 (cookies+mweb)
-    for use_mweb in [False, True]:
-        opts = _cookie_opts(tmp, config.YT_COOKIES_FOLDER, use_proxy=True)
-        opts["format"] = fmt
-        if use_mweb:
-            opts["extractor_args"] = {"youtube": {"player_client": ["mweb"]}}
-        result = await _try_download(url, opts)
-        if result:
-            return result
-
-    return None
+    return await _parallel_download(url, tmp, [l1, l2, l3])
 
 
 async def download_youtube_audio(url: str, tmp: Path, is_music: bool = False, quality: str = "192") -> Optional[Path]:
-    """Download YouTube/YT Music audio as MP3 — parallel + sequential fallback.
-    Cookies bypass age-restrictions for N18+ audio content.
+    """
+    Download YouTube/YT Music audio as MP3 — three direct-only client layers
+    raced in parallel, no proxy, no cookies.
     """
     fmt = "bestaudio[ext=m4a]/bestaudio/best"
     pp = [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": quality}]
 
-    # Fast parallel: direct + mweb
-    l1 = _base_opts(tmp, use_proxy=False)
+    l1 = _base_opts(tmp)
     l1["format"] = fmt
     l1["postprocessors"] = pp
 
-    l2 = _base_opts(tmp, use_proxy=True)
+    l2 = _base_opts(tmp)
     l2["format"] = fmt
     l2["postprocessors"] = pp
     l2["extractor_args"] = {"youtube": {"player_client": ["mweb", "ios"]}}
 
-    # Run parallel
-    results: dict = {}
-    async def _attempt(idx, opts):
+    l3 = _base_opts(tmp)
+    l3["format"] = fmt
+    l3["postprocessors"] = pp
+    l3["extractor_args"] = {"youtube": {"player_client": ["android"]}}
+
+    async def _attempt(idx: int, opts: dict) -> Optional[Path]:
         sub = tmp / f"audio_layer_{idx}"
         sub.mkdir(exist_ok=True)
         opts["outtmpl"] = str(sub / "%(title)s.%(ext)s")
@@ -222,38 +215,13 @@ async def download_youtube_audio(url: str, tmp: Path, is_music: bool = False, qu
             with YoutubeDL(opts) as ydl:
                 await asyncio.to_thread(lambda: ydl.download([url]))
             mp3_files = list(sub.glob("*.mp3"))
-            if mp3_files:
-                results[idx] = mp3_files[0]
+            return mp3_files[0] if mp3_files else None
         except Exception as e:
             logger.debug(f"Audio layer {idx} failed: {str(e)[:80]}")
+            return None
 
-    await asyncio.gather(
-        asyncio.create_task(_attempt(0, l1)),
-        asyncio.create_task(_attempt(1, l2)),
-        return_exceptions=True,
-    )
-    for i in sorted(results.keys()):
-        return results[i]
-
-    # Sequential fallback with cookies (bypasses age-gate)
-    cookie_folder = config.YT_MUSIC_COOKIES_FOLDER if is_music else config.YT_COOKIES_FOLDER
-    for use_mweb in [False, True]:
-        opts = _cookie_opts(tmp, cookie_folder, use_proxy=True)
-        opts["format"] = fmt
-        opts["postprocessors"] = pp
-        opts["outtmpl"] = str(tmp / "%(title)s.%(ext)s")
-        if use_mweb:
-            opts["extractor_args"] = {"youtube": {"player_client": ["mweb"]}}
-        try:
-            with YoutubeDL(opts) as ydl:
-                await asyncio.to_thread(lambda: ydl.download([url]))
-            mp3_files = list(tmp.glob("*.mp3"))
-            if mp3_files:
-                return mp3_files[0]
-        except Exception as e:
-            logger.debug(f"Audio cookie layer failed: {str(e)[:80]}")
-
-    return None
+    tasks = [asyncio.create_task(_attempt(i, opts)) for i, opts in enumerate([l1, l2, l3])]
+    return await _race_first_success(tasks)
 
 # ─── Ensure video fits Telegram (>50MB fix) ───────────────────────────────────
 

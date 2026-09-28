@@ -61,12 +61,32 @@ bills by request count on most plans. At 4-5k users, watch your Upstash dashboar
 the first couple of weeks after scaling up, and move to a higher Upstash tier if you approach its limits —
 no code changes are expected to be needed for this unless a specific hot path shows up as disproportionate.
 
-## 5. Known audit findings not fixed by this pass
+## 5. The downloader no longer uses proxies or cookies
 
-- `cookies_instagram.txt` and the `yt cookies/` / `yt music cookies/` files committed to this repo contain
-  real, live session cookies. Per your decision, these were left in place, but they should still be rotated
-  when convenient (log in fresh in a browser, re-export cookies) since anyone with read access to this
-  repository (including its git history) can use them to act as those accounts.
-- Proxy credentials that were previously only hardcoded in `utils/proxy_manager.py` can now be supplied via
-  the `DEFAULT_PROXIES` env var instead; the hardcoded legacy list still works as a fallback but new proxies
-  should be added via `/addpxy` or `DEFAULT_PROXIES`, not committed to source.
+`downloaders/instagram.py` and `downloaders/youtube.py` (which also powers Shorts and YT Music) now
+download **direct-only** — no proxy, no cookie file, ever, in the hot path. Instead of one attempt with a
+slow sequential cookie fallback behind it, each platform races 3 direct layers (different User-Agents for
+Instagram; different yt-dlp `player_client` values for YouTube) in parallel and returns as soon as the
+first one succeeds, cancelling the rest. This is both faster (no more waiting out a proxy/cookie fallback
+chain) and removes two unreliable, credential-bearing dependencies from the request path entirely.
+
+Why: proxies cost money and die constantly (the audit found the pool depends on an external, sometimes
+rate-limited validation endpoint); cookie files are live session credentials, and the audit found real,
+committed sessions in this repo. Racing plain direct requests sidesteps both.
+
+**Trade-off, on purpose:** private accounts, age-restricted, and sign-in-walled content genuinely need an
+authenticated cookie — there's no way around that technically — and will now fail with a clean "unable to
+process this link" instead of succeeding via a cookie retry. Public posts, reels, and videos (the large
+majority of real requests) are unaffected.
+
+What's left as-is, not removed:
+- `cookies_instagram.txt`, `ig cookies/`, `yt cookies/`, `yt music cookies/` still exist on disk (per your
+  earlier decision) but are no longer read by the downloader. The cookies in them are still live/real —
+  rotate them when convenient regardless, since anyone with read access to this repo (including its git
+  history) can use them to act as those accounts.
+- `utils/proxy_manager.py` and the `/addpxy` / `/rm` / `/clean` admin commands are untouched and still
+  work, even though nothing in `downloaders/` calls `proxy_manager` anymore (Pinterest and Spotify's
+  proxy calls were removed too, since they were already optional and unused in practice). The pool stays
+  available in case a platform-specific fallback is ever wanted again — it's just fully disconnected from
+  downloads for now. Proxy credentials that were previously only hardcoded in `utils/proxy_manager.py` can
+  also be supplied via the `DEFAULT_PROXIES` env var instead.

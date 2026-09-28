@@ -34,7 +34,6 @@ from core.bot import bot
 from core.config import config
 from workers.task_queue import download_semaphore
 from utils.logger import logger
-from utils.proxy_manager import proxy_manager
 from utils.cache import url_cache
 from utils.media_processor import ensure_fits_telegram, get_video_info
 from utils.watchdog import acquire_user_slot, release_user_slot, with_url_dedup
@@ -112,7 +111,6 @@ async def _download_pinterest(url: str, tmp: Path) -> List[Path]:
     2. If no video → scrape image from page (pinimg originals)
     """
     safe_title = _sanitize_filename("pin_%(id)s")
-    proxy = proxy_manager.pick_proxy()
 
     base_opts = {
         "quiet": True,
@@ -127,8 +125,6 @@ async def _download_pinterest(url: str, tmp: Path) -> List[Path]:
         "writethumbnail": False,
         "noplaylist": True,
     }
-    if proxy:
-        base_opts["proxy"] = proxy
 
     # Layer 1: best single-stream mp4 (no merge needed = fast)
     # Use 'best[ext=mp4]' first, then 'best' as fallback — avoids needing ffmpeg merge
@@ -176,9 +172,8 @@ async def _download_pinterest_image(url: str, tmp: Path) -> Optional[Path]:
     """
     Scrape Pinterest page for the original image URL and download it.
     Looks for i.pinimg.com/originals/ URLs in the page HTML.
-    Tries multiple user agents and proxies.
+    Tries multiple user agents, no proxy.
     """
-    proxy = proxy_manager.pick_proxy()
     timeout = aiohttp.ClientTimeout(total=15)
 
     headers_list = [
@@ -195,8 +190,6 @@ async def _download_pinterest_image(url: str, tmp: Path) -> Optional[Path]:
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 req_kwargs = {"allow_redirects": True, "headers": headers}
-                if proxy:
-                    req_kwargs["proxy"] = proxy
 
                 async with session.get(url, **req_kwargs) as resp:
                     if resp.status != 200:
@@ -229,10 +222,7 @@ async def _download_pinterest_image(url: str, tmp: Path) -> Optional[Path]:
                     ext = ".gif"
 
                 # Download the image
-                dl_kwargs = {}
-                if proxy:
-                    dl_kwargs["proxy"] = proxy
-                async with session.get(image_url, **dl_kwargs) as img_resp:
+                async with session.get(image_url) as img_resp:
                     if img_resp.status != 200:
                         continue
                     data = await img_resp.read()

@@ -1,6 +1,14 @@
 # 🍪 Cookie Setup Guide - NAGU DOWNLOADER BOT
 
-## 📁 Folder Structure
+> **⚠️ No longer used by the downloader.** As of this change, `downloaders/instagram.py` and
+> `downloaders/youtube.py` download directly — no proxy, no cookies — for speed and to stop depending on
+> credentials that go stale or leak. Cookie files placed per this guide are simply not read anymore. This
+> is a deliberate trade-off: public content (the vast majority of requests) downloads fine without
+> cookies; private accounts, age-restricted, or sign-in-walled content will now fail instead of succeeding
+> via a cookie fallback. See `SCALING.md` for the reasoning. Don't "helpfully" re-wire cookies back in
+> without re-reading that trade-off first — the whole point was to remove this dependency.
+
+## 📁 Folder Structure (legacy — kept for reference only)
 
 Create these folders in your project root:
 

@@ -46,7 +46,6 @@ from utils.helpers import extract_song_metadata
 from utils.logger import logger
 from utils.user_state import user_state_manager
 from utils.log_channel import log_download
-from utils.proxy_manager import proxy_manager
 from utils.watchdog import with_url_dedup
 
 # ─── Separate semaphore for single tracks (don't wait behind playlists) ───────
@@ -117,7 +116,6 @@ async def _get_spotify_token() -> Optional[str]:
                 },
                 data={"grant_type": "client_credentials"},
                 timeout=aiohttp.ClientTimeout(total=10),
-                proxy=proxy_manager.pick_proxy(),
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -158,7 +156,6 @@ async def _fetch_playlist_tracks_api(playlist_id: str, is_album: bool = False) -
                     url,
                     headers={"Authorization": f"Bearer {token}"},
                     timeout=aiohttp.ClientTimeout(total=15),
-                    proxy=proxy_manager.pick_proxy(),
                 ) as resp:
                     if resp.status == 401:
                         if _retried_401:
@@ -263,7 +260,6 @@ async def _fetch_playlist_name(playlist_id: str, is_album: bool = False) -> str:
                 api_url,
                 headers={"Authorization": f"Bearer {token}"},
                 timeout=aiohttp.ClientTimeout(total=10),
-                proxy=proxy_manager.pick_proxy(),
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -344,11 +340,6 @@ async def _download_track(url: str, tmp: Path) -> Optional[Path]:
         "--bitrate", "192k",
         "--no-cache",
     ]
-
-    # Add proxy to spotdl if available
-    _dl_proxy = proxy_manager.pick_proxy()
-    if _dl_proxy:
-        cmd.extend(["--proxy", _dl_proxy])
 
     try:
         proc = await asyncio.create_subprocess_exec(

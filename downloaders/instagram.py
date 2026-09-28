@@ -3,27 +3,27 @@ Instagram Downloader — Silent delivery with cache + smart encode.
 
 Flow:
   1. Send sticker
-  2. Download silently across layered fallbacks:
-     - Layer 1: direct (no proxy, no cookies)
-     - Layer 2: proxy + Instagram mobile UA  (parallel with Layer 1)
-     - Layer 3: cookies, no proxy
-     - Layer 4: cookies + proxy
-     (Layers 3/4 rotated across all available cookie files)
+  2. Download silently — direct-only, no proxy, no cookies:
+     - Layer 1: direct, desktop UA
+     - Layer 2: direct, Instagram mobile UA (parallel with Layer 1)
+     - Layer 3: direct, generic mobile browser UA (parallel with 1 & 2)
+     First layer to succeed wins — the rest are cancelled immediately.
   3. Delete sticker after delivery
   4. Send video — reply to original (with fallback to plain send)
   5. Caption: ✓ Delivered — <mention>
 
-Cookie support:
-  - Place up to 50 Netscape cookie files in "ig cookies/" folder
-  - Falls back to single cookies_instagram.txt if folder not present
-  - Works WITHOUT cookies — cookies only used as fallback
+By design, this downloader never uses a proxy or a cookie file. Proxies cost
+money and go dead constantly; cookies are a standing account-security liability
+(they're live session credentials). Public posts/reels/photos — the vast
+majority of what gets requested — download fine without either, and skipping
+them removes a slow, unreliable dependency from the hot path.
 
-Age-restricted / N18+ content:
-  - Bypassed automatically when cookies are present
-  - age_limit=100 on all layers
+Trade-off: private accounts, age-restricted, or sign-in-walled content
+genuinely requires an authenticated cookie and will fail cleanly here instead
+of falling back to one. `ig cookies/` and `cookies_instagram.txt` still exist
+on disk for now but are intentionally not read by this module.
 """
 import asyncio
-import random
 import tempfile
 import time
 from pathlib import Path
@@ -36,7 +36,6 @@ from core.bot import bot
 from core.config import config
 from workers.task_queue import download_semaphore
 from utils.logger import logger
-from utils.proxy_manager import proxy_manager
 from utils.cache import url_cache
 from utils.media_processor import (
     ensure_fits_telegram,
@@ -48,66 +47,44 @@ from ui.stickers import send_sticker, delete_sticker
 from ui.emoji_config import get_emoji_async
 from utils.log_channel import log_download
 
-# ─── Cookie helpers ────────────────────────────────────────────────────────────
-
-def _get_all_ig_cookies() -> List[str]:
-    """
-    Return all available Instagram cookie file paths.
-    Priority: ig cookies/ folder → cookies_instagram.txt fallback.
-    """
-    cookies: List[str] = []
-
-    # Multi-cookie folder
-    folder_path = Path(config.IG_COOKIES_FOLDER)
-    if folder_path.exists() and folder_path.is_dir():
-        cookies.extend([str(p) for p in sorted(folder_path.glob("*.txt"))])
-
-    # Single file fallback (add only if not already included)
-    single = config.IG_COOKIES
-    if single and Path(single).exists() and single not in cookies:
-        cookies.append(single)
-
-    return cookies
-
 # ─── Core download logic ──────────────────────────────────────────────────────
 
-def _make_opts(
-    sub_dir: Path,
-    use_proxy: bool = False,
-    cookie_file: Optional[str] = None,
-    mobile_ua: bool = False,
-) -> dict:
+# A few distinct User-Agents to race in parallel — different UAs sometimes get
+# routed to different Instagram response shapes, which is cheap redundancy now
+# that there's no cookie fallback behind these.
+_UA_DESKTOP = None  # resolved per-attempt via config.pick_user_agent()
+_UA_MOBILE_IG = (
+    "Instagram 344.0.0.0.0 Android (33/13; 420dpi; 1080x2400; "
+    "samsung; SM-S918B; dm3q; qcom; en_US; 605596538)"
+)
+_UA_MOBILE_BROWSER = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+)
+
+
+def _make_opts(sub_dir: Path, user_agent: str) -> dict:
     """
-    Build yt-dlp options for one attempt.
+    Build yt-dlp options for one direct-only attempt.
     sub_dir: unique directory for this attempt's output files.
     """
-    ua = (
-        "Instagram 344.0.0.0.0 Android (33/13; 420dpi; 1080x2400; "
-        "samsung; SM-S918B; dm3q; qcom; en_US; 605596538)"
-        if mobile_ua else config.pick_user_agent()
-    )
-    opts: dict = {
+    return {
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
         "outtmpl": str(sub_dir / "%(title)s.%(ext)s"),
-        "http_headers": {"User-Agent": ua},
-        "socket_timeout": 20,
-        "retries": 2,
-        "fragment_retries": 2,
+        "http_headers": {"User-Agent": user_agent},
+        # Short timeouts/few retries — this is a hard, fast direct attempt,
+        # not a slow one we can afford to wait out before falling back.
+        "socket_timeout": 12,
+        "retries": 1,
+        "fragment_retries": 1,
         # ignoreerrors=True: yt-dlp prints ERROR lines but doesn't raise —
         # we detect failure by checking for downloaded files instead.
         "ignoreerrors": True,
         "format": "best[ext=mp4]/best",
         "age_limit": 100,
     }
-    if use_proxy:
-        proxy = proxy_manager.pick_proxy()
-        if proxy:
-            opts["proxy"] = proxy
-    if cookie_file:
-        opts["cookiefile"] = cookie_file
-    return opts
 
 
 def _collect_files(directory: Path) -> List[Path]:
@@ -138,69 +115,61 @@ async def _run_one(sub_dir: Path, url: str, opts: dict) -> Optional[Path]:
         return None
 
 
+async def _race_first_success(tasks: List[asyncio.Task]) -> Optional[Path]:
+    """
+    Wait for the first task to produce a real (non-None) result and return it
+    immediately, cancelling whatever's still running. If every task finishes
+    with None, return None once they've all settled.
+
+    This is the speed win from dropping the sequential cookie fallback:
+    total latency is now "whichever direct layer answers first", not
+    "however long the slowest layer takes before we can even check others".
+    """
+    pending = set(tasks)
+    result: Optional[Path] = None
+    try:
+        while pending and result is None:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for d in done:
+                try:
+                    r = d.result()
+                except Exception:
+                    r = None
+                if r:
+                    result = r
+                    break
+    finally:
+        for p in pending:
+            p.cancel()
+    return result
+
+
 async def download_instagram(url: str, tmp: Path) -> Optional[Path]:
     """
-    Instagram download with 4-layer fallback.
-
-    Layer 1 + 2 run in PARALLEL (no cookies):
-      L1 — direct, desktop UA
-      L2 — proxy, Instagram mobile UA
-
-    Layer 3 + 4 run SEQUENTIALLY (with cookies — for restricted/N18+ content):
-      L3 — cookies, no proxy  (tried for each available cookie file)
-      L4 — cookies + proxy    (tried for each available cookie file)
-
-    Stops as soon as any layer succeeds.
+    Instagram download — 3 direct layers raced in parallel, no proxy, no
+    cookies. First one to succeed wins; the rest are cancelled immediately.
     """
-    # ── Parallel: L1 (direct) + L2 (proxy + mobile UA) ──────────────────────
-    results: dict = {}
+    layers = [
+        ("desktop", config.pick_user_agent()),
+        ("mobile_ig", _UA_MOBILE_IG),
+        ("mobile_browser", _UA_MOBILE_BROWSER),
+    ]
 
-    async def _parallel(idx: int, **kwargs):
-        sub = tmp / f"ig_l{idx}"
-        opts = _make_opts(sub, **kwargs)
+    async def _attempt(label: str, ua: str) -> Optional[Path]:
+        sub = tmp / f"ig_{label}"
+        opts = _make_opts(sub, ua)
         r = await _run_one(sub, url, opts)
         if r:
-            results[idx] = r
+            logger.debug(f"IG: layer '{label}' succeeded (direct, no proxy/cookies)")
+        return r
 
-    await asyncio.gather(
-        asyncio.create_task(_parallel(1, use_proxy=False, mobile_ua=False)),
-        asyncio.create_task(_parallel(2, use_proxy=True,  mobile_ua=True)),
-        return_exceptions=True,
-    )
-    for i in sorted(results.keys()):
-        logger.debug(f"IG: L{i} succeeded (no cookies)")
-        return results[i]
+    tasks = [asyncio.create_task(_attempt(label, ua)) for label, ua in layers]
+    result = await _race_first_success(tasks)
 
-    # ── Sequential: L3/L4 with cookies ──────────────────────────────────────
-    all_cookies = _get_all_ig_cookies()
+    if not result:
+        logger.info(f"IG: all direct layers failed for {url[:60]} — likely private/restricted content")
 
-    if not all_cookies:
-        logger.info("IG: No cookies available — content requires authentication")
-        return None
-
-    # Shuffle for load distribution across accounts
-    shuffled = list(all_cookies)
-    random.shuffle(shuffled)
-
-    for idx, cookie_file in enumerate(shuffled[:10]):  # cap at 10 accounts
-        # L3: cookie only (no proxy) — fastest
-        sub3 = tmp / f"ig_l3_{idx}"
-        opts3 = _make_opts(sub3, use_proxy=False, cookie_file=cookie_file)
-        result = await _run_one(sub3, url, opts3)
-        if result:
-            logger.info(f"IG: L3 succeeded (cookie #{idx + 1}, no proxy)")
-            return result
-
-        # L4: cookie + proxy — bypasses IP blocks
-        sub4 = tmp / f"ig_l4_{idx}"
-        opts4 = _make_opts(sub4, use_proxy=True, cookie_file=cookie_file)
-        result = await _run_one(sub4, url, opts4)
-        if result:
-            logger.info(f"IG: L4 succeeded (cookie #{idx + 1}, with proxy)")
-            return result
-
-    logger.warning(f"IG: All {len(shuffled[:10])} cookie(s) exhausted, giving up")
-    return None
+    return result
 
 # ─── Safe reply helpers ───────────────────────────────────────────────────────
 
